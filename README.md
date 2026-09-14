@@ -38,6 +38,8 @@ bsv balance                 # live chain lookup
 bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
 bsv allow <origin> [cap] | bsv deny <origin> | bsv requests | bsv policies
 bsv pending                 # monitor queue
+bsv app install <domain>  # install a Metanet app (manifest + launcher)
+bsv app list | bsv app open <domain> | bsv app remove <domain>
 ```
 
 First spend from a new origin is denied pending approval (`bsv allow cli`

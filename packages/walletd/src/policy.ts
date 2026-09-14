@@ -64,8 +64,14 @@ export async function setPolicy(db: Knex, origin: string, mode: "allow" | "deny"
   }
 }
 
-export async function pendingRequests(db: Knex): Promise<Array<{ id: number; origin: string; amount_sats: number; action: string; created_at: number }>> {
-  return (await db("policy_requests").select().orderBy("created_at", "desc").limit(100)) as Array<{
+export async function seedRequest(db: Knex, origin: string, amountSats: number, action: string): Promise<void> {
+  const seen = await db("policy_requests").where({ origin, action }).first();
+  if (!seen) {
+    await db("policy_requests").insert({ origin, amount_sats: amountSats, action, created_at: Date.now() });
+  }
+}
+
+export async function pendingRequests(db: Knex): Promise<Array<{ id: number; origin: string; amount_sats: number; action: string; created_at: number }>> {  return (await db("policy_requests").select().orderBy("created_at", "desc").limit(100)) as Array<{
     id: number; origin: string; amount_sats: number; action: string; created_at: number;
   }>;
 }

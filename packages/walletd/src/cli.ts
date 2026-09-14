@@ -175,6 +175,34 @@ async function main(): Promise<void> {
     case "policies":
       print(await call("policyList"));
       break;
+    case "app": {
+      const [sub, arg] = rest;
+      if (sub === "install" && arg) {
+        print(await call("appInstall", { domain: arg }));
+      } else if (sub === "list" || sub === undefined) {
+        print(await call("appList"));
+      } else if (sub === "remove" && arg) {
+        print(await call("appRemove", { domain: arg }));
+      } else if (sub === "open" && arg) {
+        const res = (await call("appOpen", { domain: arg })) as { result?: { startUrl?: string } };
+        const url = res?.result?.startUrl;
+        if (!url) {
+          print(res);
+          break;
+        }
+        console.log(url);
+        if (process.platform === "linux") {
+          const { execFile } = await import("node:child_process");
+          execFile("xdg-open", [url], (e) => {
+            if (e) console.error("(could not open browser automatically)");
+          });
+        }
+      } else {
+        console.error("usage: bsv app <install <domain>|list|remove <domain>|open <domain>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "mcp": {
       // Agent bridge: MCP on stdio, daemon on the socket. Keys stay put.
       const agentFlag = rest.find((a) => a.startsWith("--agent="));
@@ -193,7 +221,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|anchor|allow|deny|requests|policies|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|anchor|allow|deny|requests|policies|app|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

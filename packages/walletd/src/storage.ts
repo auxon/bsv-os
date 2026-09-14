@@ -2,6 +2,7 @@ import knex, { type Knex } from "knex";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { migrateApps } from "./apps.ts";
 import { migratePolicy } from "./policy.ts";
 
 export function dataDir(): string {
@@ -40,4 +41,5 @@ export async function migrate(db: Knex): Promise<void> {
     });
   }
   await migratePolicy(db);
+  await migrateApps(db);
 }
