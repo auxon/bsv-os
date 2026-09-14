@@ -9,8 +9,11 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import selfsigned from "selfsigned";
-import { dispatch } from "./rpc.ts";
+import { dispatch, setBackend } from "./rpc.ts";
 import { VERSION } from "./rpc.ts";
+import { CombinedProvider } from "./chain.ts";
+import { migrate, openDb } from "./storage.ts";
+import { tick } from "./monitor.ts";
 
 const PORT = Number(process.env.BSV_WALLETD_PORT ?? 2121);
 const RUNTIME_DIR = process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os");
@@ -85,8 +88,7 @@ export async function main(): Promise<void> {
   } catch {
     /* ignore */
   }
-  const unix = net.createServer((socket) => {
-    let buf = "";
+  const unix = net.createServer((socket) => {    let buf = "";
     socket.on("data", (chunk) => {
       buf += chunk.toString("utf8");
       let idx: number;
@@ -114,6 +116,38 @@ export async function main(): Promise<void> {
   });
   // eslint-disable-next-line no-console
   console.log(`bsv-walletd socket on ${SOCK}`);
+
+  // Monitor: watch every tracked tx to a terminal state, minutely.
+  try {
+    const db = openDb();
+    await migrate(db);
+    setBackend({ db });
+    const chain = new CombinedProvider();
+    const loop = async (): Promise<void> => {
+      try {
+        const res = await tick(
+          db,
+          chain,
+          (hex) => chain.broadcast(hex),
+          async (txid) => (await db("pending_txs").where({ txid }).first())?.tx_hex ?? null,
+        );
+        for (const r of res) {
+          if (r.to !== "seen") {
+            // eslint-disable-next-line no-console
+            console.log(`monitor: ${r.txid.slice(0, 12)} ${r.from} -> ${r.to}${r.detail ? ` (${r.detail})` : ""}`);
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("monitor tick failed:", err instanceof Error ? err.message : err);
+      }
+    };
+    void loop();
+    setInterval(() => void loop(), 60_000).unref?.();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("monitor disabled:", err instanceof Error ? err.message : err);
+  }
 }
 
 if (process.argv[1]?.endsWith("index.ts") || process.argv[1]?.endsWith("index.js")) {

@@ -1,6 +1,18 @@
 import { createWallet, getStatus, lock, unlock } from "./custody.ts";
+import type { Knex } from "knex";
 
 export const VERSION = "0.1.0";
+
+interface MonitorBackend {
+  db: Knex;
+}
+
+let backend: MonitorBackend | null = null;
+
+/** Wired by index.ts at boot; RPC stays usable without it. */
+export function setBackend(b: MonitorBackend | null): void {
+  backend = b;
+}
 
 interface RpcRequest {
   method?: unknown;
@@ -31,6 +43,14 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   lock: () => {
     lock();
     return { locked: true };
+  },
+  pending: async () => {
+    if (!backend) return { tracked: [] };
+    const rows = await backend.db("pending_txs")
+      .select("txid", "label", "status", "attempts", "last_check", "detail")
+      .orderBy("created_at", "desc")
+      .limit(100);
+    return { tracked: rows };
   },
 };
 

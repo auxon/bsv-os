@@ -20,6 +20,10 @@ npm run dev       # boot daemon
 curl -sk -X POST https://127.0.0.1:2121/ -d '{"method":"isAuthenticated","id":1}'
 ```
 
+TypeScript rule: tests import `src/*.ts` directly via node type-stripping,
+so write **erasable syntax only** — no parameter properties, enums, or
+namespaces (`tsc --noEmit` still gates the build).
+
 Trust rule (CI-enforced): raw key material lives only in
 `packages/walletd/src/custody.ts`. Everything else talks intents.
 
