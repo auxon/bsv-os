@@ -56,6 +56,9 @@ and the custody lock apply per-agent. A first-run denial surfaces as
 `ask your human to run: bsv allow research-agent` — the agent loop closes
 without ever touching keys.
 
+Agent instructions live in [SKILLS.md](SKILLS.md) — point any MCP-capable
+agent at it.
+
 ## Roadmap
 
 - M0 (this): daemon skeleton, MockChain tests, custody boundary ✅
