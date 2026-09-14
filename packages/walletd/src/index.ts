@@ -23,12 +23,10 @@ function certPaths(): Promise<{ key: string; cert: string }> {
     const key = path.join(CERT_DIR, "walletd.key");
     const cert = path.join(CERT_DIR, "walletd.crt");
     if (!fs.existsSync(key) || !fs.existsSync(cert)) {
-      const notAfter = new Date();
-      notAfter.setDate(notAfter.getDate() + 825);
       const pems = await selfsigned.generate([{ name: "commonName", value: "bsv-walletd" }], {
         keySize: 2048,
         algorithm: "sha256",
-        notAfterDate: notAfter,
+        days: 825,
       });
       fs.writeFileSync(key, pems.private, { mode: 0o600 });
       fs.writeFileSync(cert, pems.cert, { mode: 0o600 });
@@ -64,7 +62,7 @@ function handler() {
       res.end(JSON.stringify({ error: { code: "PARSE", message: "invalid JSON" }, id: null }));
       return;
     }
-    const out = dispatch(body);
+    const out = await dispatch(body);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(out));
   };
@@ -93,16 +91,22 @@ export async function main(): Promise<void> {
       buf += chunk.toString("utf8");
       let idx: number;
       // newline-delimited JSON frames
+      const jobs: Array<Promise<void>> = [];
       while ((idx = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, idx).trim();
         buf = buf.slice(idx + 1);
         if (!line) continue;
-        try {
-          socket.write(`${JSON.stringify(dispatch(JSON.parse(line)))}\n`);
-        } catch {
-          socket.write(`${JSON.stringify({ error: { code: "PARSE", message: "invalid JSON" }, id: null })}\n`);
-        }
+        jobs.push(
+          (async () => {
+            try {
+              socket.write(`${JSON.stringify(await dispatch(JSON.parse(line)))}\n`);
+            } catch {
+              socket.write(`${JSON.stringify({ error: { code: "PARSE", message: "invalid JSON" }, id: null })}\n`);
+            }
+          })(),
+        );
       }
+      void Promise.all(jobs);
     });
   });
   await new Promise<void>((resolve) => {
