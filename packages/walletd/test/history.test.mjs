@@ -1,0 +1,70 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import knex from "knex";
+import { migrate } from "../src/storage.ts";
+import { emptyHistory, getHistory } from "../src/history.ts";
+import { check, setPolicy } from "../src/policy.ts";
+import { dispatch, setBackend } from "../src/rpc.ts";
+
+async function memdb() {
+  const db = knex({ client: "better-sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
+  await migrate(db);
+  return db;
+}
+
+test("empty wallet: history is empty sections with a zero summary", async () => {
+  const db = await memdb();
+  try {
+    assert.deepEqual(await getHistory(db), emptyHistory());
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("history merges txs, requests, and policies with action commands", async () => {
+  const db = await memdb();
+  try {
+    const now = Date.now();
+    await db("pending_txs").insert([
+      { txid: "a".repeat(64), label: "anchor deadbeef", status: "mined", attempts: 1, last_check: now, created_at: now - 2 },
+      { txid: "b".repeat(64), label: "anchor cafe", status: "seen", attempts: 0, last_check: 0, created_at: now - 1 },
+      { txid: "c".repeat(64), label: "anchor lost-race", status: "failed", attempts: 3, last_check: now, detail: "double-spend lost", created_at: now },
+    ]);
+    await check(db, "research-agent", 250, "anchor");
+    await setPolicy(db, "cli", "allow", 50000);
+    await setPolicy(db, "evil.example", "deny");
+
+    const h = await getHistory(db);
+    assert.equal(h.transactions.length, 3);
+    assert.equal(h.transactions[0].txid, "c".repeat(64)); // newest first
+    assert.match(h.transactions[0].hint, /nothing moved/);
+    assert.equal(h.transactions[1].hint, "in mempool — the daemon rebroadcasts automatically; check again later");
+    assert.equal(h.transactions[2].hint, "confirmed on-chain");
+
+    assert.equal(h.requests.length, 1);
+    assert.deepEqual(h.requests[0].commands, { allow: "bsv allow research-agent", deny: "bsv deny research-agent" });
+
+    assert.equal(h.policies.length, 2);
+    const cli = h.policies.find((p) => p.origin === "cli");
+    assert.deepEqual(cli.commands, { revoke: "bsv deny cli" });
+    const evil = h.policies.find((p) => p.origin === "evil.example");
+    assert.deepEqual(evil.commands, { approve: "bsv allow evil.example" });
+
+    assert.deepEqual(h.summary, {
+      inFlight: 1, mined: 1, failed: 1,
+      pendingRequests: 1, allowedOrigins: 1, deniedOrigins: 1,
+    });
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("history RPC degrades to empty without a backend", async () => {
+  setBackend(null);
+  try {
+    const r = await dispatch({ method: "history", id: 9 });
+    assert.deepEqual(r.result, emptyHistory());
+  } finally {
+    setBackend(null);
+  }
+});

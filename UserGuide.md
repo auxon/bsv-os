@@ -77,6 +77,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Check the wallet | `bsv status`, `bsv balance` |
 | Timestamp a file | `sha256sum file` → `bsv anchor <hash>` |
 | See in-flight transactions | `bsv pending` (seen → mined, or failed with reason) |
+| Full ledger + approvals audit | `bsv history` (txs, requests, policies — same view as the bar panel) |
 | Lock up now | `bsv lock` |
 | Approve an app/agent | `bsv allow <name> [capSats]` |
 | Revoke | `bsv deny <name>` |

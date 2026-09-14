@@ -21,7 +21,7 @@ source=('bsv.sh')
 sha256sums=('SKIP')
 
 package() {
-  local src="$startdir/../../packages/walletd"
+  local src="$startdir/../../../packages/walletd"
   [ -d "$src/dist" ] || { echo "run npm run build in packages/walletd first"; exit 1; }
   install -dm755 "$pkgdir/usr/lib/bsv-os/walletd"
   cp -a "$src/dist" "$pkgdir/usr/lib/bsv-os/walletd/"
@@ -32,9 +32,12 @@ package() {
   install -Dm755 "$srcdir/bsv.sh" "$pkgdir/usr/bin/bsv"
   install -Dm644 "$src/bsv-walletd.service" "$pkgdir/usr/lib/systemd/user/bsv-walletd.service"
 
-  local qml="$startdir/../../packages/shell"
-  if [ -d "$qml" ]; then
-    install -dm755 "$pkgdir/usr/share/quickshell/bsv-os"
-    cp -a "$qml/." "$pkgdir/usr/share/quickshell/bsv-os/"
+  # Omarchy manifest plugin source (user syncs it into
+  # ~/.config/omarchy/plugins/bsv.wallet/ via scripts/post-install.sh —
+  # packages must not mutate $HOME at install time).
+  local plugin="$startdir/../../../packages/shell/plugin"
+  if [ -d "$plugin" ]; then
+    install -dm755 "$pkgdir/usr/share/bsv-os/shell-plugin"
+    cp -a "$plugin/." "$pkgdir/usr/share/bsv-os/shell-plugin/"
   fi
 }

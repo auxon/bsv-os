@@ -27,14 +27,24 @@ npm test
 npm run build
 
 echo "==> [5/6] user service"
-mkdir -p ~/.local/bin
+mkdir -p ~/.local/bin ~/.local/share/bsv-os ~/.config/systemd/user
 ln -sf "$HOME/bsv-os/packages/walletd/dist/cli.js" ~/.local/bin/bsv
 chmod +x ~/.local/bin/bsv
+printf '#!/bin/sh\nexec node "$HOME/bsv-os/packages/walletd/dist/index.js" "$@"\n' > ~/.local/bin/bsv-walletd
+chmod +x ~/.local/bin/bsv-walletd
+cp -f "$HOME/bsv-os/packages/walletd/bsv-walletd.service" ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now bsv-walletd
 sleep 2
 export PATH="$HOME/.local/bin:$PATH"
 bsv status
+
+echo "==> [5b/6] shell plugin (best-effort: needs a running omarchy-shell)"
+mkdir -p ~/.config/omarchy/plugins/bsv.wallet
+cp -f "$HOME/bsv-os/packages/shell/plugin/"* ~/.config/omarchy/plugins/bsv.wallet/
+omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+omarchy plugin enable bsv.wallet >/dev/null 2>&1 || true
+omarchy bar put bsv.wallet --section right >/dev/null 2>&1 || true
 
 echo "==> [6/6] done"
 echo "Next: bsv create   # BACK UP the recovery phrase it prints ONCE"

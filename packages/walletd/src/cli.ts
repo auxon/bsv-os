@@ -172,6 +172,9 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "history":
+      print(await call("history"));
+      break;
     case "policies":
       print(await call("policyList"));
       break;
@@ -221,7 +224,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|anchor|allow|deny|requests|policies|app|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|allow|deny|requests|policies|app|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "bsv.wallet",
+  "name": "BSV Wallet",
+  "version": "0.1.0",
+  "author": "BSV OS",
+  "description": "System BSV wallet pill: lock state, balance, pending approvals. Policy console for bsv-walletd.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "BSV Wallet",
+    "description": "Wallet lock state, balance, and spend-approval prompts",
+    "category": "Money",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

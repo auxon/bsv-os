@@ -3,3 +3,7 @@ dist/
 .wrangler/
 *.tsbuildinfo
 .DS_Store
+# makepkg artifacts
+*.pkg.tar.*
+packages/arch/bsv-os-meta/pkg/
+packages/arch/bsv-os-meta/src/

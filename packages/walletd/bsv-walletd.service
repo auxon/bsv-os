@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/bsv-os
 ExecStart=%h/.local/bin/bsv-walletd
 Restart=on-failure
 RestartSec=3

@@ -3,6 +3,7 @@ import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
 import { anchorTip, getBalance } from "./engine.ts";
+import { emptyHistory, getHistory } from "./history.ts";
 import { getApp, installApp, listApps, removeApp } from "./apps.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 
@@ -105,6 +106,11 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   policyPending: async () => {
     const b = needBackend();
     return { requests: await pendingRequests(b.db) };
+  },
+  history: async () => {
+    // F8 dashboard: degrades to empty (like pending) before the engine boots.
+    if (!backend) return emptyHistory();
+    return getHistory(backend.db);
   },
   appInstall: async (params) => {
     const b = needBackend();
