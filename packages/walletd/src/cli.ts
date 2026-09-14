@@ -120,8 +120,25 @@ async function main(): Promise<void> {
     case "policies":
       print(await call("policyList"));
       break;
+    case "mcp": {
+      // Agent bridge: MCP on stdio, daemon on the socket. Keys stay put.
+      const agentFlag = rest.find((a) => a.startsWith("--agent="));
+      const agent = agentFlag ? agentFlag.slice(8) || "agent" : "agent";
+      const { buildMcpServer } = await import("./mcp.ts");
+      const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+      const daemon = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> => {
+        const res = (await call(method, params)) as { result?: unknown; error?: { code?: string; message?: string } };
+        if (res && typeof res === "object" && "error" in res && res.error) {
+          throw { code: res.error.code ?? "INTERNAL", message: res.error.message ?? "daemon error" };
+        }
+        return (res as { result?: unknown }).result;
+      };
+      const server = buildMcpServer(daemon, agent);
+      await server.connect(new StdioServerTransport());
+      break;
+    }
     default:
-      console.error("usage: bsv <status|create|unlock|lock|pending|balance|anchor|allow|deny|requests|policies>");
+      console.error("usage: bsv <status|create|unlock|lock|pending|balance|anchor|allow|deny|requests|policies|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

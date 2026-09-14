@@ -44,6 +44,18 @@ First spend from a new origin is denied pending approval (`bsv allow cli`
 for local flows) — that denial-then-approval loop is the whole policy model
 working as designed.
 
+## MCP (agents automate the wallet through policy, never around it)
+
+```bash
+bsv mcp --agent=research-agent   # stdio server: Claude Code, OpenCode, etc.
+```
+
+Five tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
+`list_pending`. Every call is stamped with the agent name, so daemon policy
+and the custody lock apply per-agent. A first-run denial surfaces as
+`ask your human to run: bsv allow research-agent` — the agent loop closes
+without ever touching keys.
+
 ## Roadmap
 
 - M0 (this): daemon skeleton, MockChain tests, custody boundary ✅

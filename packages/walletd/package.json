@@ -15,6 +15,7 @@
   "dependencies": {
     "@bsv/sdk": "^2.6.0",
     "@bsv/wallet-toolbox": "^2.13.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@scure/bip39": "^2.4.0",
     "better-sqlite3": "12.11.1",
     "keytar": "7.9.0",
