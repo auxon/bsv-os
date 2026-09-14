@@ -124,7 +124,7 @@ for. You stay the approver; the agent stays useful.
 | Pending stuck on `seen` | Normal for minutes; daemon rebroadcasts automatically. Hours → check a block explorer, then retry |
 | `mint/anchor didn't confirm` | Check `bsv pending` — `failed` means nothing moved; just retry |
 | Forgot which agent is which | `bsv policies` lists every approval and cap |
-| New machine | Install, `bsv create` is NOT what you want — restore: reinstall is recovery-phrase-only in this preview; import flow ships before release |
+| New machine | Install, then `bsv import` — type the 12 words at the hidden prompt (never as a command argument, never into chat). Same identity back. |
 
 ## 8. What's coming
 

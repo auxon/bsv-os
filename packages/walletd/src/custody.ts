@@ -82,6 +82,29 @@ export async function createWallet(force = false): Promise<{ identityKey: string
   return { identityKey: identityOf(session), backup: phrase };
 }
 
+function normalizePhrase(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+}
+
+/**
+ * Restore from a recovery phrase (new machine, reinstall). Same storage and
+ * session handling as creation; the phrase is never logged or returned.
+ */
+export async function importWallet(rawPhrase: string, force = false): Promise<{ identityKey: string }> {
+  if (!force && (await hasWallet())) {
+    throw new CustodyError("EXISTS", "a wallet already exists (pass force to replace — destroys access to the old one)");
+  }
+  const phrase = normalizePhrase(rawPhrase);
+  if (!Mnemonic.isValid(phrase)) {
+    throw new CustodyError("BAD_PHRASE", "that is not a valid 12-word recovery phrase");
+  }
+  await keytar.setPassword(svc().service, svc().account, phrase);
+  hasWalletCache = true;
+  session = HD.fromSeed(new Mnemonic(phrase).toSeed());
+  armTimer();
+  return { identityKey: identityOf(session) };
+}
+
 export async function unlock(): Promise<{ identityKey: string }> {
   const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
   if (!stored) {

@@ -4,9 +4,8 @@ import assert from "node:assert/strict";
 // partitioned keyring namespace (see custody.ts svc())
 process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-custody";
 import {
-  __resetCache, createWallet, destroyWallet, getStatus, hasWallet, lock, unlock,
+  __resetCache, createWallet, destroyWallet, getStatus, hasWallet, importWallet, lock, unlock,
 } from "../src/custody.ts";
-
 // These tests enroll a REAL keyring entry. They refuse to run when a wallet
 // already exists so a test run can never destroy user state.
 const enrolled = await hasWallet();
@@ -53,4 +52,32 @@ it("auto-lock fires after the idle timeout", async () => {
 
 it("unlock with no wallet is a clean NO_WALLET error", async () => {
   await assert.rejects(unlock(), /no wallet enrolled/);
+});
+
+const VECTOR = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+it("import restores the same identity deterministically", async () => {
+  const first = await importWallet(VECTOR);
+  assert.match(first.identityKey, /^0[23][0-9a-f]{64}$/);
+  lock();
+  const second = await unlock();
+  assert.equal(second.identityKey, first.identityKey);
+  await destroyWallet();
+  __resetCache();
+  // same phrase, fresh import -> identical identity (new-machine restore)
+  const again = await importWallet(`  ${VECTOR.toUpperCase()}  `);
+  assert.equal(again.identityKey, first.identityKey);
+  await destroyWallet();
+  __resetCache();
+});
+
+it("import rejects garbage and refuses to clobber", async () => {
+  await assert.rejects(importWallet("hello world"), /valid 12-word/);
+  await assert.rejects(importWallet("abandon ".repeat(12).trim()), /valid 12-word/);
+  await createWallet();
+  await assert.rejects(importWallet(VECTOR), /already exists/);
+  const forced = await importWallet(VECTOR, true);
+  assert.match(forced.identityKey, /^0[23][0-9a-f]{64}$/);
+  await destroyWallet();
+  __resetCache();
 });

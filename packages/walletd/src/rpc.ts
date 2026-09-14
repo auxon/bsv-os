@@ -1,4 +1,4 @@
-import { createWallet, getStatus, lock, unlock } from "./custody.ts";
+import { createWallet, getStatus, importWallet, lock, unlock } from "./custody.ts";
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, setPolicy } from "./policy.ts";
@@ -51,6 +51,13 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   createWallet: async (params) => {
     const r = await createWallet(p(params).force === true);
     return { ...r, warning: "BACK UP the recovery phrase NOW — it is shown once and never stored anywhere else" };
+  },
+  importWallet: async (params) => {
+    const { phrase, force } = p(params) as { phrase?: unknown; force?: unknown };
+    if (typeof phrase !== "string" || !phrase.trim()) {
+      throw Object.assign(new Error("recovery phrase required"), { code: "BAD_PARAM" });
+    }
+    return importWallet(phrase, force === true);
   },
   unlock: async () => unlock(),
   lock: () => {

@@ -52,8 +52,52 @@ async function call(method: string, params: unknown = {}): Promise<unknown> {
   });
 }
 
-function print(res: unknown): void {
-  const r = res as { result?: unknown; error?: { code?: string; message?: string } };
+/** Hidden stdin prompt (no echo) for secrets. Falls back to visible on dumb terminals. */
+function readSecret(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(prompt);
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    try {
+      if (stdin.isTTY) stdin.setRawMode(true);
+    } catch {
+      /* ignore */
+    }
+    let out = "";
+    const done = () => {
+      try {
+        if (stdin.isTTY) stdin.setRawMode(!!wasRaw);
+      } catch {
+        /* ignore */
+      }
+      process.stdout.write("\n");
+      stdin.removeListener("data", onData);
+      stdin.pause();
+      resolve(out);
+    };
+    const onData = (chunk: Buffer) => {
+      const s = chunk.toString("utf8");
+      for (const ch of s) {
+        if (ch === "\n" || ch === "\r" || ch === "\u0004") {
+          done();
+          return;
+        }
+        if (ch === "\u0003") {
+          process.exit(130);
+        }
+        if (ch === "\u007f" || ch === "\b") {
+          out = out.slice(0, -1);
+        } else {
+          out += ch;
+        }
+      }
+    };
+    stdin.resume();
+    stdin.on("data", onData);
+  });
+}
+
+function print(res: unknown): void {  const r = res as { result?: unknown; error?: { code?: string; message?: string } };
   if (r && typeof r === "object" && "error" in r && r.error) {
     console.error(`error [${r.error.code ?? "?"}]: ${r.error.message ?? r.error}`);
     process.exitCode = 1;
@@ -71,6 +115,17 @@ async function main(): Promise<void> {
     case "create":
       print(await call("createWallet", { force: rest.includes("--force") }));
       break;
+    case "import": {
+      // Phrase via hidden stdin prompt — never as an argv (shell history).
+      const phrase = await readSecret("Recovery phrase (12 words, hidden): ");
+      if (!phrase.trim()) {
+        console.error("empty phrase — aborted");
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("importWallet", { phrase, force: rest.includes("--force") }));
+      break;
+    }
     case "unlock":
       print(await call("unlock"));
       break;
@@ -138,7 +193,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|unlock|lock|pending|balance|anchor|allow|deny|requests|policies|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|anchor|allow|deny|requests|policies|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }
