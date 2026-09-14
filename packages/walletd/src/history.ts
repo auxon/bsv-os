@@ -11,6 +11,7 @@
  * Read-only over the DB: no key material, no custody surface.
  */
 import type { Knex } from "knex";
+import { listAgents, type AgentView } from "./agents.ts";
 
 export interface HistoryTransaction {
   txid: string;
@@ -41,6 +42,21 @@ export interface HistoryPolicy {
   commands: { revoke?: string; approve?: string };
 }
 
+export interface HistoryAgent {
+  name: string;
+  budget_sats: number;
+  spent_total: number;
+  remaining: number;
+  daily_sats: number;
+  window_remaining: number;
+  window_reset_in: number;
+  expiry_at: number;
+  expired: boolean;
+  revoked: number;
+  active: boolean;
+  commands: { revoke: string };
+}
+
 export interface HistorySummary {
   inFlight: number;
   mined: number;
@@ -54,6 +70,7 @@ export interface History {
   transactions: HistoryTransaction[];
   requests: HistoryRequest[];
   policies: HistoryPolicy[];
+  agents: HistoryAgent[];
   summary: HistorySummary;
 }
 
@@ -69,6 +86,7 @@ export function emptyHistory(): History {
     transactions: [],
     requests: [],
     policies: [],
+    agents: [],
     summary: { inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 },
   };
 }
@@ -107,11 +125,26 @@ export async function getHistory(db: Knex): Promise<History> {
           ? { approve: `bsv allow ${row.origin}` }
           : { approve: `bsv allow ${row.origin}`, revoke: `bsv deny ${row.origin}` },
   }));
+  const agents: HistoryAgent[] = (await listAgents(db)).map((a: AgentView) => ({
+    name: a.name,
+    budget_sats: a.budget_sats,
+    spent_total: a.spent_total,
+    remaining: a.remaining,
+    daily_sats: a.daily_sats,
+    window_remaining: a.window_remaining,
+    window_reset_in: a.window_reset_in,
+    expiry_at: a.expiry_at,
+    expired: a.expired,
+    revoked: a.revoked,
+    active: a.active,
+    commands: { revoke: `bsv agent revoke ${a.name}` },
+  }));
 
   return {
     transactions,
     requests,
     policies,
+    agents,
     summary: {
       inFlight: txRows.filter((t) => t.status === "seen").length,
       mined: txRows.filter((t) => t.status === "mined").length,

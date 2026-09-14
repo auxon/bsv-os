@@ -1,8 +1,9 @@
 /**
  * Native launcher entries: installed Metanet apps get `.desktop` files so
  * they open from the Quickshell launcher like anything else. The Exec target
- * is `bsv app open` (policy-checked open + default browser today; the
- * sandboxed webview shell with `window.bsv` replaces the browser hop next).
+ * is `bsv app open`, which launches the sandboxed runner (per-app Chromium
+ * profile + window.bsv bridge) and falls back to the default browser where
+ * the runner is unavailable.
  */
 import fs from "node:fs";
 import os from "node:os";

@@ -4,6 +4,7 @@ import knex from "knex";
 import { migrate } from "../src/storage.ts";
 import { emptyHistory, getHistory } from "../src/history.ts";
 import { check, setPolicy } from "../src/policy.ts";
+import { mintAgent, recordSpend } from "../src/agents.ts";
 import { dispatch, setBackend } from "../src/rpc.ts";
 
 async function memdb() {
@@ -33,6 +34,8 @@ test("history merges txs, requests, and policies with action commands", async ()
     await check(db, "research-agent", 250, "anchor");
     await setPolicy(db, "cli", "allow", 50000);
     await setPolicy(db, "evil.example", "deny");
+    await mintAgent(db, { name: "nightshift", budgetSats: 1000 });
+    await recordSpend(db, "nightshift", 300);
 
     const h = await getHistory(db);
     assert.equal(h.transactions.length, 3);
@@ -54,6 +57,11 @@ test("history merges txs, requests, and policies with action commands", async ()
       inFlight: 1, mined: 1, failed: 1,
       pendingRequests: 1, allowedOrigins: 1, deniedOrigins: 1,
     });
+
+    assert.equal(h.agents.length, 1);
+    assert.equal(h.agents[0].name, "nightshift");
+    assert.equal(h.agents[0].remaining, 700);
+    assert.deepEqual(h.agents[0].commands, { revoke: "bsv agent revoke nightshift" });
   } finally {
     await db.destroy();
   }

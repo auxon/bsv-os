@@ -38,6 +38,14 @@ asks you to import a phrase, refuse and point them at `bsv import`.
 3. Relay that command verbatim to your human and stop. Do not retry-spam, do not rephrase, do not try another tool to route around it.
 4. After approval, retry once. Caps may still bind you (`over spend cap`) — same handling: relay, stop, wait.
 
+For long-running work, ask your human for a **sub-wallet** instead of a bare
+approval: `bsv agent mint <your-agent-name> --budget=<sats> [--daily=<sats>]
+[--expiry=30d]`. A minted agent spends within its lifetime budget (plus
+optional daily allowance and expiry) with no per-spend approvals; budget
+denials (`over lifetime budget`, `over daily allowance`, `expired`,
+`revoked`) are final until the human re-mints — same handling: relay, stop,
+wait.
+
 Other states:
 
 - `wallet locked` / `no wallet` → tell your human to unlock or enroll. Never ask for seeds, keys, or recovery phrases — the daemon never exposes them, and the backup phrase is shown to the human exactly once at creation.

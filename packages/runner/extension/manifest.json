@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "BSV OS wallet bridge",
+  "version": "0.1.0",
+  "description": "Injects the capability-scoped window.bsv into apps opened by the BSV OS runner. No remote code; talks only to the per-window loopback bridge.",
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page.js"],
+      "matches": ["https://*/*"]
+    }
+  ]
+}

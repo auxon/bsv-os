@@ -1,0 +1,13 @@
+{
+  "name": "BSV OS Runner Demo",
+  "short_name": "RunnerDemo",
+  "start_url": "https://127.0.0.1:8443/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Demo: prove the window.bsv bridge works end to end.",
+      "spendingAuthorization": { "amount": 5000, "description": "demo timestamps" }
+    }
+  }
+}

@@ -82,6 +82,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Approve an app/agent | `bsv allow <name> [capSats]` |
 | Revoke | `bsv deny <name>` |
 | See who's approved | `bsv policies` / `bsv requests` |
+| Open an installed app | `bsv app open <domain>` (sandboxed window, not the browser) |
 
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —
@@ -101,6 +102,20 @@ important one: its first spend is always denied until you run
 `bsv allow <name>`, optionally with a cap (`bsv allow researcher 50000`
 = 50k sats max per action). Denied agents get told exactly what to ask you
 for. You stay the approver; the agent stays useful.
+
+For agents that run a long time, mint a **sub-wallet** instead of a bare
+approval — a lifetime budget with an optional daily allowance and expiry:
+
+```bash
+bsv agent mint researcher --budget=100000 --daily=10000 --expiry=30d
+bsv agent list            # remaining budget per agent
+bsv agent revoke researcher   # one command cuts access entirely
+```
+
+Minting is the approval: a minted agent spends within its budget with no
+separate `allow` needed, every spend debits the budget, and `bsv history`
+(plus the bar panel) shows per-agent spend. Caps still apply per action
+alongside budgets; an explicit `deny` always wins.
 
 ## 6. Safety rules (read once, remember forever)
 

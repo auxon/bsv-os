@@ -16,6 +16,8 @@ depends=(
 optdepends=(
   'quickshell: wallet bar widgets and pay prompts'
   'openssh: agent access for remote setup'
+  'chromium: sandboxed runner windows for installed apps'
+  'openssl: throwaway TLS cert for the loopback runner demo'
 )
 source=('bsv.sh')
 sha256sums=('SKIP')
@@ -39,5 +41,14 @@ package() {
   if [ -d "$plugin" ]; then
     install -dm755 "$pkgdir/usr/share/bsv-os/shell-plugin"
     cp -a "$plugin/." "$pkgdir/usr/share/bsv-os/shell-plugin/"
+  fi
+
+  # F2 runner: bridge extension + loopback demo (the CLI resolves the
+  # extension from here when not running out of a repo checkout).
+  local runner="$startdir/../../../packages/runner"
+  if [ -d "$runner/extension" ]; then
+    install -dm755 "$pkgdir/usr/share/bsv-os/runner"
+    cp -a "$runner/extension" "$pkgdir/usr/share/bsv-os/runner/"
+    [ -d "$runner/demo" ] && cp -a "$runner/demo" "$pkgdir/usr/share/bsv-os/runner/"
   fi
 }

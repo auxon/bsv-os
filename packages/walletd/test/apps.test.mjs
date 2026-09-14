@@ -44,6 +44,15 @@ test("validateManifest rejects hostile shapes", () => {
   assert.throws(() => validateManifest("demo.example", { name: "x".repeat(81) }), /too long/);
 });
 
+test("validateManifest allows an explicit port on the same host", () => {
+  const v = validateManifest("127.0.0.1", { name: "Loopback Demo", start_url: "https://127.0.0.1:8443/" });
+  assert.equal(v.startUrl, "https://127.0.0.1:8443/");
+  assert.throws(
+    () => validateManifest("127.0.0.1", { name: "x", start_url: "https://127.0.0.2:8443/" }),
+    /escapes/,
+  );
+});
+
 test("appIdFor is a safe filename slug", () => {
   assert.equal(appIdFor("https://Demo.Example/path"), "demo-example");
   assert.equal(appIdFor("a"), "a");
@@ -73,6 +82,31 @@ test("install pins, seeds policy, lists, removes", async () => {
     assert.equal(await removeApp(db, "demo.example"), true);
     assert.equal(await removeApp(db, "demo.example"), false);
     assert.equal((await listApps(db)).length, 0);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("install from manifestJson skips the network but keeps validation", async () => {
+  const db = await memdb();
+  try {
+    const boom = async () => {
+      throw new Error("network must not be touched");
+    };
+    const { app } = await installApp(
+      db,
+      "127.0.0.1",
+      { seedPolicyRequest: async () => {} },
+      {
+        fetchManifest: boom,
+        manifestJson: { name: "Loopback Demo", start_url: "https://127.0.0.1:8443/" },
+      },
+    );
+    assert.equal(app.startUrl, "https://127.0.0.1:8443/");
+    assert.throws(
+      () => validateManifest("127.0.0.1", { name: "x", start_url: "https://evil.example/" }),
+      /escapes/,
+    );
   } finally {
     await db.destroy();
   }

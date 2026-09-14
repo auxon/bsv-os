@@ -37,10 +37,14 @@ bsv unlock | bsv lock
 bsv balance                 # live chain lookup
 bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
 bsv allow <origin> [cap] | bsv deny <origin> | bsv requests | bsv policies
+bsv agent mint <name> --budget=N [--daily=N] [--expiry=30d|YYYY-MM-DD]
+bsv agent list | bsv agent show <name> | bsv agent revoke <name>
 bsv pending                 # monitor queue
 bsv history                 # unified ledger: txs + requests + policies (F8 dashboard)
 bsv app install <domain>  # install a Metanet app (manifest + launcher)
-bsv app list | bsv app open <domain> | bsv app remove <domain>
+bsv app install <domain> --manifest-file <path>  # dev install: same validation, no fetch
+bsv app open <domain>     # sandboxed runner window with window.bsv (browser fallback)
+bsv app list | bsv app remove <domain>
 ```
 
 First spend from a new origin is denied pending approval (`bsv allow cli`

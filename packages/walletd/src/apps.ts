@@ -74,9 +74,19 @@ export function validateManifest(domain: string, manifest: unknown): {
   if (!name) throw new Error("manifest.name is required");
   if (name.length > 80) throw new Error("manifest.name too long");
   const origin = `https://${domain}`;
-  const startUrl = absoluteUrl(origin, String(m.start_url ?? "/"));
-  if (!startUrl) throw new Error("manifest.start_url must resolve to https");
-  if (!startUrl.startsWith(`${origin}/`)) throw new Error("start_url escapes the app origin");
+  // Hostname comparison (not string prefix): apps may serve an explicit
+  // port (e.g. loopback dev demos) but must never escape their own host.
+  let startParsed: URL;
+  try {
+    startParsed = new URL(String(m.start_url ?? "/"), origin);
+  } catch {
+    throw new Error("manifest.start_url is not a URL");
+  }
+  if (startParsed.protocol !== "https:") throw new Error("manifest.start_url must resolve to https");
+  if (startParsed.hostname.toLowerCase() !== domain.toLowerCase()) {
+    throw new Error("start_url escapes the app origin");
+  }
+  const startUrl = startParsed.toString();
   let icon: string | null = null;
   if (Array.isArray(m.icons)) {
     for (const ic of m.icons as Array<Record<string, unknown>>) {
@@ -187,10 +197,14 @@ export async function installApp(
   hooks: {
     seedPolicyRequest(origin: string, amountSats: number, action: string): Promise<void>;
   },
-  opts: { fetchManifest?: (domain: string) => Promise<unknown> } = {},
+  opts: { fetchManifest?: (domain: string) => Promise<unknown>; manifestJson?: unknown } = {},
 ): Promise<{ app: AppRecord; asked: { spendCapSats: number; protocols: number; baskets: number; certs: number } }> {
   const clean = domain.toLowerCase().trim().replace(/^https?:\/\//, "").split("/")[0]!;
-  const manifest = await (opts.fetchManifest ?? fetchManifest)(clean);
+  // manifestJson is the dev-install path (`bsv app install --manifest-file`):
+  // same validation, network fetch skipped.
+  const manifest = opts.manifestJson !== undefined
+    ? opts.manifestJson
+    : await (opts.fetchManifest ?? fetchManifest)(clean);
   const v = validateManifest(clean, manifest);
   await saveApp(db, clean, {
     name: v.name, startUrl: v.startUrl, icon: v.icon, spendCapSats: v.spendCapSats,

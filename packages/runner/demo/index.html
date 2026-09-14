@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BSV OS Runner Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #14101f; color: #f1eefb; font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 32px; }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { color: #a79fc4; margin: 0 0 20px; }
+  .pill { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; margin-bottom: 16px; }
+  .pill.on { background: #12351f; color: #4ade80; border: 1px solid #4ade80; }
+  .pill.off { background: #3a1d1d; color: #f87171; border: 1px solid #f87171; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+  button { background: #7c5cff; color: white; border: 0; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  pre { background: #1e1830; border: 1px solid #37304d; border-radius: 12px; padding: 14px; white-space: pre-wrap; word-break: break-all; min-height: 120px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>BSV OS Runner Demo</h1>
+  <p class="sub">window.bsv click-through: status, identity, balance, timestamp.</p>
+  <div id="bridge" class="pill off">checking bridge…</div>
+  <div class="row">
+    <button id="b-status">Get status</button>
+    <button id="b-balance">Get balance</button>
+    <button id="b-stamp">Timestamp random hash</button>
+  </div>
+  <pre id="out">Open this page with `bsv app open 127.0.0.1` so the runner injects window.bsv.</pre>
+</main>
+<script>
+  "use strict";
+  const out = document.getElementById("out");
+  const pill = document.getElementById("bridge");
+  const show = (v) => { out.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2); };
+  function paint() {
+    const live = !!(window.bsv && window.bsv.isBSVOS);
+    pill.className = "pill " + (live ? "on" : "off");
+    pill.textContent = live ? "bridge: connected (runner)" : "bridge: absent (plain browser)";
+    document.querySelectorAll("button").forEach((b) => { b.disabled = !live; });
+  }
+  window.addEventListener("load", () => {
+    setTimeout(paint, 300); // content script injects just after parse
+    document.getElementById("b-status").onclick = async () => {
+      try { show(await window.bsv.getStatus()); } catch (e) { show(String(e)); }
+    };
+    document.getElementById("b-balance").onclick = async () => {
+      try { show(await window.bsv.getBalance()); } catch (e) { show(String(e)); }
+    };
+    document.getElementById("b-stamp").onclick = async () => {
+      try {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+        show({ anchoring: hex.slice(0, 16) + "…" });
+        show(await window.bsv.timestamp(hex));
+      } catch (e) { show(String(e)); }
+    };
+  });
+</script>
+</body>
+</html>

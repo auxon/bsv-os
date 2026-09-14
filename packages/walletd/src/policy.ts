@@ -2,8 +2,15 @@
  * Spending policy (BRC-116-shaped): per-origin allow/deny/ask + spend caps.
  * Headless daemon semantics: unknown origins are denied AND recorded as
  * pending requests; the local CLI is the policy console that approves them.
+ *
+ * F9: agent sub-wallets layer lifetime budgets / daily allowances / expiry
+ * on top. Minting is the approval ceremony for agents: an origin with a
+ * live sub-wallet spends within budget with no separate policy row. An
+ * explicit `deny` always wins; budget states deny without recording (the
+ * human re-mints, there is nothing to approve).
  */
 import type { Knex } from "knex";
+import { checkBudget } from "./agents.ts";
 
 export type Verdict = "allow" | "deny";
 export interface PolicyCheck {
@@ -39,12 +46,20 @@ export async function check(
     | { mode: string; spend_cap_sats: number }
     | undefined;
   const mode = row?.mode ?? "ask";
-  if (mode === "deny") return { verdict: "deny", reason: "denied by policy", pending: false };
   if (mode === "allow") {
     if ((row?.spend_cap_sats ?? 0) > 0 && amountSats > (row?.spend_cap_sats ?? 0)) {
       return { verdict: "deny", reason: `over spend cap (${row?.spend_cap_sats} sats)`, pending: false };
     }
-    return { verdict: "allow", reason: "allowed by policy", pending: false };
+  } else if (mode === "deny") {
+    return { verdict: "deny", reason: "denied by policy", pending: false };
+  }
+  // F9: sub-wallet budgets bind allow-mode survivors and ask-mode origins
+  // alike. A spend covered by a live budget is approved even in ask mode —
+  // minting was the approval ceremony.
+  const purse = await checkBudget(db, origin, amountSats);
+  if (!purse.ok) return { verdict: "deny", reason: purse.reason, pending: false };
+  if (mode === "allow" || purse.covered) {
+    return { verdict: "allow", reason: purse.covered ? "allowed by agent budget" : "allowed by policy", pending: false };
   }
   // ask (and unknown): record once per origin+action, deny this attempt
   const seen = await db("policy_requests").where({ origin, action }).first();

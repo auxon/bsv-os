@@ -33,6 +33,7 @@ Panel {
   property var transactions: []
   property var requests: []
   property var policies: []
+  property var agents: []
   property var summary: ({ inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 })
 
   function refresh() {
@@ -92,11 +93,13 @@ Panel {
           root.transactions = h.transactions ?? [];
           root.requests = h.requests ?? [];
           root.policies = h.policies ?? [];
+          root.agents = h.agents ?? [];
           if (h.summary) root.summary = h.summary;
         } catch (e) {
           root.transactions = [];
           root.requests = [];
           root.policies = [];
+          root.agents = [];
         }
       }
     }
@@ -118,6 +121,12 @@ Panel {
   function deny(origin) {
     if (actionProc.running) return;
     actionProc.args = ["deny", origin];
+    actionProc.running = true;
+  }
+
+  function revokeAgent(name) {
+    if (actionProc.running) return;
+    actionProc.args = ["agent", "revoke", name];
     actionProc.running = true;
   }
 
@@ -264,6 +273,50 @@ Panel {
           }
         }
       }
+    }
+
+    PanelSectionHeader { text: `Agents (${root.agents.length})` }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.agents.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.agents
+        ColumnLayout {
+          spacing: 0
+          Layout.fillWidth: true
+
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.name ?? "?"} · ${modelData.remaining ?? 0}/${modelData.budget_sats ?? 0} sats${(modelData.daily_sats ?? 0) > 0 ? ` · ${modelData.window_remaining ?? 0}/${modelData.daily_sats} today` : ""} · ${modelData.active ? "active" : (modelData.revoked ? "revoked" : "expired")}`
+              color: modelData.active ? Color.foreground : Color.muted
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Revoke"
+              visible: modelData.active === true
+              onClicked: root.revokeAgent(modelData.name)
+            }
+          }
+        }
+      }
+    }
+
+    Text {
+      text: "No agent allowances — mint one with: bsv agent mint <name> --budget=<sats>."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.agents.length === 0
     }
 
     Item { Layout.fillHeight: true }

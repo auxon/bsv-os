@@ -106,6 +106,91 @@ function print(res: unknown): void {  const r = res as { result?: unknown; error
   console.log(JSON.stringify(r && typeof r === "object" && "result" in r ? r.result : r, null, 2));
 }
 
+/** --key=value or --key value. */
+function flag(rest: string[], name: string): string | undefined {
+  const eq = rest.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.slice(name.length + 3);
+  const i = rest.indexOf(`--${name}`);
+  if (i >= 0 && i + 1 < rest.length) return rest[i + 1];
+  return undefined;
+}
+
+/** --expiry 30d | 2026-10-14 | <ms epoch> → ms epoch, 0 = never. */
+function parseExpiry(raw: string | undefined): number {
+  if (!raw) return 0;
+  const days = /^(\d+)d$/.exec(raw);
+  if (days) return Date.now() + Number(days[1]) * 86_400_000;
+  const t = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+  if (!Number.isFinite(t)) {
+    console.error("bad --expiry: use 30d, YYYY-MM-DD, or ms epoch");
+    process.exitCode = 2;
+    return -1;
+  }
+  return t;
+}
+
+/** Open an installed app in the sandboxed runner (Chromium app window +
+ * per-app profile + window.bsv bridge). False when the runner is
+ * unavailable — the caller falls back to the default browser. */
+async function openInRunner(startUrl: string, domain: string): Promise<boolean> {
+  if (process.platform !== "linux") return false;
+  const { findChromium, findExtensionDir, buildLaunchPlan } = await import("./launcher.ts");
+  const { randomBytes } = await import("node:crypto");
+  const { createServer } = await import("node:http");
+  const { spawn } = await import("node:child_process");
+  const { mkdir } = await import("node:fs/promises");
+  const chromium = findChromium();
+  const extensionDir = findExtensionDir();
+  if (!chromium || !extensionDir) return false;
+  const token = randomBytes(16).toString("hex");
+  const port = await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const addr = probe.address();
+      const p = typeof addr === "object" && addr ? addr.port : 0;
+      probe.close(() => resolve(p));
+    });
+  });
+  if (!port) return false;
+  const plan = buildLaunchPlan({ chromium, domain, startUrl, extensionDir, port, token });
+  await mkdir(plan.dataDir, { recursive: true });
+  const self = process.argv[1];
+  const bridge = spawn(process.execPath, [self, "_bridge", domain, `--port=${port}`, `--token=${token}`], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  await new Promise<void>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("bridge start timeout")), 10000);
+    bridge.stdout.on("data", (d: Buffer) => {
+      if (d.toString().includes('"ready"')) {
+        clearTimeout(t);
+        resolve();
+      }
+    });
+    bridge.on("error", (e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+    bridge.on("exit", (code) => {
+      clearTimeout(t);
+      reject(new Error(`bridge exited ${code}`));
+    });
+  }).catch((e: unknown) => {
+    bridge.kill();
+    throw e;
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(plan.chromium, plan.args, { stdio: "ignore" });
+      child.on("error", reject);
+      child.on("exit", () => resolve());
+    });
+  } finally {
+    bridge.kill();
+  }
+  return true;
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
@@ -172,6 +257,29 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "agent": {
+      const [sub, name] = rest;
+      if (sub === "mint" && name) {
+        const exp = parseExpiry(flag(rest, "expiry"));
+        if (process.exitCode) break;
+        print(await call("agentMint", {
+          name,
+          budgetSats: Number(flag(rest, "budget") ?? 0),
+          dailySats: Number(flag(rest, "daily") ?? 0),
+          expiryAt: exp,
+        }));
+      } else if (sub === "revoke" && name) {
+        print(await call("agentRevoke", { name }));
+      } else if ((sub === "show" && name) || (sub === "list" && name)) {
+        print(await call("agentShow", { name }));
+      } else if (sub === "list" || sub === undefined) {
+        print(await call("agentList"));
+      } else {
+        console.error("usage: bsv agent <mint <name> --budget=N [--daily=N] [--expiry=30d|YYYY-MM-DD]|list|show <name>|revoke <name>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "history":
       print(await call("history"));
       break;
@@ -181,29 +289,97 @@ async function main(): Promise<void> {
     case "app": {
       const [sub, arg] = rest;
       if (sub === "install" && arg) {
-        print(await call("appInstall", { domain: arg }));
+        const mf = flag(rest, "manifest-file");
+        let manifestJson: unknown;
+        if (mf !== undefined) {
+          const { readFile } = await import("node:fs/promises");
+          try {
+            manifestJson = JSON.parse(await readFile(mf, "utf8"));
+          } catch (e) {
+            console.error(`cannot read manifest file: ${e instanceof Error ? e.message : e}`);
+            process.exitCode = 2;
+            break;
+          }
+        }
+        print(await call("appInstall", manifestJson !== undefined ? { domain: arg, manifestJson } : { domain: arg }));
       } else if (sub === "list" || sub === undefined) {
         print(await call("appList"));
       } else if (sub === "remove" && arg) {
         print(await call("appRemove", { domain: arg }));
       } else if (sub === "open" && arg) {
-        const res = (await call("appOpen", { domain: arg })) as { result?: { startUrl?: string } };
+        const res = (await call("appOpen", { domain: arg })) as { result?: { startUrl?: string; domain?: string } };
         const url = res?.result?.startUrl;
         if (!url) {
           print(res);
           break;
         }
-        console.log(url);
-        if (process.platform === "linux") {
-          const { execFile } = await import("node:child_process");
-          execFile("xdg-open", [url], (e) => {
-            if (e) console.error("(could not open browser automatically)");
-          });
+        // Sandboxed runner first (window.bsv bridge); default browser fallback.
+        let launched = false;
+        try {
+          launched = await openInRunner(url, res?.result?.domain ?? arg);
+        } catch (e) {
+          console.error(`runner failed (${e instanceof Error ? e.message : e}) — falling back to browser`);
+        }
+        if (!launched) {
+          console.log(url);
+          if (process.platform === "linux") {
+            const { execFile } = await import("node:child_process");
+            execFile("xdg-open", [url], (e) => {
+              if (e) console.error("(could not open browser automatically)");
+            });
+          }
         }
       } else {
         console.error("usage: bsv app <install <domain>|list|remove <domain>|open <domain>>");
         process.exitCode = 2;
       }
+      break;
+    }
+    case "_bridge": {
+      // F2 runner internals: loopback relay for ONE app window. Spawned by
+      // `app open`, never by hand. Dies with the window (or its parent).
+      const [bridgeDomain] = rest;
+      const bridgePort = Number(flag(rest, "port") ?? 0);
+      const bridgeToken = flag(rest, "token") ?? "";
+      if (!bridgeDomain || !bridgePort || !bridgeToken) {
+        console.error("usage: bsv _bridge <domain> --port=N --token=T");
+        process.exitCode = 2;
+        break;
+      }
+      const { createServer } = await import("node:http");
+      const { createBridgeHandler } = await import("./bridge.ts");
+      const handler = createBridgeHandler({
+        token: bridgeToken,
+        domain: bridgeDomain.toLowerCase(),
+        invoke: async (method, params) => {
+          const res = (await call("appInvoke", { domain: bridgeDomain, method, callParams: params })) as {
+            result?: unknown; error?: unknown;
+          };
+          return res && typeof res === "object" && "error" in res && res.error
+            ? { error: res.error }
+            : { result: (res as { result?: unknown }).result };
+        },
+      });
+      await new Promise<void>((resolve, reject) => {
+        const server = createServer((req, res) => {
+          let body = "";
+          req.on("data", (chunk: Buffer) => {
+            body += chunk.toString("utf8");
+            if (body.length > 1_000_000) req.destroy();
+          });
+          req.on("end", () => {
+            void handler(req, body).then((out) => {
+              res.writeHead(out.status, out.headers);
+              res.end(out.json === null ? undefined : JSON.stringify(out.json));
+            });
+          });
+          req.on("error", () => reject(new Error("bridge request failed")));
+        });
+        server.on("error", reject);
+        server.listen(bridgePort, "127.0.0.1", () => {
+          console.log(JSON.stringify({ ready: true, port: bridgePort }));
+        });
+      });
       break;
     }
     case "mcp": {
@@ -224,7 +400,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|allow|deny|requests|policies|app|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|allow|deny|requests|policies|agent|app|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

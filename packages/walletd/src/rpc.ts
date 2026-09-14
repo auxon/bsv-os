@@ -4,6 +4,7 @@ import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
 import { anchorTip, getBalance } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
+import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, listApps, removeApp } from "./apps.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 
@@ -107,6 +108,35 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const b = needBackend();
     return { requests: await pendingRequests(b.db) };
   },
+  agentMint: async (params) => {
+    const b = needBackend();
+    const { name, budgetSats, dailySats, expiryAt } = p(params) as {
+      name?: unknown; budgetSats?: unknown; dailySats?: unknown; expiryAt?: unknown;
+    };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    return mintAgent(b.db, { name, budgetSats: Number(budgetSats), dailySats: Number(dailySats ?? 0), expiryAt: Number(expiryAt ?? 0) });
+  },
+  agentRevoke: async (params) => {
+    // One command fully cuts access: flag the sub-wallet AND deny the origin.
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    const r = await revokeAgent(b.db, name);
+    await setPolicy(b.db, r.name, "deny");
+    return r;
+  },
+  agentList: async () => {
+    const b = needBackend();
+    return { agents: await listAgents(b.db) };
+  },
+  agentShow: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    const a = await getAgent(b.db, name);
+    if (!a) throw Object.assign(new Error(`no agent wallet: ${name}`), { code: "NOT_FOUND" });
+    return a;
+  },
   history: async () => {
     // F8 dashboard: degrades to empty (like pending) before the engine boots.
     if (!backend) return emptyHistory();
@@ -114,13 +144,13 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   },
   appInstall: async (params) => {
     const b = needBackend();
-    const { domain } = p(params) as { domain?: unknown };
+    const { domain, manifestJson } = p(params) as { domain?: unknown; manifestJson?: unknown };
     if (typeof domain !== "string" || !domain.trim()) {
       throw Object.assign(new Error("domain required"), { code: "BAD_PARAM" });
     }
     const { app, asked } = await installApp(b.db, domain.trim(), {
       seedPolicyRequest: (origin, amountSats, action) => seedRequest(b.db, origin, amountSats, action),
-    });
+    }, manifestJson !== undefined ? { manifestJson } : {});
     const launcher = await writeDesktopEntry(app).catch(() => null);
     return { app, asked, launcher };
   },
@@ -149,6 +179,44 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const app = await getApp(b.db, clean);
     if (!app) throw Object.assign(new Error("not installed — bsv app install first"), { code: "NOT_FOUND" });
     return { startUrl: app.startUrl, domain: app.domain };
+  },
+  /**
+   * F2 runner intents: the sandboxed webview's `window.bsv` bridge calls
+   * through here with the app's domain as origin. Installed-only,
+   * allowlisted methods, spends under the app's own origin policy —
+   * the page never touches keys and cannot reach any other RPC.
+   */
+  appInvoke: async (params) => {
+    const b = needBackend();
+    const { domain, method, callParams } = p(params) as {
+      domain?: unknown; method?: unknown; callParams?: unknown;
+    };
+    if (typeof domain !== "string" || !domain.trim()) {
+      throw Object.assign(new Error("domain required"), { code: "BAD_PARAM" });
+    }
+    const clean = domain.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0]!;
+    const app = await getApp(b.db, clean);
+    if (!app) throw Object.assign(new Error(`not installed — bsv app install ${clean} first`), { code: "NOT_FOUND" });
+    const args = (callParams && typeof callParams === "object" ? callParams : {}) as Record<string, unknown>;
+    switch (method) {
+      case "getStatus": {
+        const s = await getStatus();
+        return { authenticated: !s.locked, locked: s.locked, hasWallet: s.hasWallet };
+      }
+      case "getIdentity": {
+        const s = await getStatus();
+        return { identityKey: (s as { identityKey?: string | null }).identityKey ?? null, locked: s.locked };
+      }
+      case "getBalance":
+        return getBalance(b.chain);
+      case "timestamp": {
+        const { sha256 } = args as { sha256?: unknown };
+        if (typeof sha256 !== "string") throw Object.assign(new Error("sha256 required"), { code: "BAD_PARAM" });
+        return anchorTip({ db: b.db, chain: b.chain, origin: app.domain, sha256 });
+      }
+      default:
+        throw Object.assign(new Error(`unknown app method ${String(method)}`), { code: "BAD_METHOD" });
+    }
   },
 };
 

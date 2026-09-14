@@ -8,6 +8,7 @@ import { p2pkhUnlockHook, selfAddress } from "./custody.ts";
 import { Script } from "@bsv/sdk";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
+import { recordSpend } from "./agents.ts";
 import { track } from "./monitor.ts";
 import type { ChainProvider } from "./chain.ts";
 
@@ -28,12 +29,8 @@ export async function anchorTip(opts: {
   if (!/^[0-9a-fA-F]{64}$/.test(opts.sha256)) {
     throw new Error("sha256 must be 64 hex chars");
   }
-  const gate = await check(opts.db, opts.origin, 0, "anchor");
-  if (gate.verdict !== "allow") {
-    const err = new Error(`denied: ${gate.reason}`) as Error & { code: string };
-    err.code = "POLICY_DENY";
-    throw err;
-  }
+  // Build first so the policy gate (per-action caps, F9 agent budgets)
+  // sees the real fee, not a zero estimate.
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
@@ -45,8 +42,16 @@ export async function anchorTip(opts: {
     opReturn: ["BSVOS-ANCHOR", opts.sha256],
     changeScriptHex: lock.toHex(),
   });
+  const gate = await check(opts.db, opts.origin, built.fee, "anchor");
+  if (gate.verdict !== "allow") {
+    const err = new Error(`denied: ${gate.reason}`) as Error & { code: string };
+    err.code = "POLICY_DENY";
+    throw err;
+  }
   const { hex, txid } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);
   await track(opts.db, res.txid, `anchor ${opts.sha256.slice(0, 12)}`, hex);
+  // F9: debit the agent budget only now — accepted broadcasts only.
+  await recordSpend(opts.db, opts.origin, built.fee);
   return { txid: res.txid, fee: built.fee };
 }
