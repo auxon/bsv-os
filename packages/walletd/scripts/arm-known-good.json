@@ -1,0 +1,12 @@
+{
+  "better-sqlite3": {
+    "tag": "v12.11.1",
+    "ok": true,
+    "asset": "better-sqlite3-v12.11.1-node-v127-linux-arm64.tar.gz"
+  },
+  "keytar": {
+    "tag": "v7.9.0",
+    "ok": true,
+    "asset": "keytar-v7.9.0-napi-v3-linux-arm64.tar.gz"
+  }
+}
