@@ -1,0 +1,26 @@
+{
+  "name": "@bsv-os/walletd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "bsv-walletd: system BRC-100 wallet daemon for the BSV OS (Omarchy remix)",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/**/*.test.mjs'"
+  },
+  "dependencies": {
+    "@bsv/sdk": "^2.6.0",
+    "@bsv/wallet-toolbox": "^2.13.0",
+    "better-sqlite3": "^12.2.0",
+    "knex": "^3.1.0",
+    "selfsigned": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "tsx": "^4.19.0",
+    "typescript": "~5.9.3"
+  }
+}

@@ -1,0 +1,19 @@
+[Unit]
+Description=bsv-walletd — system BRC-100 wallet daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/bsv-walletd
+Restart=on-failure
+RestartSec=3
+# Hardening: keys live in the login keyring, daemon never touches the net but ARC
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/bsv-os %t
+
+[Install]
+WantedBy=default.target
