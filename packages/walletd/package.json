@@ -6,10 +6,11 @@
   "description": "bsv-walletd: system BRC-100 wallet daemon for the BSV OS (Omarchy remix)",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --noEmit false --outDir dist",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'test/**/*.test.mjs'"
+    "test": "node --test 'test/**/*.test.mjs'",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@bsv/sdk": "^2.6.0",
@@ -24,5 +25,8 @@
     "@types/node": "^22.16.5",
     "tsx": "^4.19.0",
     "typescript": "~5.9.3"
+  },
+  "bin": {
+    "bsv": "./dist/cli.js"
   }
 }

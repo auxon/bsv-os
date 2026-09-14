@@ -13,10 +13,15 @@
  *   paths replace this in M2; nothing here is protocol-stable yet.
  */
 import keytar from "keytar";
-import { HD, Mnemonic } from "@bsv/sdk";
+import { HD, Mnemonic, P2PKH, PrivateKey, Script, Transaction, type UnlockingScript } from "@bsv/sdk";
+import type { UnlockHook } from "./tx.ts";
 
-const SERVICE = "bsv-walletd";
-const ACCOUNT = "master";
+// Test isolation: BSV_WALLETD_KEYCHAIN_SUFFIX partitions the keyring so
+// parallel test files never share (or destroy) each other's wallets.
+function svc(): { service: string; account: string } {
+  const suffix = process.env.BSV_WALLETD_KEYCHAIN_SUFFIX ?? "";
+  return { service: `bsv-walletd${suffix}`, account: "master" };
+}
 const DEFAULT_LOCK_MS = 15 * 60 * 1000;
 
 export interface CustodyStatus {
@@ -58,7 +63,7 @@ function identityOf(hd: HD): string {
 export async function hasWallet(): Promise<boolean> {
   if (hasWalletCache !== null) return hasWalletCache;
   try {
-    hasWalletCache = (await keytar.getPassword(SERVICE, ACCOUNT)) !== null;
+    hasWalletCache = (await keytar.getPassword(svc().service, svc().account)) !== null;
   } catch {
     hasWalletCache = false;
   }
@@ -70,7 +75,7 @@ export async function createWallet(force = false): Promise<{ identityKey: string
     throw new CustodyError("EXISTS", "a wallet already exists (pass force to replace — destroys access to the old one)");
   }
   const phrase = Mnemonic.fromRandom().toString();
-  await keytar.setPassword(SERVICE, ACCOUNT, phrase);
+  await keytar.setPassword(svc().service, svc().account, phrase);
   hasWalletCache = true;
   session = HD.fromSeed(new Mnemonic(phrase).toSeed());
   armTimer();
@@ -78,7 +83,7 @@ export async function createWallet(force = false): Promise<{ identityKey: string
 }
 
 export async function unlock(): Promise<{ identityKey: string }> {
-  const stored = await keytar.getPassword(SERVICE, ACCOUNT).catch(() => null);
+  const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
   if (!stored) {
     hasWalletCache = false;
     throw new CustodyError("NO_WALLET", "no wallet enrolled — call createWallet first");
@@ -97,11 +102,41 @@ export function lock(): void {
   }
 }
 
+/**
+ * Spend path for the daemon's own coins (M3 spike path `m/0/0`; BRC-43
+ * derivation replaces hard paths in M4). Returns only public info.
+ */
+export function selfAddress(path = "m/0/0"): string {
+  if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+  return childPriv(path).toPublicKey().toAddress();
+}
+
+function childPriv(path: string): PrivateKey {
+  if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+  const child = session.derive(path);
+  if (!child.privKey) throw new CustodyError("INTERNAL", `cannot derive ${path}`);
+  return child.privKey;
+}
+
+/**
+ * An unlocking hook bound to a derived key. The key never leaves this
+ * module — callers get signatures, not secrets. Matches tx.ts UnlockHook.
+ */
+export function p2pkhUnlockHook(path: string, satoshis: number, lockingScript: Script): UnlockHook {
+  const priv = childPriv(path);
+  const template = new P2PKH().unlock(priv, "all", false, satoshis, lockingScript);
+  return {
+    sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
+      return template.sign(tx, inputIndex);
+    },
+  };
+}
+
 /** Factory reset: wipes the enrolled secret. Caller must have a backup. */
 export async function destroyWallet(): Promise<void> {
   lock();
   try {
-    await keytar.deletePassword(SERVICE, ACCOUNT);
+    await keytar.deletePassword(svc().service, svc().account);
   } catch {
     /* ignore */
   }

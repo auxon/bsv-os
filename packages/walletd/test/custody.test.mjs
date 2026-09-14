@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+// partitioned keyring namespace (see custody.ts svc())
+process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-custody";
 import {
   __resetCache, createWallet, destroyWallet, getStatus, hasWallet, lock, unlock,
 } from "../src/custody.ts";

@@ -27,6 +27,23 @@ namespaces (`tsc --noEmit` still gates the build).
 Trust rule (CI-enforced): raw key material lives only in
 `packages/walletd/src/custody.ts`. Everything else talks intents.
 
+## CLI
+
+```bash
+npm run build && npm link   # or: ./node_modules/.bin/tsx src/cli.ts
+bsv status                  # locked? enrolled?
+bsv create                  # new wallet (backup shown once)
+bsv unlock | bsv lock
+bsv balance                 # live chain lookup
+bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
+bsv allow <origin> [cap] | bsv deny <origin> | bsv requests | bsv policies
+bsv pending                 # monitor queue
+```
+
+First spend from a new origin is denied pending approval (`bsv allow cli`
+for local flows) — that denial-then-approval loop is the whole policy model
+working as designed.
+
 ## Roadmap
 
 - M0 (this): daemon skeleton, MockChain tests, custody boundary ✅

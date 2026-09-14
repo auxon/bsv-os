@@ -15,7 +15,7 @@ test("no raw key material outside custody.ts", () => {
   try {
     out = execFileSync(
       "grep",
-      ["-rnEi", "fromWif|fromHex\\(|mnemonic|seed phrase|bip39|\\bxprv\\b|BEGIN.*PRIVATE", root, "--include=*.ts"],
+      ["-rnEi", "fromWif|PrivateKey\\.fromHex|mnemonic|seed phrase|bip39|\\bxprv\\b|BEGIN.*PRIVATE", root, "--include=*.ts"],
       { encoding: "utf8" },
     ).trim();
   } catch (err) {

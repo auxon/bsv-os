@@ -1,10 +1,14 @@
 import { createWallet, getStatus, lock, unlock } from "./custody.ts";
 import type { Knex } from "knex";
+import type { ChainProvider } from "./chain.ts";
+import { listPolicies, pendingRequests, setPolicy } from "./policy.ts";
+import { anchorTip, getBalance } from "./engine.ts";
 
 export const VERSION = "0.1.0";
 
 interface MonitorBackend {
   db: Knex;
+  chain: ChainProvider;
 }
 
 let backend: MonitorBackend | null = null;
@@ -12,6 +16,15 @@ let backend: MonitorBackend | null = null;
 /** Wired by index.ts at boot; RPC stays usable without it. */
 export function setBackend(b: MonitorBackend | null): void {
   backend = b;
+}
+
+function needBackend(): MonitorBackend {
+  if (!backend) {
+    const err = new Error("wallet engine offline (restart daemon)") as Error & { code: string };
+    err.code = "NO_BACKEND";
+    throw err;
+  }
+  return backend;
 }
 
 interface RpcRequest {
@@ -51,6 +64,38 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       .orderBy("created_at", "desc")
       .limit(100);
     return { tracked: rows };
+  },
+  balance: async () => {
+    const b = needBackend();
+    return getBalance(b.chain);
+  },
+  anchor: async (params) => {
+    const b = needBackend();
+    const { sha256, origin } = p(params) as { sha256?: unknown; origin?: unknown };
+    if (typeof sha256 !== "string") throw Object.assign(new Error("sha256 required"), { code: "BAD_PARAM" });
+    return anchorTip({ db: b.db, chain: b.chain, origin: typeof origin === "string" ? origin : "cli", sha256 });
+  },
+  policyApprove: async (params) => {
+    const b = needBackend();
+    const { origin, capSats } = p(params) as { origin?: unknown; capSats?: unknown };
+    if (typeof origin !== "string" || !origin) throw Object.assign(new Error("origin required"), { code: "BAD_PARAM" });
+    await setPolicy(b.db, origin, "allow", Math.max(0, Math.floor(Number(capSats) || 0)));
+    return { origin, mode: "allow" };
+  },
+  policyDeny: async (params) => {
+    const b = needBackend();
+    const { origin } = p(params) as { origin?: unknown };
+    if (typeof origin !== "string" || !origin) throw Object.assign(new Error("origin required"), { code: "BAD_PARAM" });
+    await setPolicy(b.db, origin, "deny");
+    return { origin, mode: "deny" };
+  },
+  policyList: async () => {
+    const b = needBackend();
+    return { policies: await listPolicies(b.db) };
+  },
+  policyPending: async () => {
+    const b = needBackend();
+    return { requests: await pendingRequests(b.db) };
   },
 };
 

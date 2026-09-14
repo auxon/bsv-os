@@ -121,8 +121,8 @@ export async function main(): Promise<void> {
   try {
     const db = openDb();
     await migrate(db);
-    setBackend({ db });
     const chain = new CombinedProvider();
+    setBackend({ db, chain });
     const loop = async (): Promise<void> => {
       try {
         const res = await tick(
