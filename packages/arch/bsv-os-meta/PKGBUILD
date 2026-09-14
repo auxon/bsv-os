@@ -1,0 +1,40 @@
+# Maintainer: EntangleIT <bsv-os@entangleit.com>
+pkgname=bsv-os-meta
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="BSV OS layer for Omarchy: system BRC-100 wallet daemon, CLI, shell plugins"
+arch=('aarch64')
+url="https://github.com/auxon/bsv-os"
+license=('Open BSV License')
+depends=(
+  'nodejs>=22'      # walletd runtime (aarch64); prebuilt ARM deps verified
+  'libsecret'       # keytar runtime: GNOME Keyring access
+  'gnome-keyring'   # login keyring provider
+  'sqlite'          # wallet + monitor databases
+  'python' 'make' 'gcc'  # node-gyp fallback if a prebuild 404s
+)
+optdepends=(
+  'quickshell: wallet bar widgets and pay prompts'
+  'openssh: agent access for remote setup'
+)
+source=('bsv.sh')
+sha256sums=('SKIP')
+
+package() {
+  local src="$startdir/../../packages/walletd"
+  [ -d "$src/dist" ] || { echo "run npm run build in packages/walletd first"; exit 1; }
+  install -dm755 "$pkgdir/usr/lib/bsv-os/walletd"
+  cp -a "$src/dist" "$pkgdir/usr/lib/bsv-os/walletd/"
+  cp -a "$src/package.json" "$pkgdir/usr/lib/bsv-os/walletd/"
+  # production node_modules (pinned ARM prebuilds) installed at package time
+  cd "$pkgdir/usr/lib/bsv-os/walletd" && npm install --omit=dev --no-audit --no-fund
+
+  install -Dm755 "$srcdir/bsv.sh" "$pkgdir/usr/bin/bsv"
+  install -Dm644 "$src/bsv-walletd.service" "$pkgdir/usr/lib/systemd/user/bsv-walletd.service"
+
+  local qml="$startdir/../../packages/shell"
+  if [ -d "$qml" ]; then
+    install -dm755 "$pkgdir/usr/share/quickshell/bsv-os"
+    cp -a "$qml/." "$pkgdir/usr/share/quickshell/bsv-os/"
+  fi
+}
