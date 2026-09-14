@@ -7,12 +7,28 @@ destination, SIP enabled. Target: ~70 GB Linux, ~54 GB macOS headroom.
 > work — partitioning a live boot disk and rebooting are human jobs.
 > Do not run the Apple/Asahi installer from an agent shell session.
 
-## 0. Backup — MANDATORY, do this first (you)
+## 0. Backup (you)
 
-No Time Machine destination exists today. Attach an external SSD ≥250 GB,
-System Settings → General → Time Machine → Add Backup Disk, complete one
-full backup, and verify it (`tmutil latestbackup`). If this goes wrong
-anywhere below, that disk is the way back.
+**No spare SSD? The no-disk safety net (done 2026-09-14, 🤖):**
+
+- `gatekeep/` production worker was unversioned — now at
+  `github.com/auxon/gatekeep` (live secrets excluded via `.gitignore`).
+- Irreplaceables encrypted (AES-256-CBC + PBKDF2) and pushed to the
+  **private** repo `github.com/auxon/macbook-air-vault`:
+  `~/.ssh`, `~/.gnupg`, `~/Documents`, `~/Desktop`, `~/Pictures`
+  (397 entries, decrypt-verified before upload, 3 chunks + SHA256SUMS).
+- Restore: reassemble chunks → `openssl enc -d` with the passphrase shown
+  once at backup time → `tar -tzf` to verify → extract over `$HOME`.
+  Full steps in the vault repo's `RESTORE.md`.
+- Already safe elsewhere: all code repos pushed, photos/iCloud originals in
+  iCloud, iCloud Drive synced. Downloads excluded (re-downloadable).
+- `twetch-oidc` still has 4 uncommitted local edits (yours, pre-existing) —
+  commit or stash them before partitioning.
+
+Understand the residual risk: no backup protects against whole-disk failure
+during resize, only against file loss. APFS live-resize is mature and the
+Asahi installer is widely run on this exact model — but if the SSD itself
+had a bad day, recovery would mean macOS Internet Recovery, not your files.
 
 ## 1. Start the Asahi installer (you, macOS Terminal)
 
