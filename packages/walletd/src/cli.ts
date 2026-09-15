@@ -286,6 +286,40 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "overlay": {
+      const [ovSub, ...ovRest] = rest;
+      const ovArg = ovRest.find((a) => !a.startsWith("--"));
+      if (ovSub === "health" || ovSub === undefined) {
+        print(await call("overlayHealth"));
+      } else if (ovSub === "topics") {
+        print(await call("overlayTopics"));
+      } else if (ovSub === "lookup" && ovArg) {
+        print(await call("overlayLookup", {
+          topic: ovArg,
+          ...(flag(rest, "address") ? { address: flag(rest, "address") } : {}),
+          ...(flag(rest, "history") !== undefined ? { what: "history" } : {}),
+        }));
+      } else if (ovSub === "submit" && ovArg) {
+        const topics: string[] = [];
+        rest.forEach((a, i) => {
+          if (a.startsWith("--topic=")) topics.push(a.slice(8));
+          else if (a === "--topic" && i + 1 < rest.length) topics.push(rest[i + 1]!);
+        });
+        const topicList = topics.length > 0 ? topics : (flag(rest, "topics") ?? "").split(",").filter(Boolean);
+        if (topicList.length === 0) {
+          console.error("usage: bsv overlay submit <txid> --topic <t> [--topic ...]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("overlaySubmit", { txid: ovArg, topics: topicList }));
+      } else if (ovSub === "tags" && ovArg) {
+        print(await call("overlayTags", { txid: ovArg }));
+      } else {
+        console.error("usage: bsv overlay <health|topics|lookup <tm_topic> --address <addr>|submit <txid> --topic <t>|tags <txid>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "nightshift": {
       const [nsSub, ...nsRest] = rest;
       const nsArg = nsRest.find((a) => !a.startsWith("--"));
@@ -749,7 +783,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|recovery|gig|nightshift|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

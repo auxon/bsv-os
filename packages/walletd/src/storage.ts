@@ -5,6 +5,7 @@ import path from "node:path";
 import { migrateApps } from "./apps.ts";
 import { migrateGigs } from "./gigs.ts";
 import { migrateNightshift } from "./nightshift.ts";
+import { migrateOverlays } from "./overlays.ts";
 import { migratePolicy } from "./policy.ts";
 import { migrateAgents } from "./agents.ts";
 import { migrateBaskets } from "./baskets.ts";
@@ -51,6 +52,7 @@ export async function migrate(db: Knex): Promise<void> {
   await migratePolicy(db);
   await migrateGigs(db);
   await migrateNightshift(db);
+  await migrateOverlays(db);
   await migrateAgents(db);
   await migrateBaskets(db);
   await migrateCerts(db);

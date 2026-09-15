@@ -75,6 +75,11 @@ Panel {
   // per-cycle escrow states. Submit takes proof text; rest is one tap.
   property var shiftOrders: []
   property var shiftRuns: []
+  // F11 explorer (see `bsv overlay health/topics/lookup`): overlay status
+  // plus topic lookup. Tagging stays CLI (needs exact txids).
+  property var overlays: []
+  property string overlayText: ""
+  property bool overlayOk: true
   property var summary: ({ inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 })
 
   function refresh() {
@@ -113,6 +118,7 @@ Panel {
           if (!gigListProc.running) gigListProc.running = true;
           if (!shiftOrdersProc.running) shiftOrdersProc.running = true;
           if (!shiftRunsProc.running) shiftRunsProc.running = true;
+          if (!overlayHealthProc.running) overlayHealthProc.running = true;
         } catch (e) {
           root.daemonUp = false;
         }
@@ -327,6 +333,48 @@ Panel {
       }
     }
     onExited: (code) => { if (code !== 0) root.shiftRuns = []; }
+  }
+
+  // F11 explorer: health snapshot + topic lookup runner.
+  Process {
+    id: overlayHealthProc
+    command: ["bsv", "overlay", "health"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.overlays = JSON.parse(text).overlays ?? [];
+        } catch (e) {
+          root.overlays = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.overlays = []; }
+  }
+
+  Process {
+    id: overlayLookupProc
+    property string topic: ""
+    property string address: ""
+    command: address === "" ? ["bsv", "overlay", "lookup", topic] : ["bsv", "overlay", "lookup", topic, "--address", address]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          const n = (r.rows ?? []).length;
+          root.overlayOk = true;
+          root.overlayText = `${r.topic ?? "?"} · ${r.what ?? "?"}: ${n} row${n === 1 ? "" : "s"}`;
+        } catch (e) {
+          root.overlayOk = false;
+          root.overlayText = "Lookup failed — topic looks like tm_<tokenId>, address required.";
+        }
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.overlayOk = false;
+        root.overlayText = "Lookup failed — topic looks like tm_<tokenId>, address required.";
+      }
+    }
   }
 
   // Claim runner: `bsv gig claim <id>` (guided text when keyless).
@@ -1329,6 +1377,60 @@ Panel {
       wrapMode: Text.Wrap
       Layout.fillWidth: true
       visible: root.shiftOrders.length === 0
+    }
+
+    PanelSectionHeader { text: `Overlays (${root.overlays.length})` }
+
+    ColumnLayout {
+      spacing: 4
+      visible: root.overlays.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.overlays
+        Text {
+          text: `${modelData.name ?? "?"} · ${modelData.live ? `live ${modelData.latencyMs ?? "?"}ms` : "down"}`
+          color: modelData.live ? Color.foreground : Color.muted
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+      }
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: topicBox
+        placeholderText: "tm_<tokenId>"
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: topicAddrBox
+        placeholderText: "address"
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Lookup"
+        onClicked: {
+          overlayLookupProc.topic = topicBox.text.trim();
+          overlayLookupProc.address = topicAddrBox.text.trim();
+          overlayLookupProc.running = true;
+        }
+      }
+    }
+
+    Text {
+      text: root.overlayText
+      color: root.overlayOk ? Color.foreground : Color.urgent
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.overlayText !== ""
     }
 
     Item { Layout.fillHeight: true }

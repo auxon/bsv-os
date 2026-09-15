@@ -12,6 +12,7 @@ import { bsv21For, galleryFor } from "./tokens.ts";
 import {
   boardGet, boardList, claimGig, listGigs, paidGig, submitGig, trackGig, untrackGig,
 } from "./gigs.ts";
+import { overlayHealth, overlayLookup, overlayTopics, tagsFor, tagTransaction } from "./overlays.ts";
 import {
   approveRun, claimRun, createOrder, failRun, listOrders, listRuns,
   removeOrder, setOrderStatus, submitRun,
@@ -212,6 +213,33 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { id } = p(params) as { id?: unknown };
     if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
     return revokeCert(b.db, id);
+  },
+  /**
+   * F11 explorer: overlay health/topics/lookup are keyless reads;
+   * tagging is ownership-scoped to our own tracked transactions.
+   */
+  overlayHealth: async () => ({ overlays: await overlayHealth() }),
+  overlayTopics: async () => ({ topics: await overlayTopics() }),
+  overlayLookup: async (params) => {
+    const { topic, address, what } = p(params) as { topic?: unknown; address?: unknown; what?: unknown };
+    if (typeof topic !== "string" || !topic) throw Object.assign(new Error("topic required"), { code: "BAD_PARAM" });
+    return overlayLookup(topic, {
+      address: typeof address === "string" ? address : undefined,
+      what: typeof what === "string" ? what : undefined,
+    });
+  },
+  overlaySubmit: async (params) => {
+    const b = needBackend();
+    const { txid, topics } = p(params) as { txid?: unknown; topics?: unknown };
+    if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+    const list = Array.isArray(topics) ? topics as string[] : typeof topics === "string" ? topics.split(",") : [];
+    return tagTransaction(b.db, txid, list);
+  },
+  overlayTags: async (params) => {
+    const b = needBackend();
+    const { txid } = p(params) as { txid?: unknown };
+    if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+    return { txid, topics: await tagsFor(b.db, txid) };
   },
   /**
    * F13 standing orders: schedules + per-cycle escrow states. Approval
