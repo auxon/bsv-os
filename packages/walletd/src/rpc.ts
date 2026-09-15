@@ -1,4 +1,4 @@
-import { createWallet, getStatus, importWallet, lock, selfAddress, unlock } from "./custody.ts";
+import { createWallet, exportEntropy, getStatus, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
@@ -9,6 +9,10 @@ import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } fr
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
 import { bsv21For, galleryFor } from "./tokens.ts";
+import {
+  boardGet, boardList, claimGig, listGigs, paidGig, submitGig, trackGig, untrackGig,
+} from "./gigs.ts";
+import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./recovery.ts";
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
@@ -206,6 +210,70 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     return revokeCert(b.db, id);
   },
   /**
+   * F12 board: keyless reads, key-gated rails writes, local lifecycle.
+   * Agentpay key comes from AGENTPAY_KEY (never argv/history).
+   */
+  gigBoard: async (params) => {
+    const { category, limit } = p(params) as { category?: unknown; limit?: unknown };
+    return {
+      gigs: await boardList({
+        category: typeof category === "string" ? category : undefined,
+        limit: Number(limit ?? 25),
+      }),
+    };
+  },
+  gigShow: async (params) => {
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return boardGet(id);
+  },
+  gigList: async () => {
+    const b = needBackend();
+    return { gigs: await listGigs(b.db) };
+  },
+  gigTrack: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return trackGig(b.db, await boardGet(id));
+  },
+  gigUntrack: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return untrackGig(b.db, id);
+  },
+  gigClaim: async (params) => {
+    const b = needBackend();
+    const { id, payoutAddress, workerPubKey } = p(params) as {
+      id?: unknown; payoutAddress?: unknown; workerPubKey?: unknown;
+    };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return claimGig(b.db, id, {
+      payoutAddress: typeof payoutAddress === "string" ? payoutAddress : undefined,
+      workerPubKey: typeof workerPubKey === "string" ? workerPubKey : undefined,
+    });
+  },
+  gigSubmit: async (params) => {
+    const b = needBackend();
+    const { id, workHash, workUri, notes } = p(params) as {
+      id?: unknown; workHash?: unknown; workUri?: unknown; notes?: unknown;
+    };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return submitGig(b.db, id, {
+      workHash: typeof workHash === "string" ? workHash : undefined,
+      workUri: typeof workUri === "string" ? workUri : undefined,
+      notes: typeof notes === "string" ? notes : undefined,
+    });
+  },
+  gigPaid: async (params) => {
+    const b = needBackend();
+    const { id, txid, vout } = p(params) as { id?: unknown; txid?: unknown; vout?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+    return paidGig(b.db, id, txid, Number(vout));
+  },
+  /**
    * F6 inbox: ECDH DMs over the relay. Sends are off-chain (no policy
    * spend), but every call is origin-stamped and stored ciphertext-only.
    */
@@ -255,6 +323,75 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       throw Object.assign(new Error("username required"), { code: "BAD_PARAM" });
     }
     return liveRelay().register(username);
+  },
+  /**
+   * F10 social recovery. Setup/rotate need the wallet unlocked and print
+   * shares EXACTLY once (never stored). Restore combines cards on-device
+   * and refuses superseded or foreign sets when local metadata exists.
+   */
+  recoverySetup: async (params) => {
+    const b = needBackend();
+    const { need, guardians } = p(params) as { need?: unknown; guardians?: unknown };
+    if (!Array.isArray(guardians)) throw Object.assign(new Error("guardians required"), { code: "BAD_PARAM" });
+    const entropy = await exportEntropy();
+    const out = splitFor(entropy, Math.floor(Number(need) || 0), guardians);
+    await recordSet(b.db, {
+      setId: out.setId, need: out.need, total: out.total, fingerprint: out.fingerprint,
+      guardians: out.cards.map((c) => c.guardian),
+    });
+    await supersedeSets(b.db, out.setId);
+    return {
+      setId: out.setId, need: out.need, total: out.total,
+      fingerprint: out.fingerprint,
+      cards: out.cards.map((c) => ({ guardian: c.guardian.name, card: c.card })),
+      warning: "BACK UP each guardian card NOW — shares are shown once and never stored anywhere",
+    };
+  },
+  recoveryStatus: async () => {
+    const b = needBackend();
+    const sets = await listSets(b.db);
+    return { sets, protected: sets.some((s) => s.superseded === 0) };
+  },
+  recoveryRestore: async (params) => {
+    const b = needBackend();
+    const { cards, force } = p(params) as { cards?: unknown; force?: unknown };
+    if (!Array.isArray(cards)) throw Object.assign(new Error("cards required"), { code: "BAD_PARAM" });
+    const { entropy, setId, need, total } = combineCards(cards as string[]);
+    // Rotation kills old cards: if this device knows sets, the fingerprint
+    // must belong to a live one. Fresh devices (no sets) trust the cards'
+    // own verified fingerprint.
+    const known = await listSets(b.db);
+    // Rotation re-splits the SAME seed (same fingerprint, new set id), so
+    // the liveness check matches set ids: old cards die on rotate.
+    if (known.length > 0 && !known.some((s) => s.superseded === 0 && s.setId === setId)) {
+      throw Object.assign(new Error("unknown or superseded set — rotate first, then use new cards"), { code: "BAD_CARD" });
+    }
+    return restoreFromEntropy(entropy, force === true).then((r) => ({ ...r, setId, need, total }));
+  },
+  recoveryRotate: async (params) => {
+    const b = needBackend();
+    const { need, guardians } = p(params) as { need?: unknown; guardians?: unknown };
+    const active = (await listSets(b.db)).find((s) => s.superseded === 0);
+    const entropy = await exportEntropy();
+    const useGuardians = Array.isArray(guardians)
+      ? guardians
+      : active
+        ? active.guardians
+        : null;
+    if (!useGuardians) throw Object.assign(new Error("guardians required (no active set)"), { code: "BAD_PARAM" });
+    const useNeed = need !== undefined ? Math.floor(Number(need) || 0) : active?.need ?? 0;
+    const out = splitFor(entropy, useNeed, useGuardians);
+    await recordSet(b.db, {
+      setId: out.setId, need: out.need, total: out.total, fingerprint: out.fingerprint,
+      guardians: out.cards.map((c) => c.guardian),
+    });
+    await supersedeSets(b.db, out.setId);
+    return {
+      setId: out.setId, need: out.need, total: out.total,
+      fingerprint: out.fingerprint,
+      cards: out.cards.map((c) => ({ guardian: c.guardian.name, card: c.card })),
+      warning: "BACK UP each guardian card NOW — old cards are dead, shares are shown once",
+    };
   },
   /**
    * F14 metered fetch: quote → policy-gated pay → retry with proof.

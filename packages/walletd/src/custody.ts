@@ -14,6 +14,8 @@
  */
 import keytar from "keytar";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { entropyToMnemonic, mnemonicToEntropy } from "@scure/bip39";
+import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import {
   BigNumber,
   ECDSA,
@@ -344,6 +346,38 @@ export async function destroyWallet(): Promise<void> {
     /* ignore */
   }
   hasWalletCache = false;
+}
+
+/**
+ * F10 recovery bridge. Raw entropy leaves this module ONLY as Shamir
+ * shares printed once (setup/rotate) or re-enters via restore — it is
+ * never stored, logged, or sent anywhere by the daemon.
+ */
+async function enrolledPhrase(): Promise<string> {
+  const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
+  if (!stored) {
+    hasWalletCache = false;
+    throw new CustodyError("NO_WALLET", "no wallet enrolled — call createWallet first");
+  }
+  return stored;
+}
+
+/** 16-byte wallet entropy. Requires the wallet UNLOCKED (human present). */
+export async function exportEntropy(): Promise<Uint8Array> {
+  if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+  // English wordlist verified identical to the SDK's bundled list
+  // (same seeds for random entropy) — never mix wordlists.
+  const entropy = mnemonicToEntropy(await enrolledPhrase(), englishWordlist);
+  if (entropy.length !== 16) throw new CustodyError("INTERNAL", "unexpected entropy length");
+  return entropy;
+}
+
+/** Re-enroll from recovery entropy (ceremony calls importWallet). */
+export async function restoreFromEntropy(entropy: Uint8Array, force = false): Promise<{ identityKey: string }> {
+  if (!(entropy instanceof Uint8Array) || entropy.length !== 16) {
+    throw new CustodyError("BAD_PARAM", "entropy must be 16 bytes");
+  }
+  return importWallet(entropyToMnemonic(entropy, englishWordlist), force);
 }
 
 export async function getStatus(): Promise<CustodyStatus> {

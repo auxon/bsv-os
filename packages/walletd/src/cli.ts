@@ -286,6 +286,102 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "gig": {
+      const [gigSub, ...gigRest] = rest;
+      const gigArg = gigRest.find((a) => !a.startsWith("--"));
+      if (gigSub === "board" || gigSub === undefined) {
+        print(await call("gigBoard", {
+          ...(flag(rest, "category") ? { category: flag(rest, "category") } : {}),
+          ...(flag(rest, "limit") ? { limit: Number(flag(rest, "limit")) } : {}),
+        }));
+      } else if (gigSub === "show" && gigArg) {
+        print(await call("gigShow", { id: gigArg }));
+      } else if (gigSub === "list") {
+        print(await call("gigList"));
+      } else if (gigSub === "track" && gigArg) {
+        print(await call("gigTrack", { id: gigArg }));
+      } else if (gigSub === "untrack" && gigArg) {
+        print(await call("gigUntrack", { id: gigArg }));
+      } else if (gigSub === "claim" && gigArg) {
+        print(await call("gigClaim", {
+          id: gigArg,
+          ...(flag(rest, "payout") ? { payoutAddress: flag(rest, "payout") } : {}),
+          ...(flag(rest, "worker-key") ? { workerPubKey: flag(rest, "worker-key") } : {}),
+        }));
+      } else if (gigSub === "submit" && gigArg) {
+        print(await call("gigSubmit", {
+          id: gigArg,
+          ...(flag(rest, "hash") ? { workHash: flag(rest, "hash") } : {}),
+          ...(flag(rest, "uri") ? { workUri: flag(rest, "uri") } : {}),
+          ...(flag(rest, "notes") ? { notes: flag(rest, "notes") } : {}),
+        }));
+      } else if (gigSub === "paid" && gigArg) {
+        const outpoint = gigRest.filter((a) => !a.startsWith("--"))[1];
+        const [txid, vout] = (outpoint ?? "").split(":");
+        if (!txid || vout === undefined || vout === "") {
+          console.error("usage: bsv gig paid <id> <txid:vout>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("gigPaid", { id: gigArg, txid, vout: Number(vout) }));
+      } else {
+        console.error("usage: bsv gig <board|show <id>|list|track <id>|claim <id>|submit <id>|paid <id> <txid:vout>|untrack <id>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
+    case "recovery": {
+      // F10: guardian ceremonies. Shares travel by hidden prompt and are
+      // never argv, never chat, never stored — printed once at setup/rotate.
+      const [recSub, ...recRest] = rest;
+      const collectGuardians = () => {
+        const vals: string[] = [];
+        rest.forEach((a, i) => {
+          if (a.startsWith("--guardian=")) vals.push(a.slice(11));
+          else if (a === "--guardian" && i + 1 < rest.length) vals.push(rest[i + 1]!);
+        });
+        return vals.map((v) => {
+          const c = v.indexOf(":");
+          return c < 0 ? { name: v } : { name: v.slice(0, c), identityKey: v.slice(c + 1) };
+        });
+      };
+      if (recSub === "setup") {
+        const need = Number(flag(rest, "need") ?? 0);
+        const guardians = collectGuardians();
+        if (!need || guardians.length === 0) {
+          console.error("usage: bsv recovery setup --need <M> --guardian <name[:key]> [--guardian ...]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("recoverySetup", { need, guardians }));
+      } else if (recSub === "status" || recSub === undefined) {
+        print(await call("recoveryStatus"));
+      } else if (recSub === "rotate") {
+        const needRaw = flag(rest, "need");
+        const guardians = collectGuardians();
+        print(await call("recoveryRotate", {
+          ...(needRaw !== undefined ? { need: Number(needRaw) } : {}),
+          ...(guardians.length > 0 ? { guardians } : {}),
+        }));
+      } else if (recSub === "restore") {
+        const cards: string[] = [];
+        for (let i = 0; i < 255; i++) {
+          const line = (await readSecret(`Guardian card ${i + 1} (blank to finish): `)).trim();
+          if (!line) break;
+          cards.push(line);
+        }
+        if (cards.length === 0) {
+          console.error("no cards given — aborted");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("recoveryRestore", { cards, force: rest.includes("--force") }));
+      } else {
+        console.error("usage: bsv recovery <setup|status|rotate|restore>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "x402": {
       const [xSub, ...xRest] = rest;
       const xArg = xRest.find((a) => !a.startsWith("--"));
@@ -603,7 +699,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|recovery|gig|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

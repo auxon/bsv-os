@@ -3,11 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { migrateApps } from "./apps.ts";
+import { migrateGigs } from "./gigs.ts";
 import { migratePolicy } from "./policy.ts";
 import { migrateAgents } from "./agents.ts";
 import { migrateBaskets } from "./baskets.ts";
 import { migrateCerts } from "./certs.ts";
 import { migrateMsgs } from "./msgs.ts";
+import { migrateRecovery } from "./recovery.ts";
 import { migrateX402 } from "./x402.ts";
 
 export function dataDir(): string {
@@ -46,10 +48,12 @@ export async function migrate(db: Knex): Promise<void> {
     });
   }
   await migratePolicy(db);
+  await migrateGigs(db);
   await migrateAgents(db);
   await migrateBaskets(db);
   await migrateCerts(db);
   await migrateMsgs(db);
+  await migrateRecovery(db);
   await migrateX402(db);
   await migrateApps(db);
 }

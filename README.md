@@ -57,6 +57,9 @@ bsv bsv21 list [--address=<addr>]  # fungible positions (sends deferred, see eng
 bsv msg send <identityKey> --text <msg> | bsv msg sync|list|show <id>|ack <id>
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
+bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
+bsv gig board [--category=C] | bsv gig track|claim|submit|paid|untrack|list
+bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
 ```
 
 First spend from a new origin is denied pending approval (`bsv allow cli`

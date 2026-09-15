@@ -61,6 +61,16 @@ Panel {
   property var messages: []
   property string msgText: ""
   property bool msgOk: true
+  // F10 recovery status (see `bsv recovery status`): set metadata only,
+  // never shares. Ceremonies stay terminal-only by key-material policy.
+  property var recoverySets: []
+  property bool recoveryProtected: false
+  // F12 board (see `bsv gig board`): live bounties + local lifecycle.
+  // Claim/submit/paid stay CLI (keys, proofs, outpoints).
+  property var gigBoard: []
+  property var gigs: []
+  property string gigText: ""
+  property bool gigOk: true
   property var summary: ({ inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 })
 
   function refresh() {
@@ -94,6 +104,11 @@ Panel {
           if (!bsv21Proc.running) bsv21Proc.running = true;
           if (!msgSyncProc.running) msgSyncProc.running = true;
           if (!msgListProc.running) msgListProc.running = true;
+          if (!recoveryProc.running) recoveryProc.running = true;
+          if (!gigBoardProc.running) gigBoardProc.running = true;
+          if (!gigListProc.running) gigListProc.running = true;
+          if (!gigBoardProc.running) gigBoardProc.running = true;
+          if (!gigListProc.running) gigListProc.running = true;
         } catch (e) {
           root.daemonUp = false;
         }
@@ -229,6 +244,82 @@ Panel {
     onExited: (code) => { if (code !== 0) root.messages = []; }
   }
 
+  // F10 recovery status (metadata only — shares never touch the panel).
+  Process {
+    id: recoveryProc
+    command: ["bsv", "recovery", "status"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.recoverySets = r.sets ?? [];
+          root.recoveryProtected = !!r.protected;
+        } catch (e) {
+          root.recoverySets = [];
+          root.recoveryProtected = false;
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) { root.recoverySets = []; root.recoveryProtected = false; } }
+  }
+
+  // F12 board polls: live catalog (keyless) + local lifecycle rows.
+  Process {
+    id: gigBoardProc
+    command: ["bsv", "gig", "board"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.gigBoard = JSON.parse(text).gigs ?? [];
+        } catch (e) {
+          root.gigBoard = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.gigBoard = []; }
+  }
+
+  Process {
+    id: gigListProc
+    command: ["bsv", "gig", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.gigs = JSON.parse(text).gigs ?? [];
+        } catch (e) {
+          root.gigs = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.gigs = []; }
+  }
+
+  // Claim runner: `bsv gig claim <id>` (guided text when keyless).
+  Process {
+    id: gigClaimProc
+    property string gigId: ""
+    command: ["bsv", "gig", "claim", gigId]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.gigOk = true;
+          root.gigText = r.guided ?? `Claimed ${r.id ?? ""} (${r.lifecycle ?? "?"})`;
+          if (!gigListProc.running) gigListProc.running = true;
+        } catch (e) {
+          root.gigOk = false;
+          root.gigText = "Claim failed — see terminal (`bsv gig claim`) for detail.";
+        }
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.gigOk = false;
+        root.gigText = "Claim failed — see terminal (`bsv gig claim`) for detail.";
+      }
+    }
+  }
+
   // Read runner: `bsv msg show <id>` decrypts for display (logged nowhere).
   Process {
     id: msgShowProc
@@ -348,6 +439,16 @@ Panel {
     if (actionProc.running) return;
     actionProc.args = args;
     actionProc.running = true;
+  }
+
+  function gigTracked(id) {
+    for (const g of (root.gigs ?? [])) if (g.id === id) return true;
+    return false;
+  }
+
+  function gigLifecycle(id) {
+    for (const g of (root.gigs ?? [])) if (g.id === id) return g.lifecycle ?? "?";
+    return "?";
   }
 
   function storeLine(e) {
@@ -973,6 +1074,110 @@ Panel {
       wrapMode: Text.Wrap
       Layout.fillWidth: true
       visible: root.messages.length === 0
+    }
+
+    PanelSectionHeader { text: "Recovery" }
+
+    Text {
+      text: root.recoveryProtected
+        ? "Guarded — see `bsv recovery status` for the set. Setup/rotate/restore are terminal ceremonies (shares never touch the UI)."
+        : "Unprotected — one lost phrase loses everything. Run: bsv recovery setup --need <M> --guardian <name> …"
+      color: root.recoveryProtected ? Color.foreground : Color.urgent
+      font.pixelSize: Style.font.body
+      font.bold: !root.recoveryProtected
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 4
+      visible: root.recoverySets.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.recoverySets
+        Text {
+          text: `${String(modelData.setId ?? "?").slice(0, 8)}… · ${modelData.need ?? "?"}-of-${modelData.total ?? "?"} · ${(modelData.guardians ?? []).map((g) => g.name ?? "?").join(", ")}${modelData.superseded ? " · superseded" : ""}`
+          color: Color.muted
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+      }
+    }
+
+    PanelSectionHeader { text: `Gigs (${root.gigBoard.length})` }
+
+    Text {
+      text: "Paid micro-work. Track to watch, claim through agentpay, earnings land in the earnings basket."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 8
+      visible: root.gigBoard.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.gigBoard
+        ColumnLayout {
+          spacing: 2
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.title ?? "?"} · ${modelData.amountSats ?? 0} sats · ${modelData.status ?? "?"}`
+            color: Color.foreground
+            font.pixelSize: Style.font.body
+            font.bold: true
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          RowLayout {
+            spacing: 8
+
+            Button {
+              text: gigTracked(modelData.id) ? (gigLifecycle(modelData.id) === "tracked" ? "Tracked" : gigLifecycle(modelData.id)) : "Track"
+              enabled: !gigTracked(modelData.id)
+              onClicked: root.runAppAction(["gig", "track", modelData.id])
+            }
+
+            Button {
+              text: "Claim"
+              visible: gigTracked(modelData.id)
+              onClicked: {
+                gigClaimProc.gigId = modelData.id;
+                gigClaimProc.running = true;
+              }
+            }
+
+            Button {
+              text: "Untrack"
+              visible: gigTracked(modelData.id)
+              onClicked: root.runAppAction(["gig", "untrack", modelData.id])
+            }
+          }
+        }
+      }
+    }
+
+    Text {
+      text: root.gigText
+      color: root.gigOk ? Color.foreground : Color.urgent
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.gigText !== ""
+    }
+
+    Text {
+      text: "No open gigs on the board right now."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      visible: root.gigBoard.length === 0
     }
 
     Item { Layout.fillHeight: true }

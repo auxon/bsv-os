@@ -92,6 +92,8 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
 | Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery experimental, see below) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
+| Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
+| Survive losing the phrase | `bsv recovery setup --need 2 --guardian Ana --guardian Bo` — any 2 of 3 cards re-enroll. Cards print once; rotate to revoke. |
 
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —
