@@ -9,11 +9,28 @@
  * - Session holds an in-memory HD root while unlocked. `lock()` drops the
  *   reference (best-effort wipe; JS GC caveat documented in
  *   docs/trust-boundary.md) and an idle timer re-locks automatically.
- * - Identity key = HD root compressed pubkey (hex). BRC-42 keyDeriver
- *   paths replace this in M2; nothing here is protocol-stable yet.
+ * - Identity key = HD root compressed pubkey (hex). BRC-42 counterparty
+ *   keys (below) scope every derived secret to one peer + protocol.
  */
 import keytar from "keytar";
-import { HD, Mnemonic, P2PKH, PrivateKey, Script, Transaction, type UnlockingScript } from "@bsv/sdk";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  BigNumber,
+  ECDSA,
+  Hash,
+  HD,
+  KeyDeriver,
+  Mnemonic,
+  P2PKH,
+  PrivateKey,
+  PublicKey,
+  Script,
+  Signature,
+  Transaction,
+  type Counterparty,
+  type UnlockingScript,
+  type WalletProtocol,
+} from "@bsv/sdk";
 import type { UnlockHook } from "./tx.ts";
 
 // Test isolation: BSV_WALLETD_KEYCHAIN_SUFFIX partitions the keyring so
@@ -139,6 +156,169 @@ function childPriv(path: string): PrivateKey {
   const child = session.derive(path);
   if (!child.privKey) throw new CustodyError("INTERNAL", `cannot derive ${path}`);
   return child.privKey;
+}
+
+/**
+ * F6 messaging crypto. The identity root never leaves this module —
+ * callers get ciphertext, plaintext, and signatures, never keys.
+ *
+ * - DM key: BRC-42 symmetric key scoped to [protocol, keyID, counterparty],
+ *   so each peer pair shares exactly one key and a compromise is contained.
+ * - Signatures: BRC-42 private-key derivation with the caller's exact
+ *   protocol/keyID/counterparty (BRC-104 handshake scope).
+ */
+export const DM_PROTOCOL: WalletProtocol = [2, "bsv os dm v1"];
+export const DM_KEY_ID = "dm";
+export const MAX_DM_BYTES = 32 * 1024;
+
+function identityRoot(): PrivateKey {
+  if (!session?.privKey) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+  return session.privKey;
+}
+
+function checkPeer(hex: unknown): string {
+  if (typeof hex !== "string" || !/^[0-9a-fA-F]{66}$/.test(hex)) {
+    throw new CustodyError("BAD_PARAM", "peer must be a 33-byte compressed pubkey hex");
+  }
+  try {
+    return PublicKey.fromString(hex).toString();
+  } catch {
+    throw new CustodyError("BAD_PARAM", "peer is not a valid secp256k1 public key");
+  }
+}
+
+function dmKey(peerHex: string) {
+  const peer = checkPeer(peerHex);
+  return new KeyDeriver(identityRoot()).deriveSymmetricKey(DM_PROTOCOL, DM_KEY_ID, peer as Counterparty);
+}
+
+/** Encrypt a DM for a peer. Returns hex envelope body. */
+export function dmEncrypt(peerHex: string, plaintext: string): string {
+  if (typeof plaintext !== "string" || plaintext.length === 0) {
+    throw new CustodyError("BAD_PARAM", "message must not be empty");
+  }
+  if (Buffer.byteLength(plaintext, "utf8") > MAX_DM_BYTES) {
+    throw new CustodyError("BAD_PARAM", `message over ${MAX_DM_BYTES} bytes`);
+  }
+  const out = dmKey(peerHex).encrypt(plaintext) as number[];
+  return Buffer.from(out).toString("hex");
+}
+
+/** Decrypt a DM from a peer. Throws on tamper or wrong key. */
+export function dmDecrypt(peerHex: string, bodyHex: string): string {
+  if (typeof bodyHex !== "string" || !/^[0-9a-fA-F]+$/.test(bodyHex)) {
+    throw new CustodyError("BAD_PARAM", "message body must be hex");
+  }
+  const out = dmKey(peerHex).decrypt(Array.from(Buffer.from(bodyHex, "hex")), "utf8");
+  return typeof out === "string" ? out : Buffer.from(out as number[]).toString("utf8");
+}
+
+/** Our identity pubkey hex. Throws WALLET_LOCKED like selfAddress. */
+export function identityPubkeyHex(): string {
+  if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+  return identityOf(session);
+}
+
+/**
+ * BRC-42 scoped signature for auth handshakes (BRC-104). Signs
+ * SHA-256(data) — the reference digest — with the exact protocol/keyID/
+ * counterparty the caller passes; the verifier mirrors the same scope.
+ */
+export function brc42SignData(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  data: number[],
+): number[] {
+  return brc42SignDigest(protocolID, keyID, counterparty, Hash.sha256(data));
+}
+
+/** Sign a precomputed 32-byte digest directly (no double hash). */
+export function brc42SignHash(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  hash: number[],
+): number[] {
+  if (hash.length !== 32) throw new CustodyError("BAD_PARAM", "digest must be 32 bytes");
+  return brc42SignDigest(protocolID, keyID, counterparty, hash);
+}
+
+function brc42SignDigest(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  digest: number[],
+): number[] {
+  const root = identityRoot();
+  const cp = (counterparty === "self" ? "self" : checkPeer(counterparty)) as Counterparty;
+  const key = new KeyDeriver(root).derivePrivateKey(protocolID, keyID, cp);
+  const sig = ECDSA.sign(BigNumber.fromString(Buffer.from(digest).toString("hex"), 16), key);
+  return Array.from(sig.toDER() as number[]);
+}
+
+/** BRC-42 verification mirror of brc42SignData. Always needs the session:
+ * both derivation directions combine our root key with the counterparty
+ * point (ECDH is symmetric, but one private side is mandatory) — there is
+ * no sessionless verification of counterparty signatures by design. */
+export function brc42Verify(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  forSelf: boolean,
+  data: number[],
+  sigBytes: number[],
+): boolean {
+  return brc42VerifyDigest(protocolID, keyID, counterparty, forSelf, Hash.sha256(data), sigBytes);
+}
+
+/** Verify against a precomputed 32-byte digest (no double hash). */
+export function brc42VerifyDigest(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  forSelf: boolean,
+  digest: number[],
+  sigBytes: number[],
+): boolean {
+  try {
+    const cp = (counterparty === "self" ? "self" : checkPeer(counterparty)) as Counterparty;
+    const pub = new KeyDeriver(identityRoot()).derivePublicKey(protocolID, keyID, cp, forSelf);
+    const sig = Signature.fromDER(sigBytes);
+    return ECDSA.verify(BigNumber.fromString(Buffer.from(digest).toString("hex"), 16), sig, pub);
+  } catch {
+    return false;
+  }
+}
+/** BRC-42 HMAC-SHA256 for handshake nonces (BRC-104). */
+export function brc42Hmac(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  data: number[],
+): number[] {
+  const root = identityRoot();
+  const cp = (counterparty === "self" ? "self" : checkPeer(counterparty)) as Counterparty;
+  const key = new KeyDeriver(root).deriveSymmetricKey(protocolID, keyID, cp);
+  const keyBytes = key.toArray("be", 32);
+  return Array.from(createHmac("sha256", Buffer.from(keyBytes)).update(Buffer.from(data)).digest());
+}
+
+/** Constant-time HMAC check for handshake nonces. */
+export function brc42VerifyHmac(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  data: number[],
+  hmac: number[],
+): boolean {
+  try {
+    const computed = Buffer.from(brc42Hmac(protocolID, keyID, counterparty, data));
+    const given = Buffer.from(hmac);
+    return computed.length === given.length && timingSafeEqual(computed, given);
+  } catch {
+    return false;
+  }
 }
 
 /**

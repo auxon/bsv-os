@@ -56,6 +56,11 @@ Panel {
   // plus fungible positions. Read-only in the panel; sends stay in the CLI.
   property var ordinals: []
   property var ftokens: []
+  // F6 inbox (see `bsv msg list`): stored envelopes with peer + time.
+  // Plaintext only ever appears in msgText after an explicit Read.
+  property var messages: []
+  property string msgText: ""
+  property bool msgOk: true
   property var summary: ({ inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 })
 
   function refresh() {
@@ -87,6 +92,8 @@ Panel {
           if (!certsProc.running) certsProc.running = true;
           if (!ordProc.running) ordProc.running = true;
           if (!bsv21Proc.running) bsv21Proc.running = true;
+          if (!msgSyncProc.running) msgSyncProc.running = true;
+          if (!msgListProc.running) msgListProc.running = true;
         } catch (e) {
           root.daemonUp = false;
         }
@@ -193,6 +200,59 @@ Panel {
       }
     }
     onExited: (code) => { if (code !== 0) root.ftokens = []; }
+  }
+
+  // F6 inbox polls: sync pulls the relay, list renders stored envelopes
+  // (ciphertext at rest — plaintext only in msgText after Read).
+  Process {
+    id: msgSyncProc
+    command: ["bsv", "msg", "sync"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (!msgListProc.running) msgListProc.running = true;
+      }
+    }
+  }
+
+  Process {
+    id: msgListProc
+    command: ["bsv", "msg", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.messages = JSON.parse(text).messages ?? [];
+        } catch (e) {
+          root.messages = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.messages = []; }
+  }
+
+  // Read runner: `bsv msg show <id>` decrypts for display (logged nowhere).
+  Process {
+    id: msgShowProc
+    property string msgId: ""
+    command: ["bsv", "msg", "show", msgId]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.msgOk = true;
+          root.msgText = `${r.peer ? String(r.peer).slice(0, 12) + "…: " : ""}${r.text ?? ""}`;
+          if (!msgListProc.running) msgListProc.running = true;
+        } catch (e) {
+          root.msgOk = false;
+          root.msgText = "Read failed (locked?) — unlock, then Read again.";
+        }
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.msgOk = false;
+        root.msgText = "Read failed (locked?) — unlock, then Read again.";
+      }
+    }
   }
 
   // Disclosure sheet runner: `bsv cert show <id> [--fields …]`; the result
@@ -848,6 +908,71 @@ Panel {
       wrapMode: Text.Wrap
       Layout.fillWidth: true
       visible: root.certs.length === 0
+    }
+
+    PanelSectionHeader { text: `Inbox (${root.messages.length})` }
+
+    Text {
+      text: "ECDH direct messages. Ciphertext at rest — Read decrypts, Ack deletes at the relay."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.messages.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.messages
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}…${modelData.acked ? "" : " · new"}`
+            color: modelData.acked ? Color.muted : Color.foreground
+            font.pixelSize: Style.font.body
+            font.bold: !modelData.acked
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Read"
+            onClicked: {
+              msgShowProc.msgId = modelData.id;
+              msgShowProc.running = true;
+            }
+          }
+
+          Button {
+            text: "Ack"
+            visible: !modelData.acked && modelData.direction !== "out"
+            onClicked: root.runAppAction(["msg", "ack", modelData.id])
+          }
+        }
+      }
+    }
+
+    Text {
+      text: root.msgText
+      color: root.msgOk ? Color.foreground : Color.urgent
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.msgText !== ""
+    }
+
+    Text {
+      text: "No messages — send one with: bsv msg send <identityKey> --text <msg>."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.messages.length === 0
     }
 
     Item { Layout.fillHeight: true }

@@ -90,6 +90,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Disclose attributes | `bsv cert show <id> --fields a,b` (only those fields, logged) |
 | Split money into pots | `bsv basket create savings` → `bsv basket list` (per-basket balances) |
 | See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
+| Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery experimental, see below) |
 
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —
@@ -148,6 +149,7 @@ alongside budgets; an explicit `deny` always wins.
 | `mint/anchor didn't confirm` | Check `bsv pending` — `failed` means nothing moved; just retry |
 | Forgot which agent is which | `bsv policies` lists every approval and cap |
 | New machine | Install, then `bsv import` — type the 12 words at the hidden prompt (never as a command argument, never into chat). Same identity back. |
+| Inbox stays empty | Delivery over the message relay is experimental: handshake, account, and sends are live, but inbox round-trip is unconfirmed (self-sends may be suppressed or need funded storage). Crypto and outbox are unaffected. |
 
 ## 8. What's coming
 

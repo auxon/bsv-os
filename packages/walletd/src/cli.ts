@@ -286,6 +286,35 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "msg": {
+      const [msgSub, ...msgRest] = rest;
+      const msgArg = msgRest.find((a) => !a.startsWith("--"));
+      if (msgSub === "send" && msgArg) {
+        const text = flag(rest, "text") ?? msgRest.filter((a) => !a.startsWith("--"))[1];
+        if (!text) {
+          console.error("usage: bsv msg send <identityKey> --text <message>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("msgSend", { to: msgArg, text }));
+      } else if (msgSub === "sync" || msgSub === undefined) {
+        print(await call("msgSync"));
+      } else if (msgSub === "list") {
+        print(await call("msgList", {}));
+      } else if (msgSub === "show" && msgArg) {
+        print(await call("msgShow", { id: msgArg }));
+      } else if (msgSub === "ack" && msgArg) {
+        print(await call("msgAck", { id: msgArg }));
+      } else if (msgSub === "status") {
+        print(await call("msgStatus"));
+      } else if (msgSub === "register" && msgArg) {
+        print(await call("msgRegister", { username: msgArg }));
+      } else {
+        console.error("usage: bsv msg <send <identityKey> --text <msg>|sync|list|show <id>|ack <id>|status|register <username>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));
@@ -540,7 +569,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

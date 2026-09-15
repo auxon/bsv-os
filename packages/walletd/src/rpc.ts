@@ -9,6 +9,7 @@ import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } fr
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
 import { bsv21For, galleryFor } from "./tokens.ts";
+import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 
 export const VERSION = "0.1.0";
@@ -202,6 +203,57 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { id } = p(params) as { id?: unknown };
     if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
     return revokeCert(b.db, id);
+  },
+  /**
+   * F6 inbox: ECDH DMs over the relay. Sends are off-chain (no policy
+   * spend), but every call is origin-stamped and stored ciphertext-only.
+   */
+  msgSend: async (params) => {
+    const b = needBackend();
+    const { to, text } = p(params) as { to?: unknown; text?: unknown };
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient identity key required"), { code: "BAD_PARAM" });
+    if (typeof text !== "string" || !text) throw Object.assign(new Error("text required"), { code: "BAD_PARAM" });
+    const self = selfAddress();
+    return sendDm(b.db, liveRelay(), self, to, text);
+  },
+  msgSync: async () => {
+    const b = needBackend();
+    return syncInbox(b.db, liveRelay());
+  },
+  msgList: async (params) => {
+    const b = needBackend();
+    const { direction } = p(params) as { direction?: unknown };
+    const rows = await listStored(b.db, direction === "out" ? "out" : direction === "in" ? "in" : undefined);
+    return {
+      messages: rows.map((r) => ({
+        id: r.id, peer: r.peer, direction: r.direction,
+        createdAt: r.createdAt, acked: r.acked === 1,
+      })),
+    };
+  },
+  msgShow: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return readDm(b.db, id);
+  },
+  msgAck: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return ackDm(b.db, liveRelay(), id);
+  },
+  msgStatus: async () => {
+    needBackend();
+    return liveRelay().status();
+  },
+  msgRegister: async (params) => {
+    needBackend();
+    const { username } = p(params) as { username?: unknown };
+    if (typeof username !== "string" || !username) {
+      throw Object.assign(new Error("username required"), { code: "BAD_PARAM" });
+    }
+    return liveRelay().register(username);
   },
   /**
    * F5 gallery + BSV21 positions (read-only 1Sat Stack; no keys).
