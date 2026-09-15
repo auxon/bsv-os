@@ -12,6 +12,10 @@ import { bsv21For, galleryFor } from "./tokens.ts";
 import {
   boardGet, boardList, claimGig, listGigs, paidGig, submitGig, trackGig, untrackGig,
 } from "./gigs.ts";
+import {
+  approveRun, claimRun, createOrder, failRun, listOrders, listRuns,
+  removeOrder, setOrderStatus, submitRun,
+} from "./nightshift.ts";
 import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./recovery.ts";
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
@@ -208,6 +212,81 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { id } = p(params) as { id?: unknown };
     if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
     return revokeCert(b.db, id);
+  },
+  /**
+   * F13 standing orders: schedules + per-cycle escrow states. Approval
+   * debits the agent budget; the daemon never runs agent work itself.
+   */
+  shiftCreate: async (params) => {
+    const b = needBackend();
+    const { name, agent, every, cycleSats, bountyId } = p(params) as {
+      name?: unknown; agent?: unknown; every?: unknown; cycleSats?: unknown; bountyId?: unknown;
+    };
+    return createOrder(b.db, {
+      name: typeof name === "string" ? name : "",
+      agent: typeof agent === "string" ? agent : "",
+      every: every as string | number,
+      cycleSats: Number(cycleSats),
+      bountyId: typeof bountyId === "string" ? bountyId : undefined,
+    });
+  },
+  shiftList: async () => {
+    const b = needBackend();
+    return { orders: await listOrders(b.db) };
+  },
+  shiftPause: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return setOrderStatus(b.db, id, "paused");
+  },
+  shiftResume: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return setOrderStatus(b.db, id, "active");
+  },
+  shiftRemove: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return removeOrder(b.db, id);
+  },
+  shiftRuns: async (params) => {
+    const b = needBackend();
+    const { order, limit } = p(params) as { order?: unknown; limit?: unknown };
+    return {
+      runs: await listRuns(
+        b.db,
+        typeof order === "string" ? order : undefined,
+        limit === undefined ? 50 : Number(limit),
+      ),
+    };
+  },
+  shiftClaim: async (params) => {
+    const b = needBackend();
+    const { run } = p(params) as { run?: unknown };
+    if (run === undefined) throw Object.assign(new Error("run required"), { code: "BAD_PARAM" });
+    return claimRun(b.db, Number(run));
+  },
+  shiftSubmit: async (params) => {
+    const b = needBackend();
+    const { run, proof } = p(params) as { run?: unknown; proof?: unknown };
+    if (run === undefined) throw Object.assign(new Error("run required"), { code: "BAD_PARAM" });
+    if (typeof proof !== "string" || !proof) throw Object.assign(new Error("proof required"), { code: "BAD_PARAM" });
+    return submitRun(b.db, Number(run), proof);
+  },
+  shiftApprove: async (params) => {
+    const b = needBackend();
+    const { run } = p(params) as { run?: unknown };
+    if (run === undefined) throw Object.assign(new Error("run required"), { code: "BAD_PARAM" });
+    return approveRun(b.db, Number(run));
+  },
+  shiftFail: async (params) => {
+    const b = needBackend();
+    const { run } = p(params) as { run?: unknown };
+    if (run === undefined) throw Object.assign(new Error("run required"), { code: "BAD_PARAM" });
+    return failRun(b.db, Number(run));
   },
   /**
    * F12 board: keyless reads, key-gated rails writes, local lifecycle.

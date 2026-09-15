@@ -93,6 +93,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery experimental, see below) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
+| Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
 | Survive losing the phrase | `bsv recovery setup --need 2 --guardian Ana --guardian Bo` — any 2 of 3 cards re-enroll. Cards print once; rotate to revoke. |
 
 **Failed transactions are safe to retry.** If the network rejects something

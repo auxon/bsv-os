@@ -71,6 +71,10 @@ Panel {
   property var gigs: []
   property string gigText: ""
   property bool gigOk: true
+  // F13 schedules (see `bsv nightshift list/runs`): standing orders with
+  // per-cycle escrow states. Submit takes proof text; rest is one tap.
+  property var shiftOrders: []
+  property var shiftRuns: []
   property var summary: ({ inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 })
 
   function refresh() {
@@ -107,8 +111,8 @@ Panel {
           if (!recoveryProc.running) recoveryProc.running = true;
           if (!gigBoardProc.running) gigBoardProc.running = true;
           if (!gigListProc.running) gigListProc.running = true;
-          if (!gigBoardProc.running) gigBoardProc.running = true;
-          if (!gigListProc.running) gigListProc.running = true;
+          if (!shiftOrdersProc.running) shiftOrdersProc.running = true;
+          if (!shiftRunsProc.running) shiftRunsProc.running = true;
         } catch (e) {
           root.daemonUp = false;
         }
@@ -292,6 +296,37 @@ Panel {
       }
     }
     onExited: (code) => { if (code !== 0) root.gigs = []; }
+  }
+
+  // F13 schedules polls: orders + recent runs.
+  Process {
+    id: shiftOrdersProc
+    command: ["bsv", "nightshift", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.shiftOrders = JSON.parse(text).orders ?? [];
+        } catch (e) {
+          root.shiftOrders = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.shiftOrders = []; }
+  }
+
+  Process {
+    id: shiftRunsProc
+    command: ["bsv", "nightshift", "runs"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.shiftRuns = JSON.parse(text).runs ?? [];
+        } catch (e) {
+          root.shiftRuns = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.shiftRuns = []; }
   }
 
   // Claim runner: `bsv gig claim <id>` (guided text when keyless).
@@ -1178,6 +1213,122 @@ Panel {
       color: Color.muted
       font.pixelSize: Style.font.body
       visible: root.gigBoard.length === 0
+    }
+
+    PanelSectionHeader { text: `NightShift (${root.shiftOrders.length})` }
+
+    Text {
+      text: "Standing orders: recurring agent work with per-cycle budgets. The daemon opens runs; agents claim, submit, you approve."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 8
+      visible: root.shiftOrders.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.shiftOrders
+        ColumnLayout {
+          spacing: 2
+          Layout.fillWidth: true
+
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.name ?? "?"} · ${modelData.agent ?? "?"} · ${modelData.cycleSats ?? 0} sats/cycle · ${modelData.status ?? "?"}`
+              color: modelData.status === "paused" ? Color.muted : Color.foreground
+              font.pixelSize: Style.font.body
+              font.bold: true
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: modelData.status === "paused" ? "Resume" : "Pause"
+              onClicked: modelData.status === "paused"
+                ? root.runAppAction(["nightshift", "resume", modelData.id])
+                : root.runAppAction(["nightshift", "pause", modelData.id])
+            }
+          }
+        }
+      }
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.shiftRuns.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.shiftRuns
+        ColumnLayout {
+          spacing: 0
+          Layout.fillWidth: true
+
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `#${modelData.id ?? "?"} ${modelData.agent ?? "?"} · ${modelData.cycleSats ?? 0} sats · ${modelData.status ?? "?"}`
+              color: modelData.status === "approved" ? Color.muted : Color.foreground
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Claim"
+              visible: modelData.status === "due"
+              onClicked: root.runAppAction(["nightshift", "claim", String(modelData.id)])
+            }
+
+            Button {
+              text: "Approve"
+              visible: modelData.status === "submitted"
+              onClicked: root.runAppAction(["nightshift", "approve", String(modelData.id)])
+            }
+
+            Button {
+              text: "Fail"
+              visible: modelData.status === "due" || modelData.status === "claimed" || modelData.status === "submitted"
+              onClicked: root.runAppAction(["nightshift", "fail", String(modelData.id)])
+            }
+          }
+
+          RowLayout {
+            spacing: 8
+            visible: modelData.status === "claimed"
+            Layout.fillWidth: true
+
+            TextField {
+              id: proofBox
+              placeholderText: "proof text, then Submit"
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Submit"
+              onClicked: root.runAppAction(["nightshift", "submit", String(modelData.id), "--proof", proofBox.text.trim()])
+            }
+          }
+        }
+      }
+    }
+
+    Text {
+      text: "No standing orders — create one with: bsv nightshift create --name <n> --agent <a> --every <1h> --budget <sats>."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.shiftOrders.length === 0
     }
 
     Item { Layout.fillHeight: true }

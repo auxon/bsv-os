@@ -59,6 +59,7 @@ bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
 bsv gig board [--category=C] | bsv gig track|claim|submit|paid|untrack|list
+bsv nightshift create --name <n> --agent <a> --every <1h> --budget <sats> | bsv nightshift list|runs|claim|submit|approve|fail
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
 ```
 

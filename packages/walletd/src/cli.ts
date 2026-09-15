@@ -286,6 +286,56 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "nightshift": {
+      const [nsSub, ...nsRest] = rest;
+      const nsArg = nsRest.find((a) => !a.startsWith("--"));
+      if (nsSub === "create") {
+        const name = flag(rest, "name") ?? nsArg;
+        const agent = flag(rest, "agent");
+        const every = flag(rest, "every");
+        const budget = flag(rest, "budget") ?? flag(rest, "cycle");
+        if (!name || !agent || !every || !budget) {
+          console.error("usage: bsv nightshift create --name <n> --agent <a> --every <60s|15m|6h|2d|1w> --budget <sats> [--bounty <id>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("shiftCreate", {
+          name, agent, every, cycleSats: Number(budget),
+          ...(flag(rest, "bounty") ? { bountyId: flag(rest, "bounty") } : {}),
+        }));
+      } else if (nsSub === "list" || nsSub === undefined) {
+        print(await call("shiftList"));
+      } else if (nsSub === "runs") {
+        print(await call("shiftRuns", {
+          ...(nsArg ? { order: nsArg } : {}),
+          ...(flag(rest, "limit") ? { limit: Number(flag(rest, "limit")) } : {}),
+        }));
+      } else if (nsSub === "pause" && nsArg) {
+        print(await call("shiftPause", { id: nsArg }));
+      } else if (nsSub === "resume" && nsArg) {
+        print(await call("shiftResume", { id: nsArg }));
+      } else if (nsSub === "remove" && nsArg) {
+        print(await call("shiftRemove", { id: nsArg }));
+      } else if (nsSub === "claim" && nsArg) {
+        print(await call("shiftClaim", { run: Number(nsArg) }));
+      } else if (nsSub === "submit" && nsArg) {
+        const proof = flag(rest, "proof");
+        if (!proof) {
+          console.error("usage: bsv nightshift submit <run> --proof <text>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("shiftSubmit", { run: Number(nsArg), proof }));
+      } else if (nsSub === "approve" && nsArg) {
+        print(await call("shiftApprove", { run: Number(nsArg) }));
+      } else if (nsSub === "fail" && nsArg) {
+        print(await call("shiftFail", { run: Number(nsArg) }));
+      } else {
+        console.error("usage: bsv nightshift <create|list|runs|pause|resume|remove|claim|submit|approve|fail>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "gig": {
       const [gigSub, ...gigRest] = rest;
       const gigArg = gigRest.find((a) => !a.startsWith("--"));
@@ -699,7 +749,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|recovery|gig|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|recovery|gig|nightshift|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

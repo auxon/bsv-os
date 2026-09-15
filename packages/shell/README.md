@@ -33,6 +33,7 @@ Checklist (verified on `bsvOS` 2026-09-14; shell log showed no QML errors):
       F6 inbox (peers, Read decrypts, Ack; ciphertext at rest),
       F10 recovery status (sets, guardians, fingerprint; ceremonies stay CLI),
       F12 board (live gigs with Track/Claim/Untrack; submit/paid stay CLI),
+      F13 schedules (orders with Pause/Resume, runs with Claim/Submit/Approve/Fail),
       capped card + ScrollView (wheel-scrolls), 10s live refresh while open
 - [x] Nautilus share target (`nautilus/Anchor on BSV`, post-install synced)
 - [x] New spend requests summon the panel (15s `bsv requests` poll, unseen-id tracking)

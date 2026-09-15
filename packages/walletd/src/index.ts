@@ -14,6 +14,7 @@ import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { migrate, openDb } from "./storage.ts";
 import { tick } from "./monitor.ts";
+import { tickOrders } from "./nightshift.ts";
 
 const PORT = Number(process.env.BSV_WALLETD_PORT ?? 2121);
 const RUNTIME_DIR = process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os");
@@ -144,6 +145,22 @@ export async function main(): Promise<void> {
     };
     void loop();
     setInterval(() => void loop(), 60_000).unref?.();
+
+    // NightShift: open due standing-order runs, minutely.
+    const shiftLoop = async (): Promise<void> => {
+      try {
+        const res = await tickOrders(db);
+        for (const id of res.orderIds) {
+          // eslint-disable-next-line no-console
+          console.log(`nightshift: run opened for order ${id}`);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("nightshift tick failed:", err instanceof Error ? err.message : err);
+      }
+    };
+    void shiftLoop();
+    setInterval(() => void shiftLoop(), 60_000).unref?.();
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("monitor disabled:", err instanceof Error ? err.message : err);
