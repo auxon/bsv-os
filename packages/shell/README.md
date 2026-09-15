@@ -11,13 +11,25 @@ omarchy plugin enable bsv.wallet
 omarchy bar put bsv.wallet --section right
 ```
 
+Hot-reload caveat: the shell reuses the loaded component when file URLs
+don't change, so QML edits often DON'T reach the running bar (stale pill,
+dead clicks, teardown RangeError bursts). After editing, re-sync and
+**restart the shell**: `omarchy restart shell`. Verify with a screenshot
+(`grim`) — never assume a rescan was enough.
+
 Checklist (verified on `bsvOS` 2026-09-14; shell log showed no QML errors):
 
 - [x] Bar widget registered in the bar (`BarWidget.qml`, `Style`/`Color` theme tokens)
 - [x] Click toggles wallet panel; right-click runs `bsv lock`
 - [x] `Panel.qml`: F8 dashboard over `bsv history` — summary counts, per-status
       hints, approvals with Approve/Deny, policies with Approve/Revoke,
-      F9 agent cards (remaining/total, daily window, Revoke)
+      F9 agent cards (remaining/total, daily window, Revoke),
+      F1 store (catalog caps, Install/Open/Update/Remove, widening approval),
+      F7 share (file picker → `bsv share`, txid + Open-in-explorer),
+      F3 identity (identity key, certs with verified/self-asserted state,
+        disclosure sheet with field picker + audit, Revoke),
+      F4 money (per-basket balances with member counts)
+- [x] Nautilus share target (`nautilus/Anchor on BSV`, post-install synced)
 - [x] New spend requests summon the panel (15s `bsv requests` poll, unseen-id tracking)
 - [ ] Fingerprint offer where Quattro exposes it (deferred: no fingerprint HW enrolled)
 

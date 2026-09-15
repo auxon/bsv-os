@@ -234,6 +234,35 @@ async function main(): Promise<void> {
       print(await call("anchor", { sha256, origin: originFlag ? originFlag.slice(9) : "cli" }));
       break;
     }
+    case "share": {
+      // F7: hash a file (streamed, any size) and anchor it with its name.
+      const file = rest.find((a) => !a.startsWith("--"));
+      const shareOrigin = flag(rest, "origin") ?? "cli";
+      if (!file) {
+        console.error("usage: bsv share <file> [--origin=name]");
+        process.exitCode = 2;
+        break;
+      }
+      try {
+        const { createReadStream, promises: fsp } = await import("node:fs");
+        const { createHash } = await import("node:crypto");
+        const { basename } = await import("node:path");
+        const st = await fsp.stat(file);
+        if (!st.isFile()) throw new Error("not a file");
+        const sha256 = await new Promise<string>((resolve, reject) => {
+          const hash = createHash("sha256");
+          const stream = createReadStream(file);
+          stream.on("data", (chunk: string | Buffer) => hash.update(chunk));
+          stream.on("end", () => resolve(hash.digest("hex")));
+          stream.on("error", reject);
+        });
+        print(await call("anchorFile", { sha256, filename: basename(file), size: st.size, origin: shareOrigin }));
+      } catch (e) {
+        console.error(`share failed: ${e instanceof Error ? e.message : e}`);
+        process.exitCode = 1;
+      }
+      break;
+    }
     case "allow": {
       const [origin, cap] = rest;
       if (!origin) {
@@ -256,6 +285,81 @@ async function main(): Promise<void> {
     }
     case "requests":
       print(await call("policyPending"));
+      break;
+    case "basket": {
+      const [basketSub, ...basketRest] = rest;
+      const basketArg = basketRest.find((a) => !a.startsWith("--"));
+      if (basketSub === "create" && basketArg) {
+        print(await call("basketCreate", { name: basketArg, description: flag(rest, "description") ?? "" }));
+      } else if (basketSub === "remove" && basketArg) {
+        print(await call("basketRemove", { name: basketArg }));
+      } else if (basketSub === "assign" && basketArg) {
+        const [txid, vout] = basketArg.split(":");
+        const to = flag(rest, "to") ?? basketRest.filter((a) => !a.startsWith("--"))[1];
+        if (!txid || vout === undefined || !to) {
+          console.error("usage: bsv basket assign <txid:vout> --to <basket>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("basketAssign", { txid, vout: Number(vout), basket: to }));
+      } else if (basketSub === "balance") {
+        print(await call("basketBalance", basketArg ? { name: basketArg } : {}));
+      } else if (basketSub === "list" || basketSub === undefined) {
+        print(await call("basketList"));
+      } else {
+        console.error("usage: bsv basket <list|balance [name]|create <name>|remove <name>|assign <txid:vout> --to <basket>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
+    case "cert": {
+      const [certSub, ...certRest] = rest;
+      const certId = certRest.find((a) => !a.startsWith("--"));
+      if (certSub === "put") {
+        const type = flag(rest, "type");
+        const certifier = flag(rest, "certifier");
+        const fields: Record<string, string> = {};
+        const takeField = (kv: string | undefined) => {
+          if (!kv) return;
+          const eq = kv.indexOf("=");
+          if (eq > 0) fields[kv.slice(0, eq)] = kv.slice(eq + 1);
+        };
+        rest.forEach((a, i) => {
+          if (a.startsWith("--field=")) takeField(a.slice(8));
+          else if (a === "--field") takeField(rest[i + 1]);
+        });
+        if (!type || !certifier || Object.keys(fields).length === 0) {
+          console.error("usage: bsv cert put --type=<t> --certifier=<pubkey> --field <k>=<v> [--field ...] [--subject=<pubkey>] [--signature=<hex>] [--expires=30d|YYYY-MM-DD]");
+          process.exitCode = 2;
+          break;
+        }
+        const exp = parseExpiry(flag(rest, "expires"));
+        if (process.exitCode) break;
+        print(await call("certPut", {
+          type, certifier, fields,
+          subject: flag(rest, "subject"),
+          signature: flag(rest, "signature"),
+          expiresAt: exp,
+        }));
+      } else if (certSub === "list" || certSub === undefined) {
+        print(await call("certList"));
+      } else if (certSub === "show" && certId) {
+        const only = flag(rest, "fields");
+        print(await call("certShow", {
+          id: certId,
+          fields: only !== undefined ? only.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+          to: flag(rest, "to"),
+        }));
+      } else if (certSub === "revoke" && certId) {
+        print(await call("certRevoke", { id: certId }));
+      } else {
+        console.error("usage: bsv cert <put|list|show <id>|revoke <id>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
+    case "store":
+      print(await call("storeList"));
       break;
     case "agent": {
       const [sub, name] = rest;
@@ -287,7 +391,8 @@ async function main(): Promise<void> {
       print(await call("policyList"));
       break;
     case "app": {
-      const [sub, arg] = rest;
+      const [sub, ...subRest] = rest;
+      const arg = subRest.find((a) => !a.startsWith("--"));
       if (sub === "install" && arg) {
         const mf = flag(rest, "manifest-file");
         let manifestJson: unknown;
@@ -306,6 +411,11 @@ async function main(): Promise<void> {
         print(await call("appList"));
       } else if (sub === "remove" && arg) {
         print(await call("appRemove", { domain: arg }));
+      } else if (sub === "update" && (arg || rest.includes("--all"))) {
+        const approve = rest.includes("--approve-widening");
+        print(await call("appUpdate", arg
+          ? { domain: arg, approveWidening: approve }
+          : { all: true, approveWidening: approve }));
       } else if (sub === "open" && arg) {
         const res = (await call("appOpen", { domain: arg })) as { result?: { startUrl?: string; domain?: string } };
         const url = res?.result?.startUrl;
@@ -330,7 +440,7 @@ async function main(): Promise<void> {
           }
         }
       } else {
-        console.error("usage: bsv app <install <domain>|list|remove <domain>|open <domain>>");
+        console.error("usage: bsv app <install <domain> [--manifest-file <path>]|list|remove <domain>|update [<domain>|--all] [--approve-widening]|open <domain>>");
         process.exitCode = 2;
       }
       break;
@@ -400,7 +510,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|allow|deny|requests|policies|agent|app|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

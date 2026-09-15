@@ -9,6 +9,7 @@ import { Script } from "@bsv/sdk";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
+import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
 import { track } from "./monitor.ts";
 import type { ChainProvider } from "./chain.ts";
 
@@ -20,11 +21,24 @@ export async function getBalance(chain: ChainProvider): Promise<{
   return { address, confirmed: u.confirmed, unconfirmed: u.unconfirmed, utxos: u.utxos.length };
 }
 
+/** Block-explorer link for a txid (mainnet). */
+export function explorerTxUrl(txid: string): string {
+  return `https://whatsonchain.com/tx/${txid}`;
+}
+
+/** Basename-only, single-line label fragment for file anchors. */
+export function safeLabel(name: unknown, fallback: string): string {
+  const base = String(name ?? "").split(/[\\/]/).pop() ?? "";
+  const clean = base.replace(/[\r\n\t]/g, " ").trim().slice(0, 80);
+  return clean || fallback;
+}
+
 export async function anchorTip(opts: {
   db: Knex;
   chain: ChainProvider;
   origin: string;
   sha256: string;
+  label?: string;
 }): Promise<{ txid: string; fee: number }> {
   if (!/^[0-9a-fA-F]{64}$/.test(opts.sha256)) {
     throw new Error("sha256 must be 64 hex chars");
@@ -50,8 +64,19 @@ export async function anchorTip(opts: {
   }
   const { hex, txid } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);
-  await track(opts.db, res.txid, `anchor ${opts.sha256.slice(0, 12)}`, hex);
+  await track(opts.db, res.txid, opts.label ?? `anchor ${opts.sha256.slice(0, 12)}`, hex);
   // F9: debit the agent budget only now — accepted broadcasts only.
   await recordSpend(opts.db, opts.origin, built.fee);
+  // F4: attribute P2PKH-to-self change to the origin's basket (else default).
+  const basket = await resolveBasketForOrigin(opts.db, opts.origin);
+  const changeHex = lock.toHex();
+  await labelOutputs(
+    opts.db,
+    res.txid,
+    built.tx.outputs
+      .map((o, vout) => ({ vout, script: o.lockingScript?.toHex(), value: o.satoshis ?? 0 }))
+      .filter((o) => o.script === changeHex)
+      .map((o) => ({ vout: o.vout, value: o.value, basket })),
+  );
   return { txid: res.txid, fee: built.fee };
 }

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# BSV OS share target for Nautilus: right-click → Scripts → Anchor on BSV.
+# Anchors each selected file's SHA-256 on-chain via `bsv share` (same policy
+# gate as the terminal: denials and locked wallets surface as notifications
+# telling you what to run). Install: copy to
+# ~/.local/share/nautilus/scripts/ and chmod +x (post-install.sh does this).
+set -u
+
+BSV="$HOME/.local/bin/bsv"
+[ -x "$BSV" ] || BSV="$(command -v bsv 2>/dev/null || true)"
+if [ -z "$BSV" ]; then
+  notify-send -a "BSV OS" "Anchor on BSV" "bsv CLI not found — is bsv-walletd installed?"
+  exit 1
+fi
+
+ok=0
+fail=0
+last_txid=""
+for f in "$@"; do
+  [ -f "$f" ] || continue
+  if out="$("$BSV" share "$f" 2>&1)"; then
+    ok=$((ok + 1))
+    last_txid="$(printf '%s' "$out" | grep -o '"txid": "[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+  else
+    fail=$((fail + 1))
+    reason="$(printf '%s' "$out" | head -1)"
+    notify-send -a "BSV OS" "Anchor blocked" "$(basename "$f"): $reason"
+  fi
+done
+
+if [ "$ok" -gt 0 ]; then
+  if [ "$ok" -eq 1 ] && [ -n "$last_txid" ]; then
+    notify-send -a "BSV OS" "Anchored on BSV" "${last_txid:0:12}… — whatsonchain.com/tx/$last_txid"
+  else
+    notify-send -a "BSV OS" "Anchored on BSV" "$ok file(s) timestamped."
+  fi
+fi
+[ "$fail" -eq 0 ] && [ "$ok" -gt 0 ]

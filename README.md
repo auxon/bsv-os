@@ -36,6 +36,7 @@ bsv create                  # new wallet (backup shown once)
 bsv unlock | bsv lock
 bsv balance                 # live chain lookup
 bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
+bsv share <file>            # hash + anchor a file (label + explorer link)
 bsv allow <origin> [cap] | bsv deny <origin> | bsv requests | bsv policies
 bsv agent mint <name> --budget=N [--daily=N] [--expiry=30d|YYYY-MM-DD]
 bsv agent list | bsv agent show <name> | bsv agent revoke <name>
@@ -45,6 +46,12 @@ bsv app install <domain>  # install a Metanet app (manifest + launcher)
 bsv app install <domain> --manifest-file <path>  # dev install: same validation, no fetch
 bsv app open <domain>     # sandboxed runner window with window.bsv (browser fallback)
 bsv app list | bsv app remove <domain>
+bsv app update [<domain>|--all] [--approve-widening]  # re-pin; widening needs approval
+bsv store                   # curated catalog with live caps + update status
+bsv cert put --type=<t> --certifier=<key> --field <k>=<v>  # hold a signed cert
+bsv cert list | bsv cert show <id> [--fields a,b] | bsv cert revoke <id>
+bsv basket list | bsv basket balance [name]  # per-basket ledger
+bsv basket create <name> | bsv basket remove <name> | bsv basket assign <txid:vout> --to <basket>
 ```
 
 First spend from a new origin is denied pending approval (`bsv allow cli`

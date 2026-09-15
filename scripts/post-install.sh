@@ -46,6 +46,11 @@ omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 omarchy plugin enable bsv.wallet >/dev/null 2>&1 || true
 omarchy bar put bsv.wallet --section right >/dev/null 2>&1 || true
 
+echo "==> [5c/6] file-manager share target"
+mkdir -p ~/.local/share/nautilus/scripts
+cp -f "$HOME/bsv-os/packages/shell/nautilus/Anchor on BSV" ~/.local/share/nautilus/scripts/
+chmod +x ~/.local/share/nautilus/scripts/"Anchor on BSV"
+
 echo "==> [6/6] done"
 echo "Next: bsv create   # BACK UP the recovery phrase it prints ONCE"
 echo "Then: bsv unlock && bsv balance"

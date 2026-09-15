@@ -5,6 +5,8 @@ import path from "node:path";
 import { migrateApps } from "./apps.ts";
 import { migratePolicy } from "./policy.ts";
 import { migrateAgents } from "./agents.ts";
+import { migrateBaskets } from "./baskets.ts";
+import { migrateCerts } from "./certs.ts";
 
 export function dataDir(): string {
   const dir =
@@ -43,5 +45,7 @@ export async function migrate(db: Knex): Promise<void> {
   }
   await migratePolicy(db);
   await migrateAgents(db);
+  await migrateBaskets(db);
+  await migrateCerts(db);
   await migrateApps(db);
 }

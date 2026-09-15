@@ -12,6 +12,9 @@
  */
 import type { Knex } from "knex";
 import { listAgents, type AgentView } from "./agents.ts";
+import { listDisclosures, type DisclosureView } from "./certs.ts";
+import { walletBaskets } from "./baskets.ts";
+import type { ChainProvider } from "./chain.ts";
 
 export interface HistoryTransaction {
   txid: string;
@@ -57,6 +60,13 @@ export interface HistoryAgent {
   commands: { revoke: string };
 }
 
+export interface HistoryBasket {
+  name: string;
+  description: string;
+  balance: number;
+  memberCount: number;
+}
+
 export interface HistorySummary {
   inFlight: number;
   mined: number;
@@ -71,6 +81,8 @@ export interface History {
   requests: HistoryRequest[];
   policies: HistoryPolicy[];
   agents: HistoryAgent[];
+  disclosures: DisclosureView[];
+  baskets: HistoryBasket[];
   summary: HistorySummary;
 }
 
@@ -87,11 +99,13 @@ export function emptyHistory(): History {
     requests: [],
     policies: [],
     agents: [],
+    disclosures: [],
+    baskets: [],
     summary: { inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 },
   };
 }
 
-export async function getHistory(db: Knex): Promise<History> {
+export async function getHistory(db: Knex, chain?: ChainProvider): Promise<History> {
   const txRows = (await db("pending_txs")
     .select("txid", "label", "status", "attempts", "last_check", "detail", "created_at")
     .orderBy("created_at", "desc")
@@ -140,11 +154,27 @@ export async function getHistory(db: Knex): Promise<History> {
     commands: { revoke: `bsv agent revoke ${a.name}` },
   }));
 
+  // Baskets need the unlocked wallet (selfAddress) — degrade to empty
+  // when locked rather than failing the whole dashboard.
+  let baskets: HistoryBasket[] = [];
+  if (chain) {
+    try {
+      baskets = (await walletBaskets(db, chain)).map((v) => ({
+        name: v.name, description: v.description,
+        balance: v.balance, memberCount: v.memberCount,
+      }));
+    } catch {
+      baskets = [];
+    }
+  }
+
   return {
     transactions,
     requests,
     policies,
     agents,
+    disclosures: await listDisclosures(db),
+    baskets,
     summary: {
       inFlight: txRows.filter((t) => t.status === "seen").length,
       mined: txRows.filter((t) => t.status === "mined").length,

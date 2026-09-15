@@ -44,6 +44,25 @@ BarWidget {
       panelLoader.item.toggle();
   }
 
+  // Shape contract for shell.summon/hide/toggle routing:
+  // Bar.findPanelWidget requires open/close/opened on the bar-widget root,
+  // and Bar.requestPopout prefers closeForPopoutSwitch over close.
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+
+  function open() {
+    if (panelLoader.item) panelLoader.item.open();
+  }
+
+  function close() {
+    if (panelLoader.item) panelLoader.item.close();
+  }
+
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+
+  function closeForPopoutSwitch() {
+    if (panelLoader.item) panelLoader.item.closeForPopoutSwitch();
+  }
+
   function injectPanel() {
     var target = panelLoader.item;
     if (!target) return;
@@ -129,9 +148,11 @@ BarWidget {
           root.seenRequestIds = ids;
           // PayPrompt behavior: a never-before-seen spend request
           // summons the approval panel like a system auth dialog.
+          // reveal() refreshes then shows (never call open() here: the
+          // Panel base routes toggle() through open()).
           if (fresh.length > 0 && panelLoader.item) {
-            if (typeof panelLoader.item.open === "function") panelLoader.item.open();
-            if (typeof panelLoader.item.refresh === "function") panelLoader.item.refresh();
+            if (typeof panelLoader.item.reveal === "function") panelLoader.item.reveal();
+            else if (typeof panelLoader.item.toggle === "function") panelLoader.item.toggle();
           }
         } catch (e) {
           // keep previous count
@@ -143,7 +164,7 @@ BarWidget {
   Process {
     id: lockProc
     command: ["bsv", "lock"]
-    onExited: root.refresh()
+    onExited: () => root.refresh()
   }
 
   Timer {
@@ -179,8 +200,9 @@ BarWidget {
 
     function refresh(): void { root.broadcast("refresh"); }
     function open(): void {
-      if (panelLoader.item && typeof panelLoader.item.open === "function")
-        panelLoader.item.open();
+      if (!panelLoader.item) return;
+      if (typeof panelLoader.item.reveal === "function") panelLoader.item.reveal();
+      else if (typeof panelLoader.item.toggle === "function") panelLoader.item.toggle();
     }
   }
 

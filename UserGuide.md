@@ -76,6 +76,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | --- | --- |
 | Check the wallet | `bsv status`, `bsv balance` |
 | Timestamp a file | `sha256sum file` → `bsv anchor <hash>` |
+| Share a file on-chain | `bsv share <file>` — or right-click → Scripts → Anchor on BSV in Files, or the wallet panel's Share section (txid + explorer link included) |
 | See in-flight transactions | `bsv pending` (seen → mined, or failed with reason) |
 | Full ledger + approvals audit | `bsv history` (txs, requests, policies — same view as the bar panel) |
 | Lock up now | `bsv lock` |
@@ -83,6 +84,11 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Revoke | `bsv deny <name>` |
 | See who's approved | `bsv policies` / `bsv requests` |
 | Open an installed app | `bsv app open <domain>` (sandboxed window, not the browser) |
+| Browse the app store | `bsv store` (curated apps, requested caps, update status) |
+| Update apps | `bsv app update --all` (permission widening asks first) |
+| Hold a certificate | `bsv cert put --type=<t> --certifier=<key> --field <k>=<v>` |
+| Disclose attributes | `bsv cert show <id> --fields a,b` (only those fields, logged) |
+| Split money into pots | `bsv basket create savings` → `bsv basket list` (per-basket balances) |
 
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —

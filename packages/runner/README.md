@@ -46,3 +46,14 @@ fetch skipped. Production installs stay https-manifest-only.
   (MAIN-world `window.bsv`). No extension API permissions, no remote code,
   loopback-only network (all asserted in `test/extension.test.mjs`).
 - `demo/`: `manifest.json`, `index.html`, `serve.mjs`.
+- `store.json`: curated catalog for `bsv store` (v1: the loopback demo,
+  flagged `devOnly`; real entries land as Metanet apps ship manifests).
+
+## Store + updates (F1)
+
+Installs pin the manifest (sha256 + canonical copy). `bsv app update`
+re-fetches and diffs permissions: narrowing applies silently, widening
+needs `bsv app update <domain> --approve-widening` and otherwise seeds an
+`app-update` policy request so the panel prompts. Loopback manifests are
+fetched with trust scoped to loopback hosts only (same trust domain as
+the daemon socket); everything else keeps full TLS validation.

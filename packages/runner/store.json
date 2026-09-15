@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "domain": "127.0.0.1",
+      "name": "Runner Demo",
+      "blurb": "Loopback click-through proving the window.bsv bridge. Serve it locally, then install with --manifest-file.",
+      "devOnly": true
+    }
+  ]
+}

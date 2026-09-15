@@ -43,12 +43,13 @@ package() {
     cp -a "$plugin/." "$pkgdir/usr/share/bsv-os/shell-plugin/"
   fi
 
-  # F2 runner: bridge extension + loopback demo (the CLI resolves the
-  # extension from here when not running out of a repo checkout).
+  # F2 runner: bridge extension + loopback demo + F1 store catalog (the CLI
+  # resolves them from here when not running out of a repo checkout).
   local runner="$startdir/../../../packages/runner"
   if [ -d "$runner/extension" ]; then
     install -dm755 "$pkgdir/usr/share/bsv-os/runner"
     cp -a "$runner/extension" "$pkgdir/usr/share/bsv-os/runner/"
+    [ -f "$runner/store.json" ] && cp -a "$runner/store.json" "$pkgdir/usr/share/bsv-os/runner/"
     [ -d "$runner/demo" ] && cp -a "$runner/demo" "$pkgdir/usr/share/bsv-os/runner/"
   fi
 }

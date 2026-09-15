@@ -2,10 +2,12 @@ import { createWallet, getStatus, importWallet, lock, unlock } from "./custody.t
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
-import { anchorTip, getBalance } from "./engine.ts";
+import { anchorTip, explorerTxUrl, getBalance, safeLabel } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
-import { getApp, installApp, listApps, removeApp } from "./apps.ts";
+import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
+import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
+import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 
 export const VERSION = "0.1.0";
@@ -86,6 +88,27 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     if (typeof sha256 !== "string") throw Object.assign(new Error("sha256 required"), { code: "BAD_PARAM" });
     return anchorTip({ db: b.db, chain: b.chain, origin: typeof origin === "string" ? origin : "cli", sha256 });
   },
+  /**
+   * F7 share target: anchor a file's hash with its name in the label and
+   * an explorer link in the result. Same policy gate as `anchor` — the
+   * share sheet approves spends, never bypasses them.
+   */
+  anchorFile: async (params) => {
+    const b = needBackend();
+    const { sha256, filename, size, origin } = p(params) as {
+      sha256?: unknown; filename?: unknown; size?: unknown; origin?: unknown;
+    };
+    if (typeof sha256 !== "string") throw Object.assign(new Error("sha256 required"), { code: "BAD_PARAM" });
+    const label = safeLabel(filename, `anchor ${sha256.slice(0, 12)}`);
+    const r = await anchorTip({
+      db: b.db, chain: b.chain, label: `file ${label}`,
+      origin: typeof origin === "string" ? origin : "cli", sha256,
+    });
+    return {
+      txid: r.txid, fee: r.fee, explorer: explorerTxUrl(r.txid),
+      filename: label, size: Math.max(0, Math.floor(Number(size) || 0)),
+    };
+  },
   policyApprove: async (params) => {
     const b = needBackend();
     const { origin, capSats } = p(params) as { origin?: unknown; capSats?: unknown };
@@ -140,7 +163,84 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   history: async () => {
     // F8 dashboard: degrades to empty (like pending) before the engine boots.
     if (!backend) return emptyHistory();
-    return getHistory(backend.db);
+    return getHistory(backend.db, backend.chain);
+  },
+  certPut: async (params) => {
+    const b = needBackend();
+    const { type, certifier, subject, fields, signature, expiresAt } = p(params) as {
+      type?: unknown; certifier?: unknown; subject?: unknown;
+      fields?: unknown; signature?: unknown; expiresAt?: unknown;
+    };
+    if (typeof type !== "string" || !type) throw Object.assign(new Error("type required"), { code: "BAD_PARAM" });
+    if (typeof certifier !== "string" || !certifier) {
+      throw Object.assign(new Error("certifier required"), { code: "BAD_PARAM" });
+    }
+    return putCert(b.db, {
+      type, certifier,
+      subject: typeof subject === "string" ? subject : undefined,
+      fields,
+      signature: typeof signature === "string" ? signature : undefined,
+      expiresAt: Number(expiresAt ?? 0),
+    });
+  },
+  certList: async () => {
+    const b = needBackend();
+    return { certs: await listCerts(b.db) };
+  },
+  certShow: async (params) => {
+    const b = needBackend();
+    const { id, fields, to } = p(params) as { id?: unknown; fields?: unknown; to?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return showCert(b.db, id, {
+      fields: Array.isArray(fields) ? (fields as string[]) : undefined,
+      to: typeof to === "string" ? to : undefined,
+    });
+  },
+  certRevoke: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return revokeCert(b.db, id);
+  },
+  basketCreate: async (params) => {
+    const b = needBackend();
+    const { name, description } = p(params) as { name?: unknown; description?: unknown };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    return createBasket(b.db, name, typeof description === "string" ? description : "");
+  },
+  basketRemove: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    return removeBasket(b.db, name);
+  },
+  basketAssign: async (params) => {
+    const b = needBackend();
+    const { txid, vout, basket } = p(params) as { txid?: unknown; vout?: unknown; basket?: unknown };
+    if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+    if (typeof basket !== "string" || !basket) throw Object.assign(new Error("basket required"), { code: "BAD_PARAM" });
+    return assignUtxo(b.db, txid, Number(vout), basket);
+  },
+  basketList: async () => {
+    const b = needBackend();
+    const views = await walletBaskets(b.db, b.chain);
+    return {
+      baskets: views.map((v) => ({
+        name: v.name, description: v.description,
+        balance: v.balance, memberCount: v.memberCount,
+      })),
+    };
+  },
+  basketBalance: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    const views = await walletBaskets(b.db, b.chain);
+    if (typeof name === "string" && name) {
+      const v = views.find((x) => x.name === name);
+      if (!v) throw Object.assign(new Error(`no basket: ${name}`), { code: "NOT_FOUND" });
+      return v;
+    }
+    return { baskets: views };
   },
   appInstall: async (params) => {
     const b = needBackend();
@@ -168,6 +268,31 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const removed = await removeApp(b.db, clean);
     await removeDesktopEntry(clean);
     return { removed };
+  },
+  storeList: async () => {
+    const b = needBackend();
+    return { store: await storeList(b.db) };
+  },
+  appUpdate: async (params) => {
+    const b = needBackend();
+    const { domain, all, approveWidening } = p(params) as {
+      domain?: unknown; all?: unknown; approveWidening?: unknown;
+    };
+    const seed = {
+      seedPolicyRequest: (origin: string, amountSats: number, action: string) => seedRequest(b.db, origin, amountSats, action),
+    };
+    if (all === true) {
+      const apps = await listApps(b.db);
+      const results = [];
+      for (const a of apps) {
+        results.push(await applyAppUpdate(b.db, a.domain, seed, { approveWidening: approveWidening === true }));
+      }
+      return { results };
+    }
+    if (typeof domain !== "string" || !domain.trim()) {
+      throw Object.assign(new Error("domain required (or all=true)"), { code: "BAD_PARAM" });
+    }
+    return applyAppUpdate(b.db, domain, seed, { approveWidening: approveWidening === true });
   },
   appOpen: async (params) => {
     const b = needBackend();
