@@ -32,6 +32,10 @@ Panel {
   property string address: ""
   property string balanceText: "—"
   property string identityKey: ""
+  // P4/F3 system sign-in (see `bsv whoami`): the Twetch OIDC session,
+  // null when signed out. Login shells the CLI, which opens the browser.
+  property var identity: null
+  property bool identityBusy: false
   // F3 identity shape (see `bsv cert list`): held certificates.
   // F8 history shape (see `bsv history`): transactions, open requests,
   // policies, and rollup counts — one poll instead of three.
@@ -109,6 +113,7 @@ Panel {
           if (!historyProc.running) historyProc.running = true;
           if (!storeProc.running) storeProc.running = true;
           if (!certsProc.running) certsProc.running = true;
+          if (!whoamiProc.running) whoamiProc.running = true;
           if (!ordProc.running) ordProc.running = true;
           if (!bsv21Proc.running) bsv21Proc.running = true;
           if (!msgSyncProc.running) msgSyncProc.running = true;
@@ -192,6 +197,49 @@ Panel {
         } catch (e) {
           root.certs = [];
         }
+      }
+    }
+  }
+
+  // P4/F3 system sign-in: `bsv login` performs the whole OIDC loopback
+  // flow (opening the browser itself) and exits when the daemon session
+  // lands. Busy state covers the browser round-trip; whoami re-polls after.
+  Process {
+    id: whoamiProc
+    command: ["bsv", "whoami"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.identity = JSON.parse(text).session ?? null;
+        } catch (e) {
+          root.identity = null;
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.identity = null; }
+  }
+
+  Process {
+    id: loginProc
+    command: ["bsv", "login"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.identityBusy = false;
+        if (!whoamiProc.running) whoamiProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      root.identityBusy = false;
+      if (!whoamiProc.running) whoamiProc.running = true;
+    }
+  }
+
+  Process {
+    id: identityLogoutProc
+    command: ["bsv", "logout"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (!whoamiProc.running) whoamiProc.running = true;
       }
     }
   }
@@ -619,6 +667,75 @@ Panel {
       font.pixelSize: Style.font.caption
       wrapMode: Text.Wrap
       Layout.fillWidth: true
+    }
+
+    // P4/F3: system sign-in. One tap opens the hosted Twetch page; the
+    // daemon stores the verified session and binds the unlocked wallet key.
+    PanelSectionHeader { text: "Identity" }
+
+    Text {
+      visible: root.identity === null
+      text: "Not signed in. First run needs a client created at id.entangleit.com/console — then `bsv login --client-id=…` in a terminal."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    Button {
+      visible: root.identity === null
+      text: root.identityBusy ? "Waiting for Twetch…" : "Sign in with Twetch"
+      enabled: !root.identityBusy && root.daemonUp
+      onClicked: {
+        root.identityBusy = true;
+        loginProc.running = true;
+      }
+    }
+
+    RowLayout {
+      visible: root.identity !== null
+      spacing: 8
+      Layout.fillWidth: true
+
+      Image {
+        visible: (root.identity && root.identity.picture) ? root.identity.picture !== "" : false
+        source: (root.identity && root.identity.picture) ? root.identity.picture : ""
+        sourceSize.width: 36
+        sourceSize.height: 36
+        Layout.preferredWidth: 36
+        Layout.preferredHeight: 36
+      }
+
+      ColumnLayout {
+        spacing: 2
+        Layout.fillWidth: true
+
+        Text {
+          text: `@${root.identity ? (root.identity.handle || root.identity.sub) : "?"}`
+          color: Color.foreground
+          font.pixelSize: Style.font.body
+          font.bold: true
+          elide: Text.ElideRight
+          Layout.fillWidth: true
+        }
+
+        Text {
+          text: root.identity && root.identity.stale === true
+            ? "session expired — sign in again"
+            : root.identity && root.identity.walletIdentityKey
+              ? `bound to ${String(root.identity.walletIdentityKey).slice(0, 10)}…`
+              : "no wallet key bound yet — unlock the wallet and it fills in"
+          color: Color.muted
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+      }
+
+      Button {
+        text: "Sign out"
+        onClicked: identityLogoutProc.running = true
+      }
     }
 
     PanelSectionHeader { text: `Approvals (${root.requests.length})` }

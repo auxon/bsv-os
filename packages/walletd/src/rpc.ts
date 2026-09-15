@@ -21,6 +21,15 @@ import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./re
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
+import {
+  cancelLogin,
+  currentSession,
+  identityConfig,
+  loginStatus,
+  logout as identityLogout,
+  setIdentityConfig,
+  startLogin,
+} from "./identity.ts";
 
 export const VERSION = "0.1.0";
 
@@ -698,6 +707,43 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       default:
         throw Object.assign(new Error(`unknown app method ${String(method)}`), { code: "BAD_METHOD" });
     }
+  },
+  /**
+   * F3/P4 identity: Sign in with Twetch over OIDC (PKCE + loopback).
+   * The hosted issuer page never sees wallet keys; we only store the
+   * verified session (sub, handle, avatar) and bind the wallet identity
+   * that is unlocked at sign-in time.
+   */
+  identityConfigure: async (params) => {
+    const b = needBackend();
+    return { config: await setIdentityConfig(b.db, p(params)) };
+  },
+  identityLoginStart: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    const started = await startLogin(b.db, {
+      issuer: typeof raw.issuer === "string" ? raw.issuer : undefined,
+      clientId: typeof raw.clientId === "string" ? raw.clientId : undefined,
+      clientSecret:
+        raw.clientSecret === null ? null : typeof raw.clientSecret === "string" ? raw.clientSecret : undefined,
+      redirectPort: typeof raw.redirectPort === "number" ? raw.redirectPort : undefined,
+      scope: typeof raw.scope === "string" ? raw.scope : undefined,
+      force: raw.force === true,
+    });
+    return { ...started, config: await identityConfig(b.db) };
+  },
+  identityLoginStatus: async () => {
+    const b = needBackend();
+    return loginStatus(b.db);
+  },
+  identityLoginCancel: () => cancelLogin(),
+  identitySession: async () => {
+    const b = needBackend();
+    return { session: await currentSession(b.db) };
+  },
+  identityLogout: async () => {
+    const b = needBackend();
+    return identityLogout(b.db);
   },
 };
 

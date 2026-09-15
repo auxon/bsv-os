@@ -32,6 +32,8 @@ Trust rule (CI-enforced): raw key material lives only in
 ```bash
 npm run build && npm link   # or: ./node_modules/.bin/tsx src/cli.ts
 bsv status                  # locked? enrolled?
+bsv login [--client-id=<id>] [--client-secret]  # Sign in with Twetch (OIDC, opens browser)
+bsv whoami | bsv logout     # session profile / revoke + clear
 bsv create                  # new wallet (backup shown once)
 bsv unlock | bsv lock
 bsv balance                 # live chain lookup
@@ -90,4 +92,5 @@ agent at it.
 - M1: real custody (libsecret/TPM, Shamir), lock lifecycle
 - M2: chain + monitor (ARC, reorgs, SQLite), PocketPets regression tests
 - M3: permissions + `bsv` CLI + first migrated app flow
-- Then: Quickshell UI, Twetch identity, agentpay/x402 rails, ISO
+- Then: Quickshell UI ✅, Twetch identity ✅ (OIDC sign-in; cert issuance
+  binding next), agentpay/x402 rails ✅, ISO (in progress)

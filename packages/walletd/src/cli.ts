@@ -663,6 +663,104 @@ async function main(): Promise<void> {
     case "policies":
       print(await call("policyList"));
       break;
+    case "login": {
+      // P4/F3: Sign in with Twetch (OIDC + PKCE). Client registration is
+      // manual at the issuer — pass the console-issued values once and they
+      // are stored daemon-side. The secret (if any) is prompted hidden,
+      // never taken from argv.
+      const clientId = flag(rest, "client-id");
+      const clientSecret = flag(rest, "client-secret");
+      const bareSecret = clientSecret === undefined && rest.includes("--client-secret");
+      const issuer = flag(rest, "issuer");
+      const scope = flag(rest, "scope");
+      const portRaw = flag(rest, "port");
+      const port = portRaw !== undefined ? Number(portRaw) : undefined;
+      if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
+        console.error("bad --port: use 0-65535");
+        process.exitCode = 2;
+        break;
+      }
+      let secret = clientSecret;
+      if (bareSecret) {
+        secret = (await readSecret("Twetch client secret (hidden, Enter to skip): ")).trim() || undefined;
+      }
+      const cfg: Record<string, unknown> = {};
+      if (clientId) cfg.clientId = clientId;
+      if (issuer) cfg.issuer = issuer;
+      if (scope) cfg.scope = scope;
+      if (port !== undefined) cfg.redirectPort = port;
+      if (secret) cfg.clientSecret = secret;
+      if (Object.keys(cfg).length) {
+        const set = (await call("identityConfigure", cfg)) as { error?: unknown };
+        if (set && typeof set === "object" && "error" in set && set.error) {
+          print(set);
+          break;
+        }
+      }
+      const started = (await call("identityLoginStart", { force: rest.includes("--force") })) as {
+        result?: { authUrl?: string; redirectUri?: string };
+        error?: { code?: string; message?: string };
+      };
+      if (started.error || !started.result?.authUrl) {
+        print(started);
+        break;
+      }
+      console.log("Open the Twetch sign-in page:\n");
+      console.log(`  ${started.result.authUrl}\n`);
+      if (!rest.includes("--no-open") && process.platform === "linux") {
+        const { execFile } = await import("node:child_process");
+        execFile("xdg-open", [started.result.authUrl], () => {
+          /* URL is printed either way */
+        });
+      }
+      process.stdout.write("Waiting for Twetch");
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500));
+        let status: {
+          result?: { state?: string; session?: unknown; error?: { code?: string; message?: string } };
+        };
+        try {
+          status = (await call("identityLoginStatus")) as typeof status;
+        } catch (e) {
+          process.stdout.write("\n");
+          console.error(`daemon unreachable: ${e instanceof Error ? e.message : e}`);
+          process.exitCode = 1;
+          break;
+        }
+        const state = status.result?.state ?? "idle";
+        if (state === "done") {
+          process.stdout.write("\n\n");
+          print({ result: status.result?.session });
+          break;
+        }
+        if (state === "error") {
+          process.stdout.write("\n");
+          console.error(`login failed [${status.result?.error?.code ?? "?"}]: ${status.result?.error?.message ?? ""}`);
+          process.exitCode = 1;
+          break;
+        }
+        if (state === "idle") {
+          process.stdout.write("\n");
+          console.error("login was cancelled or the daemon restarted — run bsv login again");
+          process.exitCode = 1;
+          break;
+        }
+        process.stdout.write(".");
+      }
+      if (Date.now() >= deadline) {
+        process.stdout.write("\n");
+        console.error("timed out waiting for sign-in");
+        process.exitCode = 1;
+      }
+      break;
+    }
+    case "whoami":
+      print(await call("identitySession"));
+      break;
+    case "logout":
+      print(await call("identityLogout"));
+      break;
     case "app": {
       const [sub, ...subRest] = rest;
       const arg = subRest.find((a) => !a.startsWith("--"));

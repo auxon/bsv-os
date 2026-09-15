@@ -75,6 +75,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | I want to… | Do this |
 | --- | --- |
 | Check the wallet | `bsv status`, `bsv balance` |
+| Sign in with Twetch | `bsv login` — one browser round-trip; `bsv whoami` shows the session, `bsv logout` revokes it |
 | Timestamp a file | `sha256sum file` → `bsv anchor <hash>` |
 | Share a file on-chain | `bsv share <file>` — or right-click → Scripts → Anchor on BSV in Files, or the wallet panel's Share section (txid + explorer link included) |
 | See in-flight transactions | `bsv pending` (seen → mined, or failed with reason) |
@@ -100,6 +101,35 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —
 check `bsv pending`, then just do the action again.
+
+### Sign in with Twetch
+
+Your Twetch account doubles as the OS login. `bsv login` opens the hosted
+Twetch sign-in page in the browser (or prints the URL with `--no-open`);
+you sign with your usual Twetch method, and the daemon stores the verified
+session — handle, avatar, and your public Twetch key. The bar panel's
+**Identity** section then shows `@you` and which wallet key was bound at
+sign-in; if the wallet was locked at sign-in, the binding fills in the
+first time it is unlocked. Recovery words and private keys stay in the
+browser page and never reach walletd; the daemon only ever receives a
+one-time code.
+
+One-time setup — the issuer has no automatic registration:
+
+1. Sign in at `https://id.entangleit.com/console` and create an app.
+2. Redirect URI (exact): `http://127.0.0.1:2122/callback`
+   Scopes: `openid profile offline_access`.
+3. Copy the client id, then run:
+
+```bash
+bsv login --client-id=<id>          # add the flag --client-secret to be
+                                    # prompted hidden (enables refresh)
+bsv whoami                          # session profile + bound wallet key
+bsv logout                          # revoke refresh token, clear session
+```
+
+Quickshell users can also tap **Sign in with Twetch** in the panel once the
+client id is configured — the CLI does the browser round-trip for you.
 
 ## 5. AI agents and allowances
 
@@ -153,13 +183,13 @@ alongside budgets; an explicit `deny` always wins.
 | Pending stuck on `seen` | Normal for minutes; daemon rebroadcasts automatically. Hours → check a block explorer, then retry |
 | `mint/anchor didn't confirm` | Check `bsv pending` — `failed` means nothing moved; just retry |
 | Forgot which agent is which | `bsv policies` lists every approval and cap |
+| `login says SETUP_REQUIRED` | Create the bsv-os client at `id.entangleit.com/console` with redirect `http://127.0.0.1:2122/callback`, then `bsv login --client-id=…` |
 | New machine | Install, then `bsv import` — type the 12 words at the hidden prompt (never as a command argument, never into chat). Same identity back. |
 | Inbox stays empty | Delivery over the message relay is experimental: handshake, account, and sends are live, but inbox round-trip is unconfirmed (self-sends may be suppressed or need funded storage). Crypto and outbox are unaffected. |
 
 ## 8. What's coming
 
-Quickshell bar widgets and pay prompts, Twetch login as system identity,
-agentpay allowances for coding agents, per-call API payments, the bounty
-board in the launcher, and the one-click installer. The roadmap lives in
+Certificate issuance bound to your Twetch identity, the sandboxed-runner
+hardening pass, and the one-click ISO installer. The roadmap lives in
 [README.md](README.md) and ships milestone by milestone — wallet first,
 always.
