@@ -52,6 +52,8 @@ bsv cert put --type=<t> --certifier=<key> --field <k>=<v>  # hold a signed cert
 bsv cert list | bsv cert show <id> [--fields a,b] | bsv cert revoke <id>
 bsv basket list | bsv basket balance [name]  # per-basket ledger
 bsv basket create <name> | bsv basket remove <name> | bsv basket assign <txid:vout> --to <basket>
+bsv ord list [--address=<addr>] | bsv ord send <txid:vout> --to <address>
+bsv bsv21 list [--address=<addr>]  # fungible positions (sends deferred, see engine.ts)
 ```
 
 First spend from a new origin is denied pending approval (`bsv allow cli`

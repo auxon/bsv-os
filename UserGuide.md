@@ -89,6 +89,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Hold a certificate | `bsv cert put --type=<t> --certifier=<key> --field <k>=<v>` |
 | Disclose attributes | `bsv cert show <id> --fields a,b` (only those fields, logged) |
 | Split money into pots | `bsv basket create savings` → `bsv basket list` (per-basket balances) |
+| See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
 
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —

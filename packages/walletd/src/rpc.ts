@@ -1,13 +1,14 @@
-import { createWallet, getStatus, importWallet, lock, unlock } from "./custody.ts";
+import { createWallet, getStatus, importWallet, lock, selfAddress, unlock } from "./custody.ts";
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
-import { anchorTip, explorerTxUrl, getBalance, safeLabel } from "./engine.ts";
+import { anchorTip, explorerTxUrl, getBalance, safeLabel, sendOrdinal } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
+import { bsv21For, galleryFor } from "./tokens.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 
 export const VERSION = "0.1.0";
@@ -201,6 +202,33 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { id } = p(params) as { id?: unknown };
     if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
     return revokeCert(b.db, id);
+  },
+  /**
+   * F5 gallery + BSV21 positions (read-only 1Sat Stack; no keys).
+   * Address defaults to the wallet (locked wallets must pass one).
+   */
+  ordList: async (params) => {
+    const { address } = p(params) as { address?: unknown };
+    const addr = typeof address === "string" && address ? address : selfAddress();
+    return { ordinals: await galleryFor(addr) };
+  },
+  bsv21List: async (params) => {
+    const { address } = p(params) as { address?: unknown };
+    const addr = typeof address === "string" && address ? address : selfAddress();
+    return { tokens: await bsv21For(addr) };
+  },
+  ordSend: async (params) => {
+    const b = needBackend();
+    const { txid, vout, to, origin } = p(params) as {
+      txid?: unknown; vout?: unknown; to?: unknown; origin?: unknown;
+    };
+    if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient address required"), { code: "BAD_PARAM" });
+    return sendOrdinal({
+      db: b.db, chain: b.chain,
+      origin: typeof origin === "string" ? origin : "cli",
+      txid, vout: Math.floor(Number(vout) || 0), to,
+    });
   },
   basketCreate: async (params) => {
     const b = needBackend();

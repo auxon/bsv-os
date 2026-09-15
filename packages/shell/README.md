@@ -28,7 +28,9 @@ Checklist (verified on `bsvOS` 2026-09-14; shell log showed no QML errors):
       F7 share (file picker → `bsv share`, txid + Open-in-explorer),
       F3 identity (identity key, certs with verified/self-asserted state,
         disclosure sheet with field picker + audit, Revoke),
-      F4 money (per-basket balances with member counts)
+      F4 money (per-basket balances with member counts),
+      F5 gallery (inscriptions with View links, BSV21 positions; sends stay CLI),
+      capped card + ScrollView (wheel-scrolls), 10s live refresh while open
 - [x] Nautilus share target (`nautilus/Anchor on BSV`, post-install synced)
 - [x] New spend requests summon the panel (15s `bsv requests` poll, unseen-id tracking)
 - [ ] Fingerprint offer where Quattro exposes it (deferred: no fingerprint HW enrolled)

@@ -286,6 +286,36 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "ord": {
+      const [ordSub, ...ordRest] = rest;
+      const ordArg = ordRest.find((a) => !a.startsWith("--"));
+      if (ordSub === "list" || ordSub === undefined) {
+        print(await call("ordList", flag(rest, "address") ? { address: flag(rest, "address") } : {}));
+      } else if (ordSub === "send" && ordArg) {
+        const [txid, vout] = ordArg.split(":");
+        const to = flag(rest, "to") ?? ordRest.filter((a) => !a.startsWith("--"))[1];
+        if (!txid || vout === undefined || !to) {
+          console.error("usage: bsv ord send <txid:vout> --to <address> [--origin=name]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("ordSend", { txid, vout: Number(vout), to, origin: flag(rest, "origin") ?? "cli" }));
+      } else {
+        console.error("usage: bsv ord <list [--address=<addr>]|send <txid:vout> --to <address>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
+    case "bsv21": {
+      const [tokSub] = rest;
+      if (tokSub === "list" || tokSub === undefined) {
+        print(await call("bsv21List", flag(rest, "address") ? { address: flag(rest, "address") } : {}));
+      } else {
+        console.error("usage: bsv bsv21 <list [--address=<addr>]>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "basket": {
       const [basketSub, ...basketRest] = rest;
       const basketArg = basketRest.find((a) => !a.startsWith("--"));
@@ -510,7 +540,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

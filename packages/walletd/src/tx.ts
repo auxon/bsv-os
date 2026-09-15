@@ -54,9 +54,18 @@ export function buildTx(opts: {
   payments: Array<{ address: string; sats: number }>;
   opReturn?: string[];
   changeScriptHex: string;
+  /**
+   * F5 ordinal safety: skip the value-desc sort and spend inputs in the
+   * given order. Ordinal transfers rely on first-in-first-out sat flow —
+   * inputs[0] (the inscribed sat) must land in outputs[0] (the recipient).
+   * Callers pin the ordinal UTXO first and keep 1-sat outputs out of
+   * funding, so no other sat can take its place.
+   */
+  keepOrder?: boolean;
 }): BuiltTx {
   const need = opts.payments.reduce((a, p) => a + p.sats, 0);
-  const sorted = [...opts.utxos].sort((a, b) => b.value - a.value).slice(0, 30);
+  const ordered = opts.keepOrder ? [...opts.utxos] : [...opts.utxos].sort((a, b) => b.value - a.value);
+  const sorted = ordered.slice(0, 30);
   const picked: SpendableUtxo[] = [];
   let total = 0;
   for (const u of sorted) {

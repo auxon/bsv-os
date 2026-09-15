@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -51,6 +52,10 @@ Panel {
   // F4 money view (see `bsv basket list` via `bsv history`): per-basket
   // balances with member counts.
   property var baskets: []
+  // F5 collectibles (see `bsv ord list` / `bsv bsv21 list`): inscriptions
+  // plus fungible positions. Read-only in the panel; sends stay in the CLI.
+  property var ordinals: []
+  property var ftokens: []
   property var summary: ({ inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 })
 
   function refresh() {
@@ -80,6 +85,8 @@ Panel {
           if (!historyProc.running) historyProc.running = true;
           if (!storeProc.running) storeProc.running = true;
           if (!certsProc.running) certsProc.running = true;
+          if (!ordProc.running) ordProc.running = true;
+          if (!bsv21Proc.running) bsv21Proc.running = true;
         } catch (e) {
           root.daemonUp = false;
         }
@@ -155,6 +162,37 @@ Panel {
         }
       }
     }
+  }
+
+  // F5 gallery polls (1Sat Stack; empty while locked — same as balance).
+  Process {
+    id: ordProc
+    command: ["bsv", "ord", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.ordinals = JSON.parse(text).ordinals ?? [];
+        } catch (e) {
+          root.ordinals = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.ordinals = []; }
+  }
+
+  Process {
+    id: bsv21Proc
+    command: ["bsv", "bsv21", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.ftokens = JSON.parse(text).tokens ?? [];
+        } catch (e) {
+          root.ftokens = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.ftokens = []; }
   }
 
   // Disclosure sheet runner: `bsv cert show <id> [--fields …]`; the result
@@ -271,6 +309,21 @@ Panel {
     actionProc.running = true;
   }
 
+  // Live refresh: an open panel re-polls on open and every 10s, so
+  // unlocks/approvals land without manual Refresh. Cheap local procs only.
+  onOpenedChanged: {
+    if (root.opened) root.refresh();
+  }
+
+  Timer {
+    interval: 10000
+    running: true
+    repeat: true
+    onTriggered: {
+      if (root.opened) root.refresh();
+    }
+  }
+
   // The bar shows this panel as a layer-shell popout (KeyboardPanel, like
   // the clock calendar): anchored under the pill, dismissed on outside
   // click. A bare Panel never displays on its own, and xdg-popup cards
@@ -283,12 +336,19 @@ Panel {
     open: root.opened
     centerOnBar: false
     contentWidth: card.fittedContentWidth(Style.space(460))
-    contentHeight: card.fittedContentHeight(col.implicitHeight)
+    contentHeight: card.fittedContentHeight(col.implicitHeight, Style.space(560))
+
+  // Long dashboard: the card caps at 560 and the column scrolls.
+  ScrollView {
+    id: scrollArea
+    anchors.fill: parent
+    clip: true
+    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+    ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
   ColumnLayout {
     id: col
-    anchors.fill: parent
-    anchors.margins: 16
+    width: scrollArea.availableWidth
     spacing: 10
 
     Text {
@@ -504,6 +564,84 @@ Panel {
       color: Color.muted
       font.pixelSize: Style.font.body
       visible: root.baskets.length === 0
+    }
+
+    PanelSectionHeader { text: `Collectibles (${root.ordinals.length})` }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.ordinals.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.ordinals
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.contentType ?? "?"} · ${modelData.contentLength ?? "?"} bytes · ${String(modelData.outpoint ?? "?").slice(0, 12)}…`
+            color: Color.foreground
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "View"
+            onClicked: {
+              openExplorerProc.url = modelData.contentUrl;
+              openExplorerProc.running = true;
+            }
+          }
+        }
+      }
+    }
+
+    Text {
+      text: "No inscriptions held — sends stay in the CLI (`bsv ord send`)."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.ordinals.length === 0
+    }
+
+    PanelSectionHeader { text: `Tokens (${root.ftokens.length})` }
+
+    ColumnLayout {
+      spacing: 4
+      visible: root.ftokens.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.ftokens
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: modelData.symbol ?? "?"
+            color: Color.foreground
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+
+          Text {
+            text: `${modelData.balance ?? 0} · ${modelData.utxoCount ?? 0} utxo`
+            color: Color.muted
+            font.pixelSize: Style.font.body
+            Layout.fillWidth: true
+          }
+        }
+      }
+    }
+
+    Text {
+      text: "No BSV21 positions."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      visible: root.ftokens.length === 0
     }
 
     PanelSectionHeader { text: `Store (${root.store.length})` }
@@ -728,6 +866,7 @@ Panel {
         onClicked: root.lockNow()
       }
     }
+  }
   }
   }
 }

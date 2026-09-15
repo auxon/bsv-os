@@ -6,7 +6,7 @@ import qs.Ui
 
 // BSV OS wallet pill for the Omarchy bar.
 //
-// Polls `bsv status` every 30s (plus `bsv balance` / `bsv pending` /
+// Polls `bsv status` every 10s (plus `bsv balance` / `bsv pending` /
 // `bsv requests` when a wallet exists) and shows lock state + balance.
 // Left-click toggles the wallet panel (Panel.qml); right-click locks
 // (`bsv lock`). New spend requests summon the panel like a system
@@ -167,8 +167,9 @@ BarWidget {
     onExited: () => root.refresh()
   }
 
+  // 10s status poll: unlocks/locks should surface promptly on the pill.
   Timer {
-    interval: 30000
+    interval: 10000
     running: true
     repeat: true
     triggeredOnStart: true
