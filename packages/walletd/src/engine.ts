@@ -154,3 +154,58 @@ export async function sendOrdinal(opts: {
   );
   return { txid: res.txid, fee: built.fee };
 }
+
+/**
+ * F14 generic payment: move N sats to a P2PKH address. Policy and budgets
+ * see the TOTAL leaving the wallet (payment + fee) — caps are per-action
+ * ceilings on spend, not on fees. Tracked, labeled, and debited exactly
+ * like every other accepted broadcast.
+ */
+export async function sendSats(opts: {
+  db: Knex;
+  chain: ChainProvider;
+  origin: string;
+  to: string;
+  sats: number;
+  label?: string;
+}): Promise<{ txid: string; fee: number; hex: string }> {
+  const amount = Math.floor(Number(opts.sats) || 0);
+  if (!(amount > 0)) throw Object.assign(new Error("amount must be a positive sat number"), { code: "BAD_PARAM" });
+  try {
+    p2pkhScript(opts.to);
+  } catch {
+    throw Object.assign(new Error("recipient must be a valid P2PKH address"), { code: "BAD_PARAM" });
+  }
+  const address = selfAddress();
+  const lock = p2pkhScript(address);
+  const u = await opts.chain.utxos(address);
+  const utxos: SpendableUtxo[] = u.utxos.map((x) => ({ ...x, scriptHex: lock.toHex() }));
+  const built = buildTx({
+    utxos,
+    unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
+    payments: [{ address: opts.to, sats: amount }],
+    changeScriptHex: lock.toHex(),
+  });
+  const total = amount + built.fee;
+  const gate = await check(opts.db, opts.origin, total, "send");
+  if (gate.verdict !== "allow") {
+    const err = new Error(`denied: ${gate.reason}`) as Error & { code: string };
+    err.code = "POLICY_DENY";
+    throw err;
+  }
+  const { hex } = await signTx(built.tx);
+  const res = await opts.chain.broadcast(hex);
+  await track(opts.db, res.txid, opts.label ?? `send ${amount} sats to ${opts.to.slice(0, 8)}`, hex);
+  await recordSpend(opts.db, opts.origin, total);
+  const basket = await resolveBasketForOrigin(opts.db, opts.origin);
+  const changeHex = lock.toHex();
+  await labelOutputs(
+    opts.db,
+    res.txid,
+    built.tx.outputs
+      .map((o, vout) => ({ vout, script: o.lockingScript?.toHex(), value: o.satoshis ?? 0 }))
+      .filter((o) => o.script === changeHex)
+      .map((o) => ({ vout: o.vout, value: o.value, basket })),
+  );
+  return { txid: res.txid, fee: built.fee, hex };
+}

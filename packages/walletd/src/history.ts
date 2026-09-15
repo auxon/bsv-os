@@ -13,6 +13,7 @@
 import type { Knex } from "knex";
 import { listAgents, type AgentView } from "./agents.ts";
 import { listDisclosures, type DisclosureView } from "./certs.ts";
+import { listReceipts, type X402Receipt } from "./x402.ts";
 import { walletBaskets } from "./baskets.ts";
 import type { ChainProvider } from "./chain.ts";
 
@@ -83,6 +84,7 @@ export interface History {
   agents: HistoryAgent[];
   disclosures: DisclosureView[];
   baskets: HistoryBasket[];
+  receipts: X402Receipt[];
   summary: HistorySummary;
 }
 
@@ -101,6 +103,7 @@ export function emptyHistory(): History {
     agents: [],
     disclosures: [],
     baskets: [],
+    receipts: [],
     summary: { inFlight: 0, mined: 0, failed: 0, pendingRequests: 0, allowedOrigins: 0, deniedOrigins: 0 },
   };
 }
@@ -175,6 +178,7 @@ export async function getHistory(db: Knex, chain?: ChainProvider): Promise<Histo
     agents,
     disclosures: await listDisclosures(db),
     baskets,
+    receipts: await listReceipts(db),
     summary: {
       inFlight: txRows.filter((t) => t.status === "seen").length,
       mined: txRows.filter((t) => t.status === "mined").length,

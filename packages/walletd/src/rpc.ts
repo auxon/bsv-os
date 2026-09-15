@@ -9,6 +9,7 @@ import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } fr
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
 import { bsv21For, galleryFor } from "./tokens.ts";
+import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 
@@ -254,6 +255,37 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       throw Object.assign(new Error("username required"), { code: "BAD_PARAM" });
     }
     return liveRelay().register(username);
+  },
+  /**
+   * F14 metered fetch: quote → policy-gated pay → retry with proof.
+   * The origin pays (agent budgets bind); receipts land in history.
+   */
+  x402Pay: async (params) => {
+    const b = needBackend();
+    const { url, method, body, origin } = p(params) as {
+      url?: unknown; method?: unknown; body?: unknown; origin?: unknown;
+    };
+    if (typeof url !== "string" || !url) throw Object.assign(new Error("url required"), { code: "BAD_PARAM" });
+    return x402Pay({
+      db: b.db, chain: b.chain, url,
+      method: typeof method === "string" ? method : "GET",
+      body: body === undefined ? undefined : body,
+      origin: typeof origin === "string" ? origin : "cli",
+    });
+  },
+  x402Receipts: async () => {
+    const b = needBackend();
+    return { receipts: await listReceipts(b.db) };
+  },
+  x402Attest: async (params) => {
+    const b = needBackend();
+    const { days, verifier } = p(params) as { days?: unknown; verifier?: unknown };
+    const s = await getStatus();
+    if (!s.identityKey) throw Object.assign(new Error("wallet locked"), { code: "WALLET_LOCKED" });
+    return attestSpend(b.db, s.identityKey, {
+      days: Number(days ?? 30),
+      verifier: typeof verifier === "string" ? verifier : undefined,
+    });
   },
   /**
    * F5 gallery + BSV21 positions (read-only 1Sat Stack; no keys).

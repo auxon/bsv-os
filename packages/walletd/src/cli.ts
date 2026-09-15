@@ -286,6 +286,40 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "x402": {
+      const [xSub, ...xRest] = rest;
+      const xArg = xRest.find((a) => !a.startsWith("--"));
+      if (xSub === "pay" && xArg) {
+        const method = flag(rest, "method") ?? "GET";
+        const dataRaw = flag(rest, "data");
+        let data: unknown;
+        if (dataRaw !== undefined) {
+          try {
+            data = JSON.parse(dataRaw);
+          } catch {
+            console.error("bad --data: must be JSON");
+            process.exitCode = 2;
+            break;
+          }
+        }
+        print(await call("x402Pay", {
+          url: xArg, method,
+          body: data,
+          origin: flag(rest, "origin") ?? "cli",
+        }));
+      } else if (xSub === "receipts" || xSub === undefined) {
+        print(await call("x402Receipts"));
+      } else if (xSub === "attest") {
+        print(await call("x402Attest", {
+          days: Number(flag(rest, "days") ?? 30),
+          verifier: flag(rest, "to"),
+        }));
+      } else {
+        console.error("usage: bsv x402 <pay <url> [--method=M] [--data=JSON] [--origin=name]|receipts|attest [--days=N] [--to=<key>]>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "msg": {
       const [msgSub, ...msgRest] = rest;
       const msgArg = msgRest.find((a) => !a.startsWith("--"));
@@ -569,7 +603,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

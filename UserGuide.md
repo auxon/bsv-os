@@ -91,6 +91,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Split money into pots | `bsv basket create savings` → `bsv basket list` (per-basket balances) |
 | See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
 | Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery experimental, see below) |
+| Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 
 **Failed transactions are safe to retry.** If the network rejects something
 (usually a lost race between two of your own payments), nothing moved —

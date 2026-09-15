@@ -24,6 +24,7 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `wallet_balance` | — | `{ address, confirmed, unconfirmed, utxos }` in sats. |
 | `anchor_tip` | `{ sha256 }` | Timestamp 64-hex on-chain (OP_RETURN). Policy-gated. Returns `{ txid, fee }`. |
 | `list_pending` | — | Txs the daemon is watching: `seen` / `mined` / `failed`. |
+| `x402_pay` | `{ url, method?, data? }` | Metered fetch: quotes, pays from YOUR budget through policy, retries with proof. Returns resource + receipt. Denials work like `anchor_tip`. |
 
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,

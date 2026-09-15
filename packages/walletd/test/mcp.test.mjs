@@ -13,10 +13,10 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the five wallet tools", async () => {
+test("lists the six wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-  assert.deepEqual(tools, ["anchor_tip", "get_version", "list_pending", "wallet_balance", "wallet_status"]);
+  assert.deepEqual(tools, ["anchor_tip", "get_version", "list_pending", "wallet_balance", "wallet_status", "x402_pay"]);
   await client.close();
   await server.close();
 });
@@ -43,6 +43,21 @@ test("anchor stamps the agent origin", async () => {
   assert.equal(seen.method, "anchor");
   assert.equal(seen.params.origin, "test-agent");
   assert.equal(seen.params.sha256, "b".repeat(64));
+  await client.close();
+  await server.close();
+});
+
+test("x402_pay stamps the agent origin and requires a url", async () => {
+  let seen = null;
+  const { client, server } = await pair(async (method, params) => {
+    seen = { method, params };
+    return { paid: true };
+  });
+  await client.callTool({ name: "x402_pay", arguments: { url: "https://example.com/paid" } });
+  assert.equal(seen.method, "x402Pay");
+  assert.equal(seen.params.origin, "test-agent");
+  assert.equal(seen.params.url, "https://example.com/paid");
+  await assert.rejects(client.callTool({ name: "x402_pay", arguments: {} }), /url is required/);
   await client.close();
   await server.close();
 });

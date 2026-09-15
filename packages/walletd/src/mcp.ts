@@ -51,6 +51,19 @@ const TOOLS = [
     description: "Transactions the daemon is watching to confirmation.",
     inputSchema: { type: "object" as const, properties: {} },
   },
+  {
+    name: "x402_pay",
+    description: "Pay-per-call metered fetch: quotes, pays from this agent's budget through policy, retries with proof, returns the resource + receipt. Denials work exactly like anchor_tip.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        url: { type: "string", description: "http(s) URL of the metered resource" },
+        method: { type: "string", description: "GET (default) or POST" },
+        data: { type: "object", description: "optional JSON body for POST" },
+      },
+      required: ["url"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -106,6 +119,17 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
         }
         case "list_pending":
           return text(await callDaemon("pending"));
+        case "x402_pay": {
+          if (typeof args.url !== "string" || !args.url) {
+            throw new McpError(ErrorCode.InvalidParams, "url is required");
+          }
+          return text(await callDaemon("x402Pay", {
+            url: args.url,
+            method: typeof args.method === "string" ? args.method : "GET",
+            body: args.data ?? undefined,
+            origin: agent,
+          }));
+        }
         default:
           throw new McpError(ErrorCode.MethodNotFound, `unknown tool: ${name}`);
       }

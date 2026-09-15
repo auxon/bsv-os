@@ -55,6 +55,8 @@ bsv basket create <name> | bsv basket remove <name> | bsv basket assign <txid:vo
 bsv ord list [--address=<addr>] | bsv ord send <txid:vout> --to <address>
 bsv bsv21 list [--address=<addr>]  # fungible positions (sends deferred, see engine.ts)
 bsv msg send <identityKey> --text <msg> | bsv msg sync|list|show <id>|ack <id>
+bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
+bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 ```
 
 First spend from a new origin is denied pending approval (`bsv allow cli`
@@ -67,8 +69,9 @@ working as designed.
 bsv mcp --agent=research-agent   # stdio server: Claude Code, OpenCode, etc.
 ```
 
-Five tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
-`list_pending`. Every call is stamped with the agent name, so daemon policy
+Six tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
+`list_pending`, `x402_pay` (metered fetch, spends the agent's own budget
+through policy). Every call is stamped with the agent name, so daemon policy
 and the custody lock apply per-agent. A first-run denial surfaces as
 `ask your human to run: bsv allow research-agent` — the agent loop closes
 without ever touching keys.
