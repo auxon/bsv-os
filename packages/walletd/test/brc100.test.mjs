@@ -5,12 +5,13 @@ import assert from "node:assert/strict";
 process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-brc100";
 import knex from "knex";
 import { createServer } from "node:http";
-import { PrivateKey, Script, Transaction, UnlockingScript, WalletWireProcessor } from "@bsv/sdk";
+import { Beef, P2PKH, PrivateKey, Script, Spend, Transaction, UnlockingScript, WalletWireProcessor } from "@bsv/sdk";
 import { MockChainProvider } from "../src/chain.ts";
 import { migrate } from "../src/storage.ts";
 import { createWallet, destroyWallet, hasWallet, __resetCache, selfAddress } from "../src/custody.ts";
 import { createBrc100Wallet } from "../src/brc100.ts";
-import { setPolicy } from "../src/policy.ts";
+import { pendingRequests, setPolicy } from "../src/policy.ts";
+import { jsonApiHandler, listenJsonApi } from "../src/index.ts";
 import { p2pkhScript } from "../src/tx.ts";
 
 const TO = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
@@ -277,6 +278,87 @@ it("sign-later flow stages, signs, aborts", async () => {
   }
 });
 
+it("deferred note input stages and accepts the caller signature with mock chain only", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const key = PrivateKey.fromRandom();
+    const noteScript = Script.fromASM(`${key.toPublicKey()} OP_CHECKSIG OP_0 OP_IF 010203 OP_ENDIF`);
+    const parent = Transaction.fromHex(parentHex([{ scriptHex: noteScript.toHex(), sats: 1 }]));
+    const parentId = parent.id("hex");
+    const chain = new MockChainProvider();
+    chain.credit(selfAddress(), { txid: F1, vout: 0, value: 100_000, height: 900 });
+    const net = makeNet(selfAddress());
+    let allowParentFetch = true;
+    let parentFetches = 0;
+    const fetchFn = async (url) => {
+      if (String(url).endsWith(`/tx/${parentId}/hex`)) {
+        parentFetches++;
+        assert.ok(allowParentFetch, "provided parent must not be fetched");
+        return new Response(parent.toHex());
+      }
+      return net.fetchFn(url);
+    };
+    let broadcast;
+    chain.broadcast = async (hex) => {
+      broadcast = Transaction.fromHex(hex);
+      return { txid: broadcast.id("hex"), status: "SEEN" };
+    };
+    const w = wallet(db, chain, fetchFn);
+    await setPolicy(db, "note-test.example", "allow");
+    for (const provided of [false, true]) {
+      allowParentFetch = !provided;
+      parentFetches = 0;
+      broadcast = undefined;
+      const args = {
+        description: "synthetic note update",
+        inputs: [{ outpoint: `${parentId}.0`, unlockingScriptLength: 74, inputDescription: "synthetic note input" }],
+        outputs: [{ lockingScript: noteScript.toHex(), satoshis: 1, outputDescription: "synthetic note output" }],
+        ...(provided ? { inputBEEF: Array.from(parent.toAtomicBEEF(true)) } : {}),
+        options: { randomizeOutputs: false, trustSelf: "known" },
+      };
+      const staged = await w.createAction(args, "note-test.example");
+      assert.ok(staged.signableTransaction?.reference);
+      assert.equal(broadcast, undefined);
+      assert.equal(parentFetches, provided ? 0 : 1);
+      const { reference, tx: bytes } = staged.signableTransaction;
+      const tx = Transaction.fromBEEF(bytes);
+      const beef = Beef.fromBinary(bytes);
+      const subject = beef.txs[beef.txs.length - 1];
+      const subjectHex = subject.tx.toHex();
+      assert.equal(beef.findTransactionForSigning(subject.txid).toHex(), subjectHex);
+      assert.equal(tx.toHex(), subjectHex);
+      assert.equal(tx.inputs[0].sourceOutputIndex, 0);
+      assert.equal(tx.inputs[0].sourceTXID, parentId);
+      assert.equal(tx.inputs[0].unlockingScript.toHex(), "");
+      const context = JSON.parse((await db("brc100_pending").where({ reference }).first()).context);
+      assert.equal(context.inputs[0].mine, false);
+      assert.equal(context.inputs[0].scriptHex, noteScript.toHex());
+      assert.equal(context.inputs[0].value, 1);
+      if (provided) assert.equal(tx.inputs[0].sourceTransaction.outputs[0].lockingScript.toHex(), noteScript.toHex());
+      const signature = await new P2PKH().unlock(key, "all", false, 1, noteScript).sign(tx, 0);
+      const unlockingScript = new UnlockingScript([signature.chunks[0]]).toHex();
+      const done = await w.signAction({ reference, spends: { 0: { unlockingScript } } }, "note-test.example");
+      assert.equal(done.txid, broadcast.id("hex"));
+      assert.equal(broadcast.inputs[0].unlockingScript.toHex(), unlockingScript);
+      for (const [i, source] of [[0, { script: noteScript, value: 1 }], [1, { script: p2pkhScript(selfAddress()), value: 100_000 }]]) {
+        assert.equal(new Spend({
+          sourceTXID: broadcast.inputs[i].sourceTXID, sourceOutputIndex: broadcast.inputs[i].sourceOutputIndex,
+          sourceSatoshis: source.value, lockingScript: source.script, transactionVersion: broadcast.version,
+          otherInputs: broadcast.inputs.filter((_, j) => j !== i), outputs: broadcast.outputs,
+          inputIndex: i, unlockingScript: broadcast.inputs[i].unlockingScript,
+          inputSequence: broadcast.inputs[i].sequence, lockTime: broadcast.lockTime,
+        }).validate(), true);
+      }
+      assert.ok(context.fee >= broadcast.toHex().length / 2);
+    }
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
 it("internalizeAction credits described outputs; tampered scripts rejected", async () => {
   const db = await memdb();
   try {
@@ -432,6 +514,179 @@ it("real WalletClient round-trips over binary wire frames", async () => {
       const id = await client.getPublicKey({ identityKey: true });
       assert.match(id.publicKey, /^[0-9a-f]{66}$/);
       assert.deepEqual(await client.isAuthenticated(), { authenticated: true });
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+test("production JSON API rejects invalid requests and gates every sensitive route", async () => {
+  const db = await memdb();
+  const chain = new MockChainProvider();
+  const { fetchFn } = makeNet(TO);
+  const server = await listenJsonApi(0, { db, chain, fetchFn });
+  const port = server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  const post = (route, body = "{}", headers = {}) => fetch(`${base}/${route}`, {
+    method: "POST", headers: { "content-type": "application/json", origin: "https://app.example:8443", ...headers }, body,
+  });
+  try {
+    assert.equal(server.address().address, "127.0.0.1");
+    await assert.rejects(listenJsonApi(port, { db, chain, fetchFn }), { code: "EADDRINUSE" });
+    for (const origin of [undefined, "", "null", "not a URL", "app.example", "file://", "ftp://app.example", "https://user@app.example", "https://app.example/path", "https://app.example?x=1", "https://app.example#x", "https://app.example/", "https://app.example https://other.example"]) {
+      const headers = { "content-type": "application/json", originator: "https://app.example:8443" };
+      if (origin !== undefined) headers.origin = origin;
+      for (const method of ["POST", "OPTIONS"]) {
+        const r = await fetch(`${base}/getPublicKey`, { method, headers, ...(method === "POST" ? { body: "{}" } : {}) });
+        assert.equal(r.status, 403, `${method} ${origin}`);
+        assert.equal(r.headers.get("access-control-allow-origin"), null);
+        assert.equal((await r.json()).code, "FORBIDDEN_ORIGIN");
+      }
+    }
+    assert.deepEqual(await pendingRequests(db), []);
+    const preflight = await fetch(`${base}/getPublicKey`, {
+      method: "OPTIONS", headers: { origin: "https://app.example:8443", "access-control-request-method": "POST", "access-control-request-headers": "content-type", "access-control-request-private-network": "true" },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "https://app.example:8443");
+    assert.equal(preflight.headers.get("vary"), "Origin");
+    assert.equal(preflight.headers.get("access-control-allow-private-network"), "true");
+    assert.equal(preflight.headers.get("access-control-allow-methods"), "POST, OPTIONS");
+    assert.equal(preflight.headers.get("access-control-allow-headers"), "content-type");
+    for (const body of ["", "{", "null", "[]", "true", "42", '"text"']) {
+      const r = await post("getPublicKey", body);
+      assert.equal(r.status, 400, body);
+      assert.match((await r.json()).message, /JSON/);
+    }
+    assert.equal((await post("getVersion", "{}", { "content-type": "text/plain" })).status, 415);
+    for (const route of ["noSuchMethod", "constructor", "toString", "hasOwnProperty", "__proto__", "getVersion/", "", "getStatus"]) {
+      const r = await post(route);
+      assert.equal(r.status, 404, route);
+      assert.deepEqual(await r.json(), { error: `Unknown wallet path: /${route}` });
+    }
+    assert.equal((await fetch(`${base}/getVersion`, { headers: { origin: "https://app.example" } })).status, 405);
+    const oversized = JSON.stringify({ padding: "x".repeat(1024 * 1024) });
+    assert.equal((await post("getPublicKey", oversized)).status, 413);
+    const streamed = await fetch(`${base}/getPublicKey`, {
+      method: "POST", headers: { origin: "https://app.example:8443", "content-type": "application/json" },
+      duplex: "half", body: (async function* () { yield oversized.slice(0, 600000); yield oversized.slice(600000); })(),
+    });
+    assert.equal(streamed.status, 413);
+    assert.deepEqual(await pendingRequests(db), []);
+    const sensitive = [
+      "createAction", "signAction", "abortAction", "listActions", "internalizeAction", "listOutputs", "relinquishOutput",
+      "getPublicKey", "revealCounterpartyKeyLinkage", "revealSpecificKeyLinkage", "encrypt", "decrypt",
+      "createHmac", "verifyHmac", "createSignature", "verifySignature", "acquireCertificate", "listCertificates",
+      "proveCertificate", "relinquishCertificate", "discoverByIdentityKey", "discoverByAttributes", "isAuthenticated", "waitForAuthentication",
+    ];
+    await setPolicy(db, "trusted.example", "allow");
+    for (const route of sensitive) {
+      const r = await post(route, JSON.stringify({ originator: "trusted.example", origin: "trusted.example", identityKey: true, seekPermission: false }), { originator: "https://trusted.example" });
+      assert.equal(r.status, 403, route);
+      assert.equal((await r.json()).code, "POLICY_DENY", route);
+    }
+    const pending = await pendingRequests(db);
+    assert.equal(pending.length, sensitive.length);
+    assert.ok(pending.every((r) => r.origin === "app.example:8443" && r.amount_sats === 0));
+    assert.deepEqual(pending.map((r) => r.action).sort(), sensitive.map((r) => `brc100-json-${r}`).sort());
+    await post("getPublicKey");
+    assert.equal((await pendingRequests(db)).length, sensitive.length);
+    await setPolicy(db, "app.example:8443", "deny");
+    for (const route of sensitive) {
+      const r = await post(route);
+      assert.equal(r.status, 403, route);
+      assert.match((await r.json()).message, /denied by policy/);
+    }
+    assert.deepEqual(await pendingRequests(db), []);
+    assert.equal((await post("getVersion")).status, 200);
+    await setPolicy(db, "app.example", "allow");
+    assert.equal((await post("listActions", '{"labels":[]}')).status, 403);
+    await setPolicy(db, "app.example:8443", "allow");
+    const allowed = await post("listActions", '{"labels":[]}');
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(await allowed.json(), { totalActions: 0, actions: [] });
+    await db.schema.dropTable("policies");
+    const failedPolicy = await post("getPublicKey", '{"identityKey":true}');
+    assert.equal(failedPolicy.status, 500);
+    assert.deepEqual(await failedPolicy.json(), { message: "wallet request failed" });
+  } finally {
+    await new Promise((r) => server.close(r));
+    await db.destroy();
+  }
+});
+
+it("metanet-compatible production JSON API serves SDK HTTPWalletJSON clients", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const { fetchFn } = makeNet(selfAddress());
+    const chain = new MockChainProvider();
+    chain.broadcast = async () => { throw new Error("unexpected broadcast"); };
+    chain.credit(selfAddress(), { txid: F1, vout: 0, value: 100_000, height: 900 });
+    const { HTTPWalletJSON, WalletClient } = await import("@bsv/sdk");
+    const server = createServer(jsonApiHandler({ db, chain, fetchFn }));
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const client = new WalletClient(new HTTPWalletJSON("app.example:8443", base), "app.example:8443");
+      assert.deepEqual(await client.getVersion(), { version: "bsvos-0.1.0" });
+      assert.deepEqual(await client.getNetwork(), { network: "mainnet" });
+      assert.deepEqual(await client.getHeight(), { height: 900000 });
+      const header = await client.getHeaderForHeight({ height: 900000 });
+      assert.match(header.header, /^[0-9a-f]{160}$/);
+      const legacyHeader = await fetch(`${base}/getHeader`, {
+        method: "POST", headers: { origin: "http://app.example:8443", "content-type": "application/json" }, body: '{"height":900000}',
+      });
+      assert.equal(legacyHeader.status, 200);
+      assert.deepEqual(await legacyHeader.json(), header);
+      await assert.rejects(client.getPublicKey({ identityKey: true }), /POLICY_DENY/);
+      await setPolicy(db, "app.example:8443", "allow");
+      const id = await client.getPublicKey({ identityKey: true });
+      assert.match(id.publicKey, /^[0-9a-f]{66}$/);
+      assert.deepEqual(await client.isAuthenticated(), { authenticated: true });
+      assert.deepEqual(await client.waitForAuthentication({ timeoutMs: 0 }), { authenticated: true });
+      const enc = await client.encrypt({
+        protocolID: [2, "json api test"], keyID: "k1", plaintext: new Uint8Array([1, 2, 3]),
+      });
+      assert.ok(Array.isArray(enc.ciphertext));
+      const dec = await client.decrypt({
+        protocolID: [2, "json api test"], keyID: "k1", ciphertext: new Uint8Array(enc.ciphertext),
+      });
+      assert.deepEqual(dec.plaintext, [1, 2, 3]);
+      const hmacArgs = { protocolID: [2, "json hmac test"], keyID: "k", counterparty: "self", data: new Uint8Array([1]) };
+      const { hmac } = await client.createHmac(hmacArgs);
+      assert.deepEqual(await client.verifyHmac({ ...hmacArgs, hmac: new Uint8Array(hmac) }), { valid: true });
+      await assert.rejects(client.verifyHmac({ ...hmacArgs, hmac: [9, 9] }), (e) => {
+        assert.match(JSON.parse(e.message).message, /^INVALID_HMAC: /);
+        return true;
+      });
+      const actionArgs = {
+        description: "JSON API policy cap test",
+        outputs: [{ lockingScript: p2pkhScript(TO).toHex(), satoshis: 5000, outputDescription: "test merchant payment" }],
+        options: { signAndProcess: false },
+      };
+      await setPolicy(db, "app.example:8443", "allow", 1);
+      await assert.rejects(client.createAction(actionArgs), /POLICY_DENY.*over spend cap/);
+      await setPolicy(db, "app.example:8443", "allow");
+      const staged = await client.createAction(actionArgs);
+      assert.ok(Array.isArray(staged.signableTransaction.tx));
+      const signArgs = { reference: staged.signableTransaction.reference, spends: {}, options: { noSend: true } };
+      await setPolicy(db, "other.example", "allow");
+      const other = new WalletClient(new HTTPWalletJSON("other.example", base), "other.example");
+      await assert.rejects(other.signAction(signArgs), /POLICY_DENY.*owner mismatch/);
+      await setPolicy(db, "app.example:8443", "allow", 1);
+      await assert.rejects(client.signAction(signArgs), /POLICY_DENY.*over spend cap/);
+      await setPolicy(db, "app.example:8443", "allow");
+      assert.deepEqual(await client.abortAction({ reference: signArgs.reference }), { aborted: true });
+      await setPolicy(db, "app.example:8443", "deny");
+      await assert.rejects(client.decrypt({ protocolID: [2, "json api test"], keyID: "k1", ciphertext: enc.ciphertext }), /POLICY_DENY/);
     } finally {
       await new Promise((r) => server.close(r));
     }

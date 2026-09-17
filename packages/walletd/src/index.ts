@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import https from "node:https";
+import http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -13,8 +14,9 @@ import { dispatch, setBackend } from "./rpc.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { migrate, openDb } from "./storage.ts";
-import { createBrc100Wallet } from "./brc100.ts";
-import { WalletWireProcessor } from "@bsv/sdk";
+import { createBrc100Wallet, type Brc100Context } from "./brc100.ts";
+import { check } from "./policy.ts";
+import { stringifyBRC100, WalletWireProcessor } from "@bsv/sdk";
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { tick } from "./monitor.ts";
@@ -118,6 +120,128 @@ function originHost(origin: string | undefined): string | null {
   }
 }
 
+const JSON_API_PORT = Number(process.env.BSV_WALLETD_JSON_PORT ?? 3321);
+const JSON_BODY_LIMIT = 1024 * 1024;
+const JSON_METHODS = new Map(Object.keys(WIRE_CALL_CODES).map((method) => [method, method]));
+JSON_METHODS.set("getHeaderForHeight", "getHeader");
+const JSON_PUBLIC_METHODS = new Set(["getVersion", "getNetwork", "getHeight", "getHeader"]);
+
+async function readJsonApiBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const tooLarge = () => Object.assign(new Error("JSON body exceeds 1 MiB"), { status: 413 });
+  if (Number(req.headers["content-length"]) > JSON_BODY_LIMIT) throw tooLarge();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req.iterator({ destroyOnReturn: false })) {
+    const chunk = Buffer.isBuffer(c) ? c : Buffer.from(c);
+    size += chunk.length;
+    if (size > JSON_BODY_LIMIT) throw tooLarge();
+    chunks.push(chunk);
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw Object.assign(new Error("invalid JSON body"), { status: 400 });
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw Object.assign(new Error("JSON body must be an object"), { status: 400 });
+  }
+  return body as Record<string, unknown>;
+}
+
+export function jsonApiHandler(backend?: Brc100Context) {
+  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    let headers: Record<string, string> = { "content-type": "application/json", vary: "Origin" };
+    const reply = (status: number, body: unknown): void => {
+      const json = stringifyBRC100(body);
+      req.resume();
+      res.writeHead(status, headers);
+      res.end(json);
+    };
+    try {
+      const origin = req.headers.origin;
+      let parsed: URL;
+      try {
+        if (typeof origin !== "string") throw new Error();
+        parsed = new URL(origin);
+        if (!["http:", "https:"].includes(parsed.protocol) || parsed.origin !== origin ||
+            !parsed.hostname || parsed.host.length > 200) throw new Error();
+      } catch {
+        reply(403, { message: "missing or malformed Origin", code: "FORBIDDEN_ORIGIN" });
+        return;
+      }
+      headers = { ...headers, ...corsHeaders(origin) };
+      const route = (req.url ?? "/").split("?")[0]!;
+      const method = JSON_METHODS.get(route.slice(1));
+      if (!route.startsWith("/") || !method) {
+        reply(404, { error: `Unknown wallet path: ${route}` });
+        return;
+      }
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, headers);
+        res.end();
+        return;
+      }
+      if (req.method !== "POST") {
+        reply(405, { message: "POST only" });
+        return;
+      }
+      if (req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+        reply(415, { message: "Content-Type must be application/json" });
+        return;
+      }
+      const args = await readJsonApiBody(req);
+      const ctx = backend ?? (wireBackend ? { ...wireBackend, fetchFn: fetch } : null);
+      if (!ctx) {
+        reply(503, { message: "wallet engine offline" });
+        return;
+      }
+      const originator = parsed.host;
+      if (!JSON_PUBLIC_METHODS.has(method)) {
+        const gate = await check(ctx.db, originator, 0, `brc100-json-${method}`);
+        if (gate.verdict !== "allow") {
+          reply(403, { message: `POLICY_DENY: ${gate.reason}`, code: "POLICY_DENY" });
+          return;
+        }
+      }
+      if (method === "signAction" && typeof args.reference === "string") {
+        const staged = await ctx.db("brc100_pending").where({ reference: args.reference }).first();
+        if (staged) {
+          const context = JSON.parse(staged.context) as { origin: string; external: number; fee: number };
+          const amount = context.external + context.fee;
+          if (context.origin !== originator || !Number.isSafeInteger(amount) || amount < 0) {
+            reply(403, { message: "POLICY_DENY: action owner mismatch or invalid spend", code: "POLICY_DENY" });
+            return;
+          }
+          const gate = await check(ctx.db, originator, amount, "brc100-action");
+          if (gate.verdict !== "allow") {
+            reply(403, { message: `POLICY_DENY: ${gate.reason}`, code: "POLICY_DENY" });
+            return;
+          }
+        }
+      }
+      const wallet = createBrc100Wallet(ctx);
+      const out = await wallet[method](args, originator);
+      reply(200, method === "waitForAuthentication" ? { authenticated: true } : out ?? {});
+    } catch (e) {
+      const error = e as { status?: number; code?: unknown; message?: string };
+      const code = typeof error?.code === "string" && error.message?.startsWith(`${error.code}:`)
+        ? error.code : undefined;
+      const status = error?.status ?? (code === "POLICY_DENY" ? 403 : code ? 400 : 500);
+      reply(status, { message: status === 500 ? "wallet request failed" : error.message, ...(code ? { code } : {}) });
+    }
+  };
+}
+
+export async function listenJsonApi(port = JSON_API_PORT, backend?: Brc100Context): Promise<http.Server> {
+  const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000 }, jsonApiHandler(backend));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  return server;
+}
+
 function handler() {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.url === "/health" && req.method === "GET") {
@@ -199,11 +323,21 @@ export async function main(): Promise<void> {
   const options = { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
   const serve = handler();
 
-  await new Promise<void>((resolve) => {
-    https.createServer(options, serve).listen(PORT, "127.0.0.1", resolve);
+  const tlsServer = https.createServer(options, serve);
+  await new Promise<void>((resolve, reject) => {
+    tlsServer.once("error", reject);
+    tlsServer.listen(PORT, "127.0.0.1", resolve);
   });
   // eslint-disable-next-line no-console
   console.log(`bsv-walletd ${VERSION} https on 127.0.0.1:${PORT}`);
+
+  try {
+    await listenJsonApi();
+  } catch (e) {
+    tlsServer.close();
+    throw e;
+  }
+  console.log(`bsv-walletd metanet JSON API on http://127.0.0.1:${JSON_API_PORT}`);
 
   try {
     fs.mkdirSync(RUNTIME_DIR, { recursive: true });
@@ -291,5 +425,8 @@ export async function main(): Promise<void> {
 }
 
 if (process.argv[1]?.endsWith("index.ts") || process.argv[1]?.endsWith("index.js")) {
-  void main();
+  void main().catch((err) => {
+    console.error("walletd startup failed:", err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  });
 }

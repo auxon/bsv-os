@@ -275,6 +275,7 @@ interface StagedInput {
   scriptHex: string;
   value: number;
   unlockHex: string | null;
+  unlockingScriptLength?: number;
   sequence: number;
   description: string;
   mine: boolean;
@@ -345,7 +346,7 @@ function parseAtomicBeef(raw: unknown): Transaction {
   if (!beef.txs.length) brcErr("BAD_PARAM", "BEEF has no transactions");
   const subject = beef.txs[beef.txs.length - 1]!;
   if (!subject.tx) brcErr("BAD_PARAM", "BEEF subject has no transaction");
-  return subject.tx;
+  return beef.findTransactionForSigning(subject.txid)!;
 }
 
 function randomReference(): string {
@@ -619,24 +620,31 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
         brcErr("BAD_PARAM", "trustSelf must be 'known'");
       }
       const rawInputs = Array.isArray(args.inputs) ? (args.inputs as Record<string, unknown>[]) : [];
+      if (rawInputs.length > 30) brcErr("BAD_PARAM", "at most 30 explicit inputs supported");
       const shaped: Array<{
         txid: string; vout: number; inputDescription: string;
-        sequence: number; unlockHex: string | null;
+        sequence: number; unlockHex: string | null; unlockingScriptLength?: number;
       }> = [];
       for (const [i, raw] of rawInputs.entries()) {
         if (!raw || typeof raw !== "object") brcErr("BAD_PARAM", `inputs[${i}] must be an object`);
         const parts = splitOutpoint(str(raw.outpoint));
-        if (!parts) brcErr("BAD_PARAM", `inputs[${i}].outpoint must be <txid>.<vout>`);
+        if (!parts || !Number.isInteger(parts.vout) || parts.vout > 0xffffffff) brcErr("BAD_PARAM", `inputs[${i}].outpoint must be <txid>.<vout>`);
+        if (shaped.some((s) => s.txid === parts.txid && s.vout === parts.vout)) brcErr("BAD_PARAM", `inputs[${i}] duplicates an outpoint`);
         const inputDescription = checkDescription(raw.inputDescription, 5, 2000, `inputs[${i}].inputDescription`);
         const sequence = raw.sequenceNumber === undefined ? 0xffffffff : Math.floor(Number(raw.sequenceNumber) || 0);
         if (!(sequence >= 0 && sequence <= 0xffffffff)) brcErr("BAD_PARAM", `inputs[${i}].sequenceNumber out of range`);
         const unlockHex = raw.unlockingScript === undefined ? null : str(raw.unlockingScript).toLowerCase();
-        if (unlockHex !== null && (!isHex(unlockHex) || !unlockHex)) brcErr("BAD_PARAM", `inputs[${i}].unlockingScript must be hex`);
-        if (raw.unlockingScriptLength !== undefined) {
-          const len = Math.floor(Number(raw.unlockingScriptLength) || 0);
-          if (!(len > 0)) brcErr("BAD_PARAM", `inputs[${i}].unlockingScriptLength must be positive`);
+        if (unlockHex !== null && (!isHex(unlockHex) || unlockHex.length % 2 !== 0)) brcErr("BAD_PARAM", `inputs[${i}].unlockingScript must be hex`);
+        const unlockingScriptLength = raw.unlockingScriptLength === undefined ? undefined : num(raw.unlockingScriptLength);
+        if (unlockingScriptLength !== undefined) {
+          if (!Number.isInteger(unlockingScriptLength) || unlockingScriptLength < 1 || unlockingScriptLength > 0xffffffff) {
+            brcErr("BAD_PARAM", `inputs[${i}].unlockingScriptLength must be an integer from 1 to 4294967295`);
+          }
+          if (unlockHex !== null && unlockHex.length / 2 > unlockingScriptLength) {
+            brcErr("BAD_PARAM", `inputs[${i}].unlockingScript exceeds unlockingScriptLength`);
+          }
         }
-        shaped.push({ txid: parts.txid, vout: parts.vout, inputDescription, sequence, unlockHex });
+        shaped.push({ txid: parts.txid, vout: parts.vout, inputDescription, sequence, unlockHex, unlockingScriptLength });
       }
       // Explicit outputs.
       const rawOutputs = Array.isArray(args.outputs) ? (args.outputs as Record<string, unknown>[]) : [];
@@ -665,20 +673,42 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
       const ours = ourPrefix(address);
       const lock = p2pkhScript(address);
       for (const o of outs) o.mine = isOurScript(o.scriptHex, ours);
-      // Resolve scripts: caller-signed legs ride as-is (value needed for
-      // fee math); anything else must be ours for us to sign.
+      const parents = new Map<string, Transaction>();
+      if (args.inputBEEF !== undefined) {
+        const bytes = checkBytes(args.inputBEEF, "inputBEEF");
+        try {
+          const beef = Beef.fromBinary(bytes);
+          for (const entry of beef.txs) {
+            if (entry.isTxidOnly) continue;
+            const parent = Transaction.fromBinary(entry.rawTx!);
+            if (parent.id("hex") !== entry.txid) throw new Error("parent txid mismatch");
+            parents.set(entry.txid, parent);
+          }
+        } catch {
+          brcErr("BAD_PARAM", "inputBEEF must contain valid txid-matching transaction data");
+        }
+      }
       const explicit: StagedInput[] = [];
       for (const [i, s] of shaped.entries()) {
-        const resolved = await lockingScriptOf(s.txid, s.vout, fetchFn);
-        if (s.unlockHex === null && !isOurScript(resolved.scriptHex, ours)) {
-          brcErr("CANNOT_SIGN", `inputs[${i}] is not ours and carries no unlocking script`);
+        const parent = parents.get(s.txid);
+        const output = parent?.outputs[s.vout];
+        if (parent && (!output?.lockingScript || !Number.isSafeInteger(output.satoshis) || output.satoshis! < 0 || output.satoshis! > 2100000000000000)) {
+          brcErr("BAD_PARAM", `inputs[${i}] has no valid source output in inputBEEF`);
+        }
+        const resolved = output
+          ? { scriptHex: output.lockingScript.toHex(), value: output.satoshis! }
+          : await lockingScriptOf(s.txid, s.vout, fetchFn);
+        const mine = s.unlockHex === null && isOurScript(resolved.scriptHex, ours);
+        if (s.unlockHex === null && !mine && s.unlockingScriptLength === undefined) {
+          brcErr("CANNOT_SIGN", `inputs[${i}] is not ours and carries no unlocking script or deferred length`);
         }
         explicit.push({
           txid: s.txid, vout: s.vout,
-          scriptHex: s.unlockHex === null ? resolved.scriptHex : "",
+          scriptHex: resolved.scriptHex,
           value: resolved.value,
-          unlockHex: s.unlockHex, sequence: s.sequence, description: s.inputDescription,
-          mine: s.unlockHex === null,
+          unlockHex: s.unlockHex, unlockingScriptLength: s.unlockingScriptLength,
+          sequence: s.sequence, description: s.inputDescription,
+          mine,
         });
       }
       if (options.randomizeOutputs !== false) {
@@ -709,7 +739,11 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
       // Caller legs without scripts stay empty here by design (the page
       // signs them later via signAction); templates never serialize.
       const utxos: SpendableUtxo[] = [
-        ...explicit.map((e) => ({ txid: e.txid, vout: e.vout, value: e.value, scriptHex: e.scriptHex })),
+        ...explicit.map((e) => ({
+          txid: e.txid, vout: e.vout, value: e.value, scriptHex: e.scriptHex,
+          unlockingScriptLength: e.mine ? Math.max(108, e.unlockingScriptLength ?? 0)
+            : e.unlockingScriptLength ?? (e.unlockHex === null ? 108 : e.unlockHex.length / 2),
+        })),
         ...funding,
       ];
       const unsigned = explicit.some((e) => !e.unlockHex);
@@ -727,7 +761,16 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
         payments: outs.map((o) => ({ sats: o.sats, scriptHex: o.scriptHex })),
         changeScriptHex: lock.toHex(),
         keepOrder: true,
+        requiredInputs: explicit.length,
       });
+      built.tx.version = version;
+      built.tx.lockTime = lockTime;
+      for (const [i, e] of explicit.entries()) {
+        const input = built.tx.inputs[i]!;
+        input.sequence = e.sequence;
+        input.sourceTransaction = parents.get(e.txid);
+        if (e.unlockHex !== null) input.unlockingScript = UnlockingScript.fromHex(e.unlockHex);
+      }
       // Policy on every sat leaving the wallet (non-ours outputs + fee).
       const external = outs.filter((o) => !isOurScript(o.scriptHex, ours)).reduce((a, o) => a + o.sats, 0);
       const gate = await check(db, origin, external + built.fee, "brc100-action");
@@ -742,7 +785,7 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
       const context: StagedContext = {
         inputs: explicit.map((e) => ({ ...e })),
         outputs: outs.map((o) => ({ ...o })),
-        funding: funding.map((f) => ({ txid: f.txid, vout: f.vout, value: f.value, scriptHex: f.scriptHex })),
+        funding: funding.slice(0, built.tx.inputs.length - explicit.length).map((f) => ({ txid: f.txid, vout: f.vout, value: f.value, scriptHex: f.scriptHex })),
         version, lockTime, labels, description, origin,
         external, fee: built.fee,
       };
@@ -793,12 +836,15 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
       // Attach caller unlocks (sequences honored everywhere; scripts on
       // OUR inputs are ignored — we always sign our own).
       for (const [idxRaw, raw] of Object.entries(spends)) {
-        const idx = Math.floor(Number(idxRaw) || 0);
-        if (!(idx >= 0 && idx < tx.inputs.length)) brcErr("BAD_PARAM", `spend index ${idxRaw} out of range`);
+        const idx = Number(idxRaw);
+        if (!/^(0|[1-9]\d*)$/.test(idxRaw) || !Number.isInteger(idx) || !(idx >= 0 && idx < tx.inputs.length)) brcErr("BAD_PARAM", `spend index ${idxRaw} out of range`);
         const s = (raw ?? {}) as Record<string, unknown>;
         if (!isOursIdx(idx)) {
           const unlockHex = str(s.unlockingScript).toLowerCase();
-          if (!isHex(unlockHex) || !unlockHex) brcErr("BAD_PARAM", `spends[${idx}].unlockingScript must be hex`);
+          if (!isHex(unlockHex) || unlockHex.length % 2 !== 0) brcErr("BAD_PARAM", `spends[${idx}].unlockingScript must be hex`);
+          const input = context.inputs[idx]!;
+          const maxLength = input.unlockingScriptLength ?? (input.unlockHex ? input.unlockHex.length / 2 : 108);
+          if (unlockHex.length / 2 > maxLength) brcErr("BAD_PARAM", `spends[${idx}].unlockingScript exceeds unlockingScriptLength`);
           let unlock: Script;
           try {
             unlock = Script.fromHex(unlockHex);

@@ -15,6 +15,7 @@ export interface SpendableUtxo {
   vout: number;
   value: number;
   scriptHex: string;
+  unlockingScriptLength?: number;
 }
 
 export interface UnlockHook {
@@ -68,18 +69,23 @@ export function buildTx(opts: {
    * funding, so no other sat can take its place.
    */
   keepOrder?: boolean;
+  requiredInputs?: number;
 }): BuiltTx {
+  const required = opts.requiredInputs ?? 0;
+  if (!Number.isInteger(required) || required < 0 || required > Math.min(30, opts.utxos.length) || (required > 0 && !opts.keepOrder)) {
+    throw new Error("requiredInputs must be an ordered prefix of at most 30 inputs");
+  }
+  const varIntSize = (n: number): number => n < 253 ? 1 : n <= 0xffff ? 3 : n <= 0xffffffff ? 5 : 9;
+  const unlockLength = (u: SpendableUtxo): number => {
+    const n = u.unlockingScriptLength ?? 108;
+    if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) throw new Error("invalid unlockingScriptLength");
+    return n;
+  };
   const need = opts.payments.reduce((a, p) => a + p.sats, 0);
   const ordered = opts.keepOrder ? [...opts.utxos] : [...opts.utxos].sort((a, b) => b.value - a.value);
   const sorted = ordered.slice(0, 30);
   const picked: SpendableUtxo[] = [];
   let total = 0;
-  for (const u of sorted) {
-    picked.push(u);
-    total += u.value;
-    if (total >= need + MIN_MINER_FEE) break;
-  }
-  if (total < need) throw new Error(`insufficient funds (have ${total}, need ${need} + fee)`);
 
   const outLens: number[] = opts.payments.map((p) => {
     const scriptLen = p.scriptHex
@@ -88,12 +94,27 @@ export function buildTx(opts: {
         ? p2pkhScript(p.address).toHex().length / 2
         : 0;
     if (!scriptLen) throw new Error("payment needs address or scriptHex");
-    return 8 + 1 + scriptLen;
+    return 8 + varIntSize(scriptLen) + scriptLen;
   });
-  if (opts.opReturn?.length) outLens.push(8 + 1 + opReturnScript(opts.opReturn).toHex().length / 2);
-  const estVsize = 10 + 1 + picked.length * 148 + 1 + outLens.reduce((a, b) => a + b, 0) + 8 + 1 + 34;
-  let fee = Math.max(MIN_MINER_FEE, Math.ceil((estVsize / 1000) * FEE_SATS_PER_KB));
-  let change = total - need - fee;
+  if (opts.opReturn?.length) {
+    const len = opReturnScript(opts.opReturn).toHex().length / 2;
+    outLens.push(8 + varIntSize(len) + len);
+  }
+  const changeLen = opts.changeScriptHex.length / 2;
+  const baseSize = 8 + varIntSize(outLens.length + 1) + outLens.reduce((a, b) => a + b, 0)
+    + 8 + varIntSize(changeLen) + changeLen;
+  let inputSize = 0;
+  let fee = MIN_MINER_FEE;
+  for (const u of sorted) {
+    picked.push(u);
+    total += u.value;
+    const len = unlockLength(u);
+    inputSize += 40 + varIntSize(len) + len;
+    fee = Math.max(MIN_MINER_FEE, Math.ceil(((baseSize + varIntSize(picked.length) + inputSize) / 1000) * FEE_SATS_PER_KB));
+    if (picked.length >= required && total >= need + fee) break;
+  }
+  if (total < need) throw new Error(`insufficient funds (have ${total}, need ${need} + fee)`);
+  const change = total - need - fee;
   if (change < 0) throw new Error(`insufficient funds for fee (short ${-change} sats)`);
   const useChange = change >= DUST;
   if (!useChange) fee += change;
@@ -103,7 +124,7 @@ export function buildTx(opts: {
     tx.addInput({
       unlockingScriptTemplate: {
         sign: (t: Transaction, i: number) => opts.unlockFor(u).sign(t, i),
-        estimateLength: async () => 108,
+        estimateLength: async () => unlockLength(u),
       },
       sourceTXID: u.txid,
       sourceOutputIndex: u.vout,
