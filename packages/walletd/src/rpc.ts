@@ -147,6 +147,12 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const b = needBackend();
     return getBalance(b.chain);
   },
+  utxos: async () => {
+    const b = needBackend();
+    const address = selfAddress();
+    const u = await b.chain.utxos(address);
+    return { address, confirmed: u.confirmed, unconfirmed: u.unconfirmed, utxos: u.utxos };
+  },
   anchor: async (params) => {
     const b = needBackend();
     const { sha256, origin } = p(params) as { sha256?: unknown; origin?: unknown };

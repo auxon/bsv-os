@@ -172,9 +172,14 @@ function safeHostname(url: string): string {
   }
 }
 
-/** Exported for tests. */
+/** Exported for tests. Any loopback address counts: 127.0.0.0/8, ::1, localhost. */
 export function isLoopbackHost(host: string): boolean {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  return (
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  );
 }
 
 function fetchLoopbackManifest(url: string): Promise<unknown> {

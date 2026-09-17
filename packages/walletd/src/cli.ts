@@ -223,6 +223,9 @@ async function main(): Promise<void> {
     case "balance":
       print(await call("balance"));
       break;
+    case "utxos":
+      print(await call("utxos"));
+      break;
     case "anchor": {
       const sha256 = rest.find((a) => !a.startsWith("--"));
       const originFlag = rest.find((a) => a.startsWith("--origin="));
@@ -957,7 +960,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

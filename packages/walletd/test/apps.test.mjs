@@ -224,6 +224,8 @@ test("checkAppUpdates reports current/unreachable/invalid/adopted", async () => 
 
 test("loopback trust stays scoped to loopback hosts", () => {
   assert.equal(isLoopbackHost("127.0.0.1"), true);
+  assert.equal(isLoopbackHost("127.0.0.2"), true);
+  assert.equal(isLoopbackHost("127.255.255.254"), true);
   assert.equal(isLoopbackHost("localhost"), true);
   assert.equal(isLoopbackHost("::1"), true);
   assert.equal(isLoopbackHost("demo.example"), false);

@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { appIdFor } from "./apps.ts";
+import { appIdFor, isLoopbackHost } from "./apps.ts";
 
 export interface LaunchPlan {
   chromium: string;
@@ -73,8 +73,7 @@ export function withBridgeFragment(startUrl: string, port: number, token: string
 
 export function isLoopbackUrl(startUrl: string): boolean {
   try {
-    const host = new URL(startUrl).hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+    return isLoopbackHost(new URL(startUrl).hostname.toLowerCase());
   } catch {
     return false;
   }

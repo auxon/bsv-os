@@ -25,6 +25,7 @@ test("bridge fragment appends without clobbering", () => {
 
 test("loopback detection gates --ignore-certificate-errors", () => {
   assert.equal(isLoopbackUrl("https://127.0.0.1:8443/"), true);
+  assert.equal(isLoopbackUrl("https://127.0.0.2:8790/"), true);
   assert.equal(isLoopbackUrl("https://localhost:8443/"), true);
   assert.equal(isLoopbackUrl("https://demo.example/"), false);
   assert.equal(isLoopbackUrl("not a url"), false);
