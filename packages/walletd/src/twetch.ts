@@ -238,12 +238,31 @@ export function buildPostScript(content: string, aip: { address: string; signatu
   return script.toHex();
 }
 
+export const MEDIA_MAX_BYTES = 1_000_000;
+
+/** Twetch's B:// media output: OP_0 OP_RETURN <B prefix> <bytes> <mime>. */
+export function buildMediaScript(bytes: number[], mime: string): string {
+  const script = new Script();
+  script.writeOpCode(0x00);
+  script.writeOpCode(0x6a);
+  script.writeBin(Utils.toArray(B_PREFIX, "utf8"));
+  script.writeBin(bytes);
+  script.writeBin(Utils.toArray(mime, "utf8"));
+  return script.toHex();
+}
+
+export interface PostMedia {
+  bytes: number[];
+  mime: string;
+}
+
 export interface PostResult {
   txid: string;
   content: string;
   authorAddress: string;
   submitted: boolean;
   submitDetail: string;
+  mediaBytes: number;
 }
 
 export interface PostContext {
@@ -265,7 +284,11 @@ export interface PostContext {
  * txid with Twetch's API for immediate indexing. A failed API submit does
  * not fail the post — the transaction is already on-chain.
  */
-export async function postText(ctx: PostContext, content: string, opts: { userId?: number } = {}): Promise<PostResult> {
+export async function postText(
+  ctx: PostContext,
+  content: string,
+  opts: { userId?: number; media?: PostMedia } = {},
+): Promise<PostResult> {
   const text = content.trim();
   if (text.length < 1) fail("BAD_PARAM", "post content required");
   if (Utils.toArray(text, "utf8").length > 2000) fail("BAD_PARAM", "post content too large");
@@ -282,23 +305,43 @@ export async function postText(ctx: PostContext, content: string, opts: { userId
     }
   }
 
+  let media: PostMedia | null = null;
+  if (opts.media) {
+    const mime = String(opts.media.mime || "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(mime)) {
+      fail("BAD_PARAM", "media mime type required (e.g. image/jpeg)");
+    }
+    if (!Array.isArray(opts.media.bytes) || opts.media.bytes.length < 1) {
+      fail("BAD_PARAM", "media bytes required");
+    }
+    if (opts.media.bytes.length > MEDIA_MAX_BYTES) {
+      fail("BAD_PARAM", `media too large (${MEDIA_MAX_BYTES} byte cap)`);
+    }
+    media = { bytes: opts.media.bytes, mime };
+  }
+
   const fields = postFields(text);
   const signature = await twetchSignBytes(aipMessage(fields));
   const scriptHex = buildPostScript(text, { address, signature });
+
+  const outputs: Array<{ lockingScript: string; satoshis: number; outputDescription: string }> = [
+    { lockingScript: scriptHex, satoshis: 0, outputDescription: "Twetch post" },
+  ];
+  if (media) {
+    outputs.push({
+      lockingScript: buildMediaScript(media.bytes, media.mime),
+      satoshis: 0,
+      outputDescription: "Twetch media",
+    });
+  }
 
   const facade = createBrc100Wallet({ db: ctx.db, chain: ctx.chain, fetchFn: ctx.fetchFn });
   const excerpt = text.replace(/\s+/g, " ").slice(0, 60);
   const action = (await facade.createAction(
     {
       description: `Twetch post: ${excerpt}`,
-      outputs: [
-        {
-          lockingScript: scriptHex,
-          satoshis: 0,
-          outputDescription: "Twetch post",
-        },
-      ],
-      labels: ["twetch", "post"],
+      outputs,
+      labels: media ? ["twetch", "post", "photo"] : ["twetch", "post"],
       options: { randomizeOutputs: false },
     },
     ctx.origin,
@@ -325,7 +368,7 @@ export async function postText(ctx: PostContext, content: string, opts: { userId
   } catch (e) {
     submitDetail = e instanceof Error ? e.message.slice(0, 200) : String(e);
   }
-  return { txid, content: text, authorAddress: address, submitted, submitDetail };
+  return { txid, content: text, authorAddress: address, submitted, submitDetail, mediaBytes: media?.bytes.length ?? 0 };
 }
 
 async function txHex(fetchFn: FetchFn, txid: string): Promise<string | null> {

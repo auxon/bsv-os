@@ -164,6 +164,7 @@ bsv twetch status               # identity + whether the posting key is imported
 bsv twetch account import-seed  # one-tap: derive at m/44'/0'/0'/0/0 from your wallet seed
 bsv twetch account import       # or prompt (hidden) for an external Twetch key
 bsv twetch post "hello chain"   # policy-gated, network fee only
+bsv twetch post "oak chair" --media photo.jpg   # embeds the photo on-chain (B:// media output)
 bsv app open localhost          # open the desktop app
 ```
 

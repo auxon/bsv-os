@@ -19,8 +19,11 @@ import {
 } from "../src/custody.ts";
 import {
   AIP_PREFIX,
+  B_PREFIX,
+  MEDIA_MAX_BYTES,
   aipMessage,
   authMessage,
+  buildMediaScript,
   buildPostScript,
   feedLatest,
   notifications,
@@ -575,4 +578,98 @@ test("twetch: user profile + posts map for the profile view", async () => {
   assert.equal(page.posts[0].user.name, "Richard A. Hein");
   assert.equal(page.nextCursor, "uc1");
   await assert.rejects(userProfile(fetchFn, 0), (e) => e.code === "BAD_PARAM");
+});
+
+test("twetch: media script matches Twetch's B:// media output", () => {
+  const media = Array.from({ length: 6010 }, (_, i) => i % 251);
+  const hex = buildMediaScript(media, "image/webp");
+  const b = Buffer.from(hex, "hex");
+  assert.equal(b[0], 0x00);
+  assert.equal(b[1], 0x6a);
+  let k = 2;
+  const readPush = () => {
+    const op = b[k++];
+    let len;
+    if (op < 0x4c) len = op;
+    else if (op === 0x4c) len = b[k++];
+    else if (op === 0x4d) { len = b[k] | (b[k + 1] << 8); k += 2; }
+    else throw new Error("unexpected opcode");
+    const data = b.subarray(k, k + len);
+    k += len;
+    return data;
+  };
+  assert.equal(readPush().toString("utf8"), B_PREFIX);
+  assert.deepEqual(Array.from(readPush()), media);
+  assert.equal(readPush().toString("utf8"), "image/webp");
+  assert.equal(k, b.length);
+});
+
+test("twetch: posting with media embeds a second OP_RETURN and pays for it", async () => {
+  const db = await memdb();
+  try {
+    await destroyWallet();
+    __resetCache();
+    await createWallet();
+    await twetchAccountRemove();
+    const key = PrivateKey.fromRandom();
+    await twetchAccountImport(key.toWif());
+
+    const self = selfAddress();
+    const chain = new MockChainProvider([
+      { address: self, utxos: [{ txid: FUNDING, vout: 0, value: 500_000, height: 100 }] },
+    ]);
+    const broadcasted = new Map();
+    chain.broadcast = async (hex) => {
+      const tx = Transaction.fromHex(hex);
+      const txid = tx.id("hex");
+      broadcasted.set(txid, hex);
+      return { txid, status: "SEEN" };
+    };
+    await setPolicy(db, "twetch", "allow", 400_000);
+
+    const media = Array.from({ length: 50_000 }, (_, i) => (i * 7) % 256);
+    const fetchFn = async (url) => {
+      const u = String(url);
+      if (u.endsWith(`/tx/${FUNDING}/hex`)) return new Response(parentHex(p2pkhScript(self).toHex(), 500_000), { status: 200 });
+      const m = /\/tx\/([0-9a-f]{64})\/hex$/.exec(u);
+      if (m) {
+        const hex = broadcasted.get(m[1]);
+        return hex ? new Response(hex, { status: 200 }) : new Response("not found", { status: 404 });
+      }
+      if (u.endsWith("/chain/info")) return new Response(JSON.stringify({ blocks: 900000 }), { status: 200 });
+      if (u.includes("/v1/auth/user-by-pubkey/")) return new Response(JSON.stringify({ userId: 32324 }), { status: 200 });
+      return new Response("{}", { status: 404 });
+    };
+
+    const res = await postText(
+      { db, chain, fetchFn, origin: "twetch", expectUserId: 32324 },
+      "vintage chair for sale",
+      { userId: 32324, media: { bytes: media, mime: "image/jpeg" } },
+    );
+    assert.equal(res.mediaBytes, media.length);
+
+    const hex = broadcasted.get(res.txid);
+    const tx = Transaction.fromHex(hex);
+    const opReturns = tx.outputs.filter((o) => o.lockingScript.toHex().startsWith("006a"));
+    assert.equal(opReturns.length, 2, "text post + media output");
+    assert.equal(opReturns[1].lockingScript.toHex(), buildMediaScript(media, "image/jpeg"));
+
+    const change = tx.outputs.find((o) => o.lockingScript.toHex().startsWith("76a914"));
+    assert.ok(change, "change output present");
+    assert.ok(change.satoshis < 500_000 - media.length * 0.5, `fee should scale with media size (change ${change.satoshis})`);
+
+    await assert.rejects(
+      postText({ db, chain, fetchFn, origin: "twetch" }, "x", { media: { bytes: new Array(MEDIA_MAX_BYTES + 1).fill(0), mime: "image/jpeg" } }),
+      (e) => e.code === "BAD_PARAM",
+    );
+    await assert.rejects(
+      postText({ db, chain, fetchFn, origin: "twetch" }, "x", { media: { bytes: [1, 2, 3], mime: "" } }),
+      (e) => e.code === "BAD_PARAM",
+    );
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    await twetchAccountRemove();
+    __resetCache();
+  }
 });

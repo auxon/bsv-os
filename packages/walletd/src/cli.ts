@@ -5,6 +5,7 @@
  * Management commands (allow/deny/lock/unlock/create) are the policy console
  * and always run locally; spends go through policy like any other origin.
  */
+import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,21 @@ async function call(method: string, params: unknown = {}): Promise<unknown> {
     sock.on("error", (e) => reject(new Error(`daemon unreachable (${SOCK}): ${e.message}`)));
     setTimeout(() => reject(new Error("daemon timeout")), 30000).unref?.();
   });
+}
+
+/** Media mime by extension for `bsv twetch post --media`. */
+function mediaMimeFor(file: string): string {
+  const ext = file.toLowerCase().split(".").pop() ?? "";
+  return (
+    {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      webp: "image/webp",
+      gif: "image/gif",
+      mp4: "video/mp4",
+    }[ext] ?? "application/octet-stream"
+  );
 }
 
 /** Hidden stdin prompt (no echo) for secrets. Falls back to visible on dumb terminals. */
@@ -705,7 +721,30 @@ async function main(): Promise<void> {
           limit: Number(flag(tRest, "limit") ?? 24),
         }));
       } else if (tSub === "post" && tArg) {
-        print(await call("twetchPost", { content: tArg, origin: flag(tRest, "origin") ?? "cli" }));
+        const mediaPath = flag(tRest, "media");
+        let mediaBase64: string | undefined;
+        let mediaMime: string | undefined;
+        if (mediaPath) {
+          if (!fs.existsSync(mediaPath)) {
+            console.error(`media file not found: ${mediaPath}`);
+            process.exitCode = 2;
+            break;
+          }
+          const bytes = fs.readFileSync(mediaPath);
+          if (!bytes.length || bytes.length > 1_000_000) {
+            console.error("media must be 1..1,000,000 bytes");
+            process.exitCode = 2;
+            break;
+          }
+          mediaBase64 = bytes.toString("base64");
+          mediaMime = flag(tRest, "media-mime") ?? mediaMimeFor(mediaPath);
+        }
+        print(await call("twetchPost", {
+          content: tArg,
+          origin: flag(tRest, "origin") ?? "cli",
+          mediaBase64,
+          mediaMime,
+        }));
       } else if (tSub === "account") {
         if (tArg === "import-seed" || tArg === "derive") {
           print(await call("twetchAccountImportFromSeed", { path: flag(tRest, "path") }));
@@ -734,7 +773,7 @@ async function main(): Promise<void> {
           process.exitCode = 2;
         }
       } else {
-        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--origin=name]|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|user <id> [--limit=N]|market [listings|sales|collections] [--cursor=C] [--limit=N]|status|account <status|import|import-phrase|import-seed|remove>>");
+        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--media=<file> [--media-mime=<mime>]] [--origin=name]|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|user <id> [--limit=N]|market [listings|sales|collections] [--cursor=C] [--limit=N]|status|account <status|import|import-phrase|import-seed|remove>>");
         process.exitCode = 2;
       }
       break;

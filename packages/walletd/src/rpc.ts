@@ -940,6 +940,14 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     if (typeof raw.content !== "string" || !raw.content.trim()) {
       throw Object.assign(new Error("post content required"), { code: "BAD_PARAM" });
     }
+    let media: { bytes: number[]; mime: string } | undefined;
+    if (typeof raw.mediaBase64 === "string" && raw.mediaBase64) {
+      const bytes = Array.from(Buffer.from(raw.mediaBase64, "base64"));
+      if (!bytes.length) {
+        throw Object.assign(new Error("mediaBase64 is not valid base64"), { code: "BAD_PARAM" });
+      }
+      media = { bytes, mime: typeof raw.mediaMime === "string" ? raw.mediaMime : "" };
+    }
     const session = await currentSession(b.db).catch(() => null);
     const userId = Math.floor(Number(session?.sub ?? 0));
     return postText(
@@ -951,7 +959,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         expectUserId: userId,
       },
       raw.content,
-      { userId },
+      { userId, media },
     );
   },
   twetchAccountImport: async (params) => {
