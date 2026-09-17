@@ -514,6 +514,24 @@ Panel {
     onExited: root.refresh()
   }
 
+  // App windows outlive the click: `bsv app open` blocks until its window
+  // closes, so Open must NOT reuse the single-shot actionProc above — a
+  // second Open while one window lives would be swallowed by its running
+  // guard (exactly the one-app-at-a-time symptom). A transient user scope
+  // detaches the opener; the CLI keeps supervising its bridge/window pair
+  // and the scope ends with it. The panel just stops waiting on clicks.
+  Process {
+    id: openProc
+    property string domain: ""
+    command: ["systemd-run", "--user", "--scope", "--quiet", "bsv", "app", "open", domain]
+    onExited: root.refresh()
+  }
+
+  function openApp(domain) {
+    openProc.domain = domain;
+    openProc.running = true;
+  }
+
   Process {
     id: shareProc
     property string path: ""
@@ -1047,7 +1065,7 @@ Panel {
             Button {
               text: "Open"
               visible: !!modelData.installed
-              onClicked: root.runAppAction(["app", "open", modelData.domain])
+              onClicked: root.openApp(modelData.domain)
             }
 
             Button {
