@@ -155,6 +155,23 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   per F1, no system surface; TinyBets additionally age-gated out of
   defaults). Layer: shell + rails. Size: **S** (decision + links; each
   promotion later becomes its own F-item). Depends: **F1, F12, F13**.
+- **F16 — Twetch companion (feed + notifications + BRC-100 posting).**
+  Problem: Twetch reading/posting lives in a browser tab disconnected from
+  the OS wallet, and the account key never meets system policy. Behavior:
+  bundled runner app (`https://localhost:2121/twetch/`) plus `bsv twetch`
+  commands — keyless public feed/notifications reads via api.twetch.com,
+  and on-chain posting that rebuilds Twetch's exact B://+MAP+AIP record,
+  funded by the BRC-100 wallet (policy-gated network fee) with AIP/API
+  auth signed by an explicitly imported Twetch account key that never
+  funds and never joins the OS identity. One-tap panel import derives that
+  key from the enrolled seed at `m/44'/0'/0'/0/0` (custody-local; seed and
+  WIF never leave the module) and verifies the derived pubkey against
+  Twetch's key-linkage index. Layer: daemon (twetch.ts, custody
+  key, RPC/CLI) + runner (app + manifest + catalog) + shell (panel
+  Identity action). Size: **M**. State: pilot implemented and tested
+  (166 tests); reply/media/green/paid-content remain out of scope until
+  the read/post core proves out. Depends: **F2**
+  (runner), **P4** (Twetch OIDC identity).
 
 ## Dependency sketch
 

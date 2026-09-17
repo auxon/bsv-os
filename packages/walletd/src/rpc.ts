@@ -1,4 +1,11 @@
 import { createWallet, exportEntropy, getStatus, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
+import {
+  twetchAccountImport,
+  twetchAccountImportFromPhrase,
+  twetchAccountImportFromSeed,
+  twetchAccountRemove,
+  twetchAccountStatus,
+} from "./custody.ts";
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
@@ -22,6 +29,7 @@ import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer } from "./swaps.ts";
+import { feedLatest, notifications, postNotifications, postText, userByPubkey } from "./twetch.ts";
 import {
   cancelLogin,
   currentSession,
@@ -53,6 +61,28 @@ function needBackend(): MonitorBackend {
     throw err;
   }
   return backend;
+}
+
+/** Signed-in Twetch account key (OIDC claim), used as the import scan target. */
+function twetchTarget(session: { twetchPubkey?: string | null } | null): string | undefined {
+  return typeof session?.twetchPubkey === "string" && session.twetchPubkey ? session.twetchPubkey : undefined;
+}
+
+/** Best-effort linkage check against Twetch's key index. */
+async function verifyTwetchImport(
+  imported: { publicKey: string },
+  session: { sub?: string | null } | null,
+): Promise<Record<string, unknown>> {
+  let verifiedUserId: number | null = null;
+  let matchesSession: boolean | null = null;
+  try {
+    verifiedUserId = await userByPubkey(fetch, imported.publicKey);
+    const sub = Math.floor(Number(session?.sub ?? 0));
+    matchesSession = verifiedUserId !== null && sub > 0 ? verifiedUserId === sub : null;
+  } catch {
+    verifiedUserId = null;
+  }
+  return { ...imported, verifiedUserId, matchesSession };
 }
 
 interface RpcRequest {
@@ -839,6 +869,112 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   identityLogout: async () => {
     const b = needBackend();
     return identityLogout(b.db);
+  },
+  /**
+   * Twetch companion: keyless reads (feed, notifications) plus posting.
+   * Posting spends the network fee through the BRC-100 facade under the
+   * caller's origin; the imported Twetch key only signs AIP/API auth.
+   */
+  twetchStatus: async () => {
+    const b = needBackend();
+    const account = await twetchAccountStatus();
+    let identity: Record<string, unknown> | null = null;
+    try {
+      const s = await currentSession(b.db);
+      if (s) {
+        identity = {
+          sub: s.sub, handle: s.handle, name: s.name,
+          picture: s.picture, profile: s.profile,
+        };
+      }
+    } catch {
+      identity = null;
+    }
+    return { account, identity };
+  },
+  twetchFeed: async (params) => {
+    needBackend();
+    const raw = p(params);
+    return feedLatest(fetch, {
+      limit: typeof raw.limit === "number" ? raw.limit : 30,
+      cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,
+    });
+  },
+  twetchNotifications: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    const session = await currentSession(b.db);
+    const userId = Math.floor(Number(session?.sub ?? 0));
+    if (!(userId > 0)) {
+      throw Object.assign(new Error("sign in with Twetch first: bsv login"), { code: "BAD_PARAM" });
+    }
+    const limit = typeof raw.limit === "number" ? raw.limit : 30;
+    const [feed, posts] = await Promise.all([
+      notifications(fetch, userId, { limit }),
+      postNotifications(fetch, userId, { limit: Math.min(limit, 20) }),
+    ]);
+    return { userId, ...feed, postNotifications: posts.posts };
+  },
+  twetchPost: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    if (typeof raw.content !== "string" || !raw.content.trim()) {
+      throw Object.assign(new Error("post content required"), { code: "BAD_PARAM" });
+    }
+    const session = await currentSession(b.db).catch(() => null);
+    const userId = Math.floor(Number(session?.sub ?? 0));
+    return postText(
+      {
+        db: b.db,
+        chain: b.chain,
+        fetchFn: fetch,
+        origin: typeof raw.origin === "string" && raw.origin ? raw.origin : "twetch",
+        expectUserId: userId,
+      },
+      raw.content,
+      { userId },
+    );
+  },
+  twetchAccountImport: async (params) => {
+    const raw = p(params);
+    if (typeof raw.wif !== "string" || !raw.wif.trim()) {
+      throw Object.assign(new Error("private key (WIF) required"), { code: "BAD_PARAM" });
+    }
+    return twetchAccountImport(raw.wif);
+  },
+  /**
+   * One-tap import: derive the Twetch account key from the enrolled seed
+   * (default m/44'/0'/0'/0/0) and store it. Derivation and storage happen
+   * inside custody; this only sees the public key, which it checks against
+   * Twetch's key-linkage index to confirm the key really is the account's.
+   */
+  twetchAccountImportFromSeed: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    const path = typeof raw.path === "string" && raw.path ? raw.path : undefined;
+    const session = await currentSession(b.db).catch(() => null);
+    const imported = await twetchAccountImportFromSeed(path, twetchTarget(session));
+    return verifyTwetchImport(imported, session);
+  },
+  /**
+   * Same scan-and-verify import from an explicitly supplied phrase (a
+   * separate Twetch wallet). The phrase is used locally and never stored
+   * beyond the derived key entry.
+   */
+  twetchAccountImportFromPhrase: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    if (typeof raw.phrase !== "string" || !raw.phrase.trim()) {
+      throw Object.assign(new Error("recovery phrase required"), { code: "BAD_PARAM" });
+    }
+    const path = typeof raw.path === "string" && raw.path ? raw.path : undefined;
+    const session = await currentSession(b.db).catch(() => null);
+    const imported = await twetchAccountImportFromPhrase(raw.phrase, path, twetchTarget(session));
+    return verifyTwetchImport(imported, session);
+  },
+  twetchAccountRemove: async () => {
+    await twetchAccountRemove();
+    return { removed: true };
   },
 };
 

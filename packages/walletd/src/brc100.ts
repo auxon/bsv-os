@@ -157,7 +157,7 @@ function checkDescription(v: unknown, min: number, max: number, field: string): 
 
 function checkSats(v: unknown, field: string): number {
   const n = num(v);
-  if (!Number.isInteger(n) || n < 1 || n > 2100000000000000) brcErr("BAD_PARAM", `${field} must be 1-2.1e15 sats`);
+  if (!Number.isInteger(n) || n < 0 || n > 2100000000000000) brcErr("BAD_PARAM", `${field} must be 0-2.1e15 sats`);
   return n;
 }
 

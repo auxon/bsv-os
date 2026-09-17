@@ -17,6 +17,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { entropyToMnemonic, mnemonicToEntropy } from "@scure/bip39";
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import {
+  BSM,
   BigNumber,
   ECDSA,
   Hash,
@@ -453,6 +454,227 @@ export function p2pkhUnlockHook(path: string, satoshis: number, lockingScript: S
       return template.sign(tx, inputIndex);
     },
   };
+}
+
+// ── Twetch account key ────────────────────────────────────────────────
+//
+// The Twetch wallet key is external (owned by the user's Twetch account,
+// not derived from this wallet's seed). It is imported explicitly, lives
+// in the same keyring under its own account entry, and only ever signs:
+// AIP post authorship and Twetch API auth headers. It never funds and
+// never touches bsvOS identity.
+
+const TWETCH_KEY_ACCOUNT = "twetch-account";
+
+async function twetchKey(): Promise<PrivateKey | null> {
+  const wif = await keytar.getPassword(svc().service, TWETCH_KEY_ACCOUNT).catch(() => null);
+  if (!wif) return null;
+  try {
+    return PrivateKey.fromWif(wif);
+  } catch {
+    return null;
+  }
+}
+
+export interface TwetchAccountStatus {
+  imported: boolean;
+  address: string | null;
+  publicKey: string | null;
+}
+
+export async function twetchAccountStatus(): Promise<TwetchAccountStatus> {
+  const key = await twetchKey();
+  return key
+    ? {
+        imported: true,
+        address: key.toPublicKey().toAddress("mainnet"),
+        publicKey: key.toPublicKey().toString(),
+      }
+    : { imported: false, address: null, publicKey: null };
+}
+
+/** Import the Twetch account key (WIF). The secret is never returned. */
+export async function twetchAccountImport(wif: string): Promise<{ address: string }> {
+  const trimmed = wif.trim();
+  let key: PrivateKey;
+  try {
+    key = PrivateKey.fromWif(trimmed);
+  } catch {
+    throw new CustodyError("BAD_WIF", "that is not a valid private key (WIF)");
+  }
+  await keytar.setPassword(svc().service, TWETCH_KEY_ACCOUNT, key.toWif());
+  return { address: key.toPublicKey().toAddress("mainnet") };
+}
+
+/** Standard BIP44 path for the Twetch wallet key ("conventional wallet"). */
+export const TWETCH_DEFAULT_PATH = "m/44'/0'/0'/0/0";
+
+/**
+ * Bounded candidate paths tried when the caller knows the expected public
+ * key (the OIDC session's twetch_pubkey claim): the standard path first,
+ * then the usual BIP44/BIP32 homes. Purely local derivation; nothing is
+ * stored unless one of them actually matches.
+ */
+const TWETCH_SCAN_PATHS = [
+  "m/44'/0'/0'/0/0",
+  "m/44'/0'/0'/0/1",
+  "m/44'/0'/0'/0/2",
+  "m/44'/0'/0'/1/0",
+  "m/44'/0'/0'/1/1",
+  "m/44'/236'/0'/0/0",
+  "m/44'/236'/0'/0/1",
+  "m/44'/0'/0'",
+  "m/44'/236'/0'",
+  "m/0'/0'",
+  "m/0'/0'/0'",
+  "m/0/0",
+  "m/0",
+  "m/1",
+  "m",
+];
+
+function deriveAt(hd: HD, path: string): PrivateKey {
+  return path === "m" ? hd.privKey : hd.derive(path).privKey;
+}
+
+/**
+ * One-tap import: derive the Twetch account key from the enrolled BIP39
+ * phrase and store it as the Twetch account key. With a target public key
+ * (the signed-in account's Twetch key from the OIDC session) the bounded
+ * path scan above runs and the key is stored only on a match — so a seed
+ * that does not actually hold the Twetch key fails loudly instead of
+ * importing a key the account cannot use. The seed and the resulting WIF
+ * never leave this module.
+ */
+async function importTwetchFromPhrase(
+  phrase: string,
+  path: string,
+  targetPubkey: string | undefined,
+  source: "seed" | "phrase",
+): Promise<{ address: string; publicKey: string; path: string; scanned: number }> {
+  const p = String(path ?? TWETCH_DEFAULT_PATH).trim();
+  if (!/^m(\/[0-9]+'?)+$/.test(p)) {
+    throw new CustodyError("BAD_PARAM", "derivation path must look like m/44'/0'/0'/0/0");
+  }
+  const target =
+    typeof targetPubkey === "string" && /^[0-9a-fA-F]{66}$/.test(targetPubkey)
+      ? targetPubkey.toLowerCase()
+      : null;
+
+  let hd: HD;
+  try {
+    hd = HD.fromSeed(new Mnemonic(phrase).toSeed());
+  } catch {
+    throw new CustodyError("BAD_PHRASE", "could not derive from that recovery phrase");
+  }
+
+  let child: PrivateKey | null = null;
+  let matchedPath: string | null = null;
+  let scanned = 0;
+  if (target) {
+    for (const candidate of [p, ...TWETCH_SCAN_PATHS.filter((c) => c !== p)]) {
+      scanned++;
+      let key: PrivateKey;
+      try {
+        key = deriveAt(hd, candidate);
+      } catch {
+        continue;
+      }
+      if (key.toPublicKey().toString().toLowerCase() === target) {
+        child = key;
+        matchedPath = candidate;
+        break;
+      }
+    }
+    if (!child) {
+      const label = source === "seed" ? "this wallet seed" : "that phrase";
+      const advice =
+        source === "seed"
+          ? "import the Twetch account WIF, or its recovery phrase with: bsv twetch account import-phrase"
+          : "double-check the phrase, or import the Twetch account WIF";
+      throw new CustodyError(
+        "NOT_FOUND",
+        `${label} does not derive your Twetch key (${scanned} paths tried) — ${advice}`,
+      );
+    }
+  } else {
+    try {
+      child = deriveAt(hd, p);
+    } catch {
+      throw new CustodyError("BAD_PHRASE", `could not derive a key from that phrase at ${p}`);
+    }
+    matchedPath = p;
+    scanned = 1;
+  }
+
+  await keytar.setPassword(svc().service, TWETCH_KEY_ACCOUNT, child.toWif());
+  return {
+    address: child.toPublicKey().toAddress("mainnet"),
+    publicKey: child.toPublicKey().toString(),
+    path: matchedPath ?? p,
+    scanned,
+  };
+}
+
+export async function twetchAccountImportFromSeed(
+  path = TWETCH_DEFAULT_PATH,
+  targetPubkey?: string,
+): Promise<{ address: string; publicKey: string; path: string; scanned: number }> {
+  const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
+  if (!stored) {
+    throw new CustodyError("NO_WALLET", "no wallet enrolled — create or import one first");
+  }
+  const phrase = normalizePhrase(stored);
+  if (!Mnemonic.isValid(phrase)) {
+    throw new CustodyError("BAD_PHRASE", "the stored recovery phrase is invalid");
+  }
+  return importTwetchFromPhrase(phrase, path, targetPubkey, "seed");
+}
+
+/**
+ * Import the Twetch account key from an explicitly supplied BIP39 phrase
+ * (a separate Twetch wallet, not the enrolled bsvOS seed). Same bounded
+ * path scan against the expected account key; the phrase and the derived
+ * WIF never leave this module.
+ */
+export async function twetchAccountImportFromPhrase(
+  phrase: string,
+  path = TWETCH_DEFAULT_PATH,
+  targetPubkey?: string,
+): Promise<{ address: string; publicKey: string; path: string; scanned: number }> {
+  const normalized = normalizePhrase(phrase);
+  if (!normalized || !Mnemonic.isValid(normalized)) {
+    throw new CustodyError("BAD_PHRASE", "that is not a valid 12/24-word recovery phrase");
+  }
+  return importTwetchFromPhrase(normalized, path, targetPubkey, "phrase");
+}
+
+/** Public key of the imported Twetch key (public information), or null. */
+export async function twetchPublicKey(): Promise<string | null> {
+  const key = await twetchKey();
+  return key ? key.toPublicKey().toString() : null;
+}
+
+export async function twetchAccountRemove(): Promise<void> {
+  await keytar.deletePassword(svc().service, TWETCH_KEY_ACCOUNT).catch(() => false);
+}
+
+/**
+ * BSM (Bitcoin Signed Message) over raw bytes with the Twetch account key.
+ * Used for AIP post authorship and x-twetch-sig API auth. Returns base64.
+ */
+export async function twetchSignBytes(message: number[]): Promise<string> {
+  const key = await twetchKey();
+  if (!key) {
+    throw new CustodyError("NO_TWETCH_ACCOUNT", "no Twetch key imported — run: bsv twetch account import");
+  }
+  return BSM.sign(message, key, "base64") as string;
+}
+
+/** P2PKH address of the imported Twetch key, or null when not imported. */
+export async function twetchAddress(): Promise<string | null> {
+  const key = await twetchKey();
+  return key ? key.toPublicKey().toAddress("mainnet") : null;
 }
 
 /**

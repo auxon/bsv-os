@@ -1,0 +1,13 @@
+{
+  "name": "Twetch",
+  "short_name": "Twetch",
+  "start_url": "https://localhost:2121/twetch/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Twetch companion: read the public feed and notifications, post text on-chain through the OS wallet (network fee only).",
+      "spendingAuthorization": { "amount": 20000, "description": "network fees for posts" }
+    }
+  }
+}

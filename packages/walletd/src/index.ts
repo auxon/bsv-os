@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
 import { dispatch, setBackend } from "./rpc.ts";
 import { VERSION } from "./rpc.ts";
@@ -118,6 +119,34 @@ function originHost(origin: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+const TWETCH_ASSETS: Record<string, string> = {
+  "/": "index.html",
+  "/index.html": "index.html",
+  "/app.js": "app.js",
+  "/styles.css": "styles.css",
+  "/manifest.json": "manifest.json",
+};
+
+const TWETCH_MIME: Record<string, string> = {
+  "index.html": "text/html; charset=utf-8",
+  "app.js": "text/javascript; charset=utf-8",
+  "styles.css": "text/css; charset=utf-8",
+  "manifest.json": "application/json",
+};
+
+function twetchAppDir(): string | null {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    process.env.BSV_TWETCH_APP_DIR,
+    path.resolve(here, "../../runner/apps/twetch"),
+    "/usr/share/bsv-os/runner/apps/twetch",
+  ].filter((c): c is string => typeof c === "string" && c.length > 0);
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, "index.html"))) return dir;
+  }
+  return null;
 }
 
 const JSON_API_PORT = Number(process.env.BSV_WALLETD_JSON_PORT ?? 3321);
@@ -247,6 +276,29 @@ function handler() {
     if (req.url === "/health" && req.method === "GET") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, version: VERSION }));
+      return;
+    }
+    // Bundled Twetch companion app: static files served from the daemon's
+    // own HTTPS origin, so the page's JSON-RPC calls are same-origin and
+    // the pinned loopback cert already covers it. Domain "localhost" keys
+    // the runner app; nothing here touches custody or the app bridge.
+    if (req.method === "GET" && typeof req.url === "string" && (req.url === "/twetch" || req.url.startsWith("/twetch/"))) {
+      const rel = req.url.slice("/twetch".length).split("?")[0]!;
+      const file = TWETCH_ASSETS[rel === "" || rel === "/" ? "/" : rel];
+      const dir = file ? twetchAppDir() : null;
+      if (!file || !dir) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+        return;
+      }
+      try {
+        const body = fs.readFileSync(path.join(dir, file));
+        res.writeHead(200, { "content-type": TWETCH_MIME[file] ?? "application/octet-stream", "cache-control": "no-store" });
+        res.end(body);
+      } catch {
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end("app bundle unreadable");
+      }
       return;
     }
     // BRC-100 wire surface: the HTTP transport posts payload-only bodies

@@ -36,6 +36,11 @@ Panel {
   // null when signed out. Login shells the CLI, which opens the browser.
   property var identity: null
   property bool identityBusy: false
+  // F16 Twetch companion: account key state (`bsv twetch status`), the
+  // one-tap seed-derived import result, and its busy/notice lines.
+  property var twetchAccount: null
+  property bool twetchImportBusy: false
+  property string twetchImportNote: ""
   // F3 identity shape (see `bsv cert list`): held certificates.
   // F8 history shape (see `bsv history`): transactions, open requests,
   // policies, and rollup counts — one poll instead of three.
@@ -114,6 +119,7 @@ Panel {
           if (!storeProc.running) storeProc.running = true;
           if (!certsProc.running) certsProc.running = true;
           if (!whoamiProc.running) whoamiProc.running = true;
+          if (!twetchStatusProc.running) twetchStatusProc.running = true;
           if (!ordProc.running) ordProc.running = true;
           if (!bsv21Proc.running) bsv21Proc.running = true;
           if (!msgSyncProc.running) msgSyncProc.running = true;
@@ -240,6 +246,63 @@ Panel {
     stdout: StdioCollector {
       onStreamFinished: {
         if (!whoamiProc.running) whoamiProc.running = true;
+      }
+    }
+  }
+
+  // F16: Twetch account key. The one-tap import derives the key from the
+  // enrolled seed inside the daemon (m/44'/0'/0'/0/0 by default) and
+  // checks the derived public key against Twetch's key-linkage index, so
+  // the panel can tell "verified as your account" from "not linked".
+  Process {
+    id: twetchStatusProc
+    command: ["bsv", "twetch", "status"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const d = JSON.parse(text);
+          root.twetchAccount = d.account ?? null;
+        } catch (e) {
+          root.twetchAccount = null;
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.twetchAccount = null; }
+  }
+
+  Process {
+    id: twetchImportProc
+    command: ["bsv", "twetch", "account", "import-seed"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.twetchImportBusy = false;
+        try {
+          const d = JSON.parse(text);
+          if (d && d.error) {
+            root.twetchImportNote = `Import failed: ${d.error.message ?? d.error}`;
+          } else {
+            const r = d.result ?? d;
+            const addr = r.address ? `${String(r.address).slice(0, 10)}…` : "?";
+            if (r.matchesSession === true) {
+              root.twetchImportNote = `Imported ${addr} — verified as your Twetch account`;
+            } else if (r.verifiedUserId != null && r.matchesSession === false) {
+              root.twetchImportNote = `Imported ${addr} — linked to user ${r.verifiedUserId}, not your signed-in account`;
+            } else if (r.verifiedUserId == null) {
+              root.twetchImportNote = `Imported ${addr} — not linked to a Twetch account yet`;
+            } else {
+              root.twetchImportNote = `Imported ${addr}`;
+            }
+          }
+        } catch (e) {
+          root.twetchImportNote = "Import finished — refresh to see status";
+        }
+        if (!twetchStatusProc.running) twetchStatusProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      root.twetchImportBusy = false;
+      if (code !== 0 && root.twetchImportNote === "") {
+        root.twetchImportNote = `Import failed (exit ${code}) — is a wallet enrolled?`;
       }
     }
   }
@@ -754,6 +817,53 @@ Panel {
         text: "Sign out"
         onClicked: identityLogoutProc.running = true
       }
+    }
+
+    // F16: one-tap Twetch account import. Derives the posting key from the
+    // enrolled seed inside the daemon and verifies it against Twetch's
+    // key index — the seed and the WIF never leave the machine.
+    RowLayout {
+      visible: root.daemonUp && root.hasWallet && !(root.twetchAccount && root.twetchAccount.imported === true)
+      spacing: 8
+      Layout.fillWidth: true
+
+      Button {
+        text: root.twetchImportBusy ? "Importing…" : "Import to Twetch"
+        enabled: !root.twetchImportBusy && root.daemonUp
+        onClicked: {
+          root.twetchImportNote = "";
+          root.twetchImportBusy = true;
+          twetchImportProc.running = true;
+        }
+      }
+
+      Text {
+        text: "derive the posting key from your wallet seed (m/44'/0'/0'/0/0)"
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+    }
+
+    Text {
+      visible: root.twetchAccount && root.twetchAccount.imported === true && root.twetchImportNote === ""
+      text: root.twetchAccount && root.twetchAccount.address
+        ? `Twetch posting key: ${String(root.twetchAccount.address).slice(0, 10)}…`
+        : "Twetch posting key imported"
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    Text {
+      visible: root.twetchImportNote !== ""
+      text: root.twetchImportNote
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
     }
 
     PanelSectionHeader { text: `Approvals (${root.requests.length})` }

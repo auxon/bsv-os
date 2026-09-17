@@ -146,6 +146,45 @@ bsv logout                          # revoke refresh token, clear session
 Quickshell users can also tap **Sign in with Twetch** in the panel once the
 client id is configured — the CLI does the browser round-trip for you.
 
+### Twetch companion (feed, notifications, posting)
+
+A bundled desktop app reads the public Twetch feed and your notifications,
+and posts text on-chain through the OS wallet. It runs from the daemon's own
+loopback origin (`https://localhost:2121/twetch/`), so no third-party wallet
+or browser extension is involved.
+
+```bash
+bsv twetch feed                 # latest 30 posts (--limit=N)
+bsv twetch notifications        # replies/mentions + bell'ed accounts
+bsv twetch status               # identity + whether the posting key is imported
+bsv twetch account import-seed  # one-tap: derive at m/44'/0'/0'/0/0 from your wallet seed
+bsv twetch account import       # or prompt (hidden) for an external Twetch key
+bsv twetch post "hello chain"   # policy-gated, network fee only
+bsv app open localhost          # open the desktop app
+```
+
+The panel's Identity section also has a one-tap **Import to Twetch** button
+that runs the same seed derivation. It scans a bounded set of standard
+paths for the key your signed-in Twetch account actually uses and only
+stores a key on a match, then verifies it against Twetch's key index — so
+you can see at a glance whether it is really your account's posting key.
+If your wallet seed does not hold that key (a separate Twetch wallet),
+the import says so; in that case import the Twetch wallet directly —
+either its WIF (`bsv twetch account import`) or its recovery phrase
+(`bsv twetch account import-phrase`, hidden prompt). Phrase import uses
+the same bounded path scan against your signed-in account's key, so it
+stores a key only when it actually proves out. Derivation and storage
+happen inside custody — the seed and the WIF never leave the device.
+Posting is refused while the imported key is not linked to your signed-in
+account, so an unlinked key can never produce an orphaned on-chain post.
+
+Reading needs nothing but the runnable daemon and your `bsv login` session.
+Posting is a standard BSV transaction carrying the same B://+MAP+AIP record
+Twetch's own client builds; the imported Twetch key signs authorship (AIP)
+and API auth only — it never funds and never joins your OS wallet identity.
+The network fee is policy-gated under the `twetch` origin: the first post is
+denied until `bsv allow twetch` (optionally with a cap).
+
 ## 5. AI agents and allowances
 
 Any MCP-capable agent (Claude Code, OpenCode, …) connects with:

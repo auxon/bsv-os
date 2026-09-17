@@ -670,6 +670,53 @@ async function main(): Promise<void> {
     case "history":
       print(await call("history"));
       break;
+    case "twetch": {
+      const [tSub, ...tRest] = rest;
+      const tArg = tRest.find((a) => !a.startsWith("--"));
+      if (tSub === "feed") {
+        print(await call("twetchFeed", {
+          limit: Number(flag(tRest, "limit") ?? 30),
+          cursor: flag(tRest, "cursor"),
+        }));
+      } else if (tSub === "notifications" || tSub === "notifs") {
+        print(await call("twetchNotifications", { limit: Number(flag(tRest, "limit") ?? 30) }));
+      } else if (tSub === "status") {
+        print(await call("twetchStatus"));
+      } else if (tSub === "post" && tArg) {
+        print(await call("twetchPost", { content: tArg, origin: flag(tRest, "origin") ?? "cli" }));
+      } else if (tSub === "account") {
+        if (tArg === "import-seed" || tArg === "derive") {
+          print(await call("twetchAccountImportFromSeed", { path: flag(tRest, "path") }));
+        } else if (tArg === "import-phrase") {
+          const phrase = await readSecret("Twetch recovery phrase (12/24 words, hidden): ");
+          if (!phrase.trim()) {
+            console.error("empty phrase — aborted");
+            process.exitCode = 2;
+            break;
+          }
+          print(await call("twetchAccountImportFromPhrase", { phrase, path: flag(tRest, "path") }));
+        } else if (tArg === "import") {
+          const wif = await readSecret("Twetch account private key (WIF, hidden): ");
+          if (!wif.trim()) {
+            console.error("empty key — aborted");
+            process.exitCode = 2;
+            break;
+          }
+          print(await call("twetchAccountImport", { wif }));
+        } else if (tArg === "remove") {
+          print(await call("twetchAccountRemove"));
+        } else if (tArg === "status" || tArg === undefined) {
+          print(await call("twetchStatus"));
+        } else {
+          console.error("usage: bsv twetch account <status|import|import-phrase|import-seed [--path=m/44'/0'/0'/0/0]|remove>");
+          process.exitCode = 2;
+        }
+      } else {
+        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--origin=name]|status|account <status|import|import-phrase|import-seed|remove>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "policies":
       print(await call("policyList"));
       break;
@@ -891,7 +938,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

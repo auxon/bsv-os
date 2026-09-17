@@ -11,6 +11,11 @@
       "domain": "entangleit.com",
       "name": "Pocket Pets",
       "blurb": "Gacha buddies on BSV: raise pets, mint 1Sat NFT ordinals, battle, trade on the market. Runs on OS custody via window.bsv (needs entangleit.com/manifest.json)."
+    },
+    {
+      "domain": "localhost",
+      "name": "Twetch",
+      "blurb": "Feed and notifications companion: read the public Twetch feed, post text on-chain through the OS wallet (network fee only). Bundled with the daemon at https://localhost:2121/twetch/."
     }
   ]
 }

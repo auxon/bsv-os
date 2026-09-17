@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Twetch</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Twetch</div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="feed">Feed</button>
+        <button class="tab" data-tab="notifications">Notifications <span id="notif-badge" class="badge hidden"></span></button>
+      </nav>
+      <div class="me">
+        <img id="me-avatar" class="avatar hidden" alt="" />
+        <div class="me-text">
+          <div id="me-handle" class="me-handle">not signed in</div>
+          <div id="me-hint" class="me-hint"></div>
+        </div>
+        <button id="refresh" class="ghost" title="Refresh">↻</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="feed-view">
+        <form id="compose" class="compose">
+          <textarea id="compose-text" rows="3" maxlength="2000" placeholder="What's happening on-chain?"></textarea>
+          <div class="compose-row">
+            <span id="compose-status" class="status"></span>
+            <button id="post-btn" type="submit">Post</button>
+          </div>
+        </form>
+        <div id="feed" class="list"></div>
+      </section>
+
+      <section id="notifications-view" class="hidden">
+        <div id="notifications" class="list"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
