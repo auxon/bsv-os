@@ -18,7 +18,7 @@
  * network fee; the Twetch key only ever signs (custody boundary).
  */
 import type { Knex } from "knex";
-import { BigNumber, BSM, Script, Signature, Utils } from "@bsv/sdk";
+import { BigNumber, BSM, Hash, Script, Signature, Utils } from "@bsv/sdk";
 import type { ChainProvider } from "./chain.ts";
 import { createBrc100Wallet } from "./brc100.ts";
 import { twetchAddress, twetchPublicKey, twetchSignBytes } from "./custody.ts";
@@ -289,23 +289,11 @@ export async function postText(
   content: string,
   opts: { userId?: number; media?: PostMedia } = {},
 ): Promise<PostResult> {
-  const text = content.trim();
-  if (text.length < 1) fail("BAD_PARAM", "post content required");
-  if (Utils.toArray(text, "utf8").length > 2000) fail("BAD_PARAM", "post content too large");
-  const address = await twetchAddress();
-  if (!address) fail("NO_TWETCH_ACCOUNT", "no Twetch key imported — run: bsv twetch account import");
-  const publicKey = await twetchPublicKey();
-  if (ctx.expectUserId && ctx.expectUserId > 0 && publicKey) {
-    const owner = await userByPubkey(ctx.fetchFn, publicKey);
-    if (owner !== ctx.expectUserId) {
-      fail(
-        "TWETCH_KEY_MISMATCH",
-        "the imported Twetch key is not linked to your account — re-run Import to Twetch (or import the account WIF), then try again",
-      );
-    }
-  }
+  const base = content.trim();
+  if (base.length < 1) fail("BAD_PARAM", "post content required");
 
   let media: PostMedia | null = null;
+  let mediaRef: string | null = null;
   if (opts.media) {
     const mime = String(opts.media.mime || "").trim().toLowerCase();
     if (!/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(mime)) {
@@ -318,6 +306,25 @@ export async function postText(
       fail("BAD_PARAM", `media too large (${MEDIA_MAX_BYTES} byte cap)`);
     }
     media = { bytes: opts.media.bytes, mime };
+    mediaRef = `b://${Utils.toHex(Hash.sha256(media.bytes))}`;
+  }
+
+  // Twetch's composer adds attached media to the post as an on-chain ref
+  // ("added to your post as a link"): the ref is part of the signed text
+  // and drives image rendering on twetch.com.
+  const text = mediaRef ? `${base}\n\n${mediaRef}` : base;
+  if (Utils.toArray(text, "utf8").length > 2000) fail("BAD_PARAM", "post content too large");
+  const address = await twetchAddress();
+  if (!address) fail("NO_TWETCH_ACCOUNT", "no Twetch key imported — run: bsv twetch account import");
+  const publicKey = await twetchPublicKey();
+  if (ctx.expectUserId && ctx.expectUserId > 0 && publicKey) {
+    const owner = await userByPubkey(ctx.fetchFn, publicKey);
+    if (owner !== ctx.expectUserId) {
+      fail(
+        "TWETCH_KEY_MISMATCH",
+        "the imported Twetch key is not linked to your account — re-run Import to Twetch (or import the account WIF), then try again",
+      );
+    }
   }
 
   const fields = postFields(text);
@@ -356,7 +363,7 @@ export async function postText(
     if (hex) {
       const userId = opts.userId ?? 0;
       if (userId > 0) {
-        await submitPost(ctx, userId, text, txid, hex);
+        await submitPost(ctx, userId, text, txid, hex, mediaRef);
         submitted = true;
         submitDetail = "indexed by twetch";
       } else {
@@ -391,13 +398,21 @@ export function authMessage(method: string, path: string, userId: number, ts: nu
   return `${method}\n${path}\n${userId}\n${ts}\n${body}`;
 }
 
-async function submitPost(ctx: PostContext, userId: number, content: string, txid: string, txHexStr: string): Promise<void> {
+async function submitPost(
+  ctx: PostContext,
+  userId: number,
+  content: string,
+  txid: string,
+  txHexStr: string,
+  mediaRef: string | null = null,
+): Promise<void> {
   const path = "/v1/posts";
   const body = JSON.stringify({
     userId,
     content,
     metadataVersion: 2,
     txHex: txHexStr,
+    ...(mediaRef ? { mediaRefs: [mediaRef] } : {}),
   });
   const ts = Date.now();
   const sig = await twetchSignBytes(Utils.toArray(authMessage("POST", path, userId, ts, body), "utf8"));

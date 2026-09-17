@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-twetch";
 import knex from "knex";
-import { PrivateKey, Script, Transaction, UnlockingScript, Utils } from "@bsv/sdk";
+import { Hash, PrivateKey, Script, Transaction, UnlockingScript, Utils } from "@bsv/sdk";
 import { MockChainProvider } from "../src/chain.ts";
 import { migrate } from "../src/storage.ts";
 import {
@@ -628,7 +628,10 @@ test("twetch: posting with media embeds a second OP_RETURN and pays for it", asy
     await setPolicy(db, "twetch", "allow", 400_000);
 
     const media = Array.from({ length: 50_000 }, (_, i) => (i * 7) % 256);
-    const fetchFn = async (url) => {
+    const mediaSha = Utils.toHex(Hash.sha256(media));
+    const mediaRef = `b://${mediaSha}`;
+    const apiCalls = [];
+    const fetchFn = async (url, init) => {
       const u = String(url);
       if (u.endsWith(`/tx/${FUNDING}/hex`)) return new Response(parentHex(p2pkhScript(self).toHex(), 500_000), { status: 200 });
       const m = /\/tx\/([0-9a-f]{64})\/hex$/.exec(u);
@@ -638,6 +641,10 @@ test("twetch: posting with media embeds a second OP_RETURN and pays for it", asy
       }
       if (u.endsWith("/chain/info")) return new Response(JSON.stringify({ blocks: 900000 }), { status: 200 });
       if (u.includes("/v1/auth/user-by-pubkey/")) return new Response(JSON.stringify({ userId: 32324 }), { status: 200 });
+      if (u.endsWith("/v1/posts")) {
+        apiCalls.push({ url: u, init });
+        return new Response(JSON.stringify({ id: 4242 }), { status: 200 });
+      }
       return new Response("{}", { status: 404 });
     };
 
@@ -647,12 +654,23 @@ test("twetch: posting with media embeds a second OP_RETURN and pays for it", asy
       { userId: 32324, media: { bytes: media, mime: "image/jpeg" } },
     );
     assert.equal(res.mediaBytes, media.length);
+    assert.equal(res.submitted, true);
+    const expectedText = `vintage chair for sale\n\n${mediaRef}`;
+    assert.equal(res.content, expectedText);
 
     const hex = broadcasted.get(res.txid);
     const tx = Transaction.fromHex(hex);
     const opReturns = tx.outputs.filter((o) => o.lockingScript.toHex().startsWith("006a"));
     assert.equal(opReturns.length, 2, "text post + media output");
     assert.equal(opReturns[1].lockingScript.toHex(), buildMediaScript(media, "image/jpeg"));
+    const aip = aipFromScript(opReturns[0].lockingScript.toHex());
+    assert.equal(aip.fields[1], expectedText, "b:// ref is part of the signed post text");
+    assert.equal(verifyAip(expectedText, { address: aip.address, signature: aip.signature }), true);
+
+    assert.equal(apiCalls.length, 1, "post submitted to the Twetch API");
+    const body = JSON.parse(apiCalls[0].init.body);
+    assert.equal(body.content, expectedText);
+    assert.deepEqual(body.mediaRefs, [mediaRef], "mediaRefs drives twetch.com rendering");
 
     const change = tx.outputs.find((o) => o.lockingScript.toHex().startsWith("76a914"));
     assert.ok(change, "change output present");
