@@ -303,3 +303,25 @@ test("logout revokes the refresh token and clears the session", async () => {
     await db.destroy();
   }
 });
+
+test("re-login is allowed once the stored session has expired", async () => {
+  const db = await memdb();
+  const issuer = await makeIssuer();
+  await issuer.start();
+  try {
+    await configured(db, issuer.base);
+    const first = await login(db, issuer);
+    await first.res.text();
+    await assert.rejects(startLogin(db), (e) => e.code === "ALREADY");
+    await db("identity_session").update({ expires_at: Date.now() - 1000 });
+    const second = await login(db, issuer);
+    await second.res.text();
+    const status = await loginStatus(db);
+    assert.equal(status.state, "done");
+    assert.equal(status.session.sub, "user-42");
+  } finally {
+    cancelLogin();
+    await issuer.stop();
+    await db.destroy();
+  }
+});

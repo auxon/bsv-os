@@ -466,7 +466,13 @@ export async function startLogin(
   if (!clientId) {
     fail("SETUP_REQUIRED", "no Twetch client registered — create one at the issuer /console, then run: bsv login --client-id=<id>");
   }
-  if (!opts.force && (await sessionRow(db))) fail("ALREADY", "already signed in — run bsv logout first (or bsv login --force)");
+  if (!opts.force) {
+    const existing = await sessionRow(db);
+    const expiresAt = Math.floor(Number(existing?.expires_at) || 0);
+    if (existing && expiresAt > Date.now() + 60_000) {
+      fail("ALREADY", "already signed in — run bsv logout first (or bsv login --force)");
+    }
+  }
   if (pending && pending.status === "pending") cancelLogin();
   const fetchFn = opts.fetchFn ?? fetch;
   const endpoints = await discover(issuer, { fetchFn });
@@ -523,6 +529,7 @@ export async function startLogin(
       clearTimeout(timer);
       try {
         server.close();
+        server.closeIdleConnections?.();
       } catch {
         /* ignore */
       }
@@ -550,9 +557,11 @@ export async function startLogin(
       if (pending?.authUrl === authUrl) {
         pending.status = "error";
         pending.error = { code, message };
-        pending.close();
       }
       respond(res, 400, "Twetch sign-in failed", message);
+      res.on("finish", () => {
+        if (pending?.authUrl === authUrl) pending.close();
+      });
     };
     const gotState = url.searchParams.get("state") ?? "";
     if (!safeEq(gotState, state)) {
@@ -611,9 +620,11 @@ export async function startLogin(
         .merge();
       if (pending?.authUrl === authUrl) {
         pending.status = "done";
-        pending.close();
       }
       respond(res, 200, "Signed in with Twetch", `@${str(claims.preferred_username) || sub} — you can close this window.`);
+      res.on("finish", () => {
+        if (pending?.authUrl === authUrl) pending.close();
+      });
     } catch (e) {
       const codeName = (e as { code?: string }).code ?? "INTERNAL";
       const message = e instanceof Error ? e.message : String(e);

@@ -242,7 +242,7 @@ Panel {
 
   Process {
     id: loginProc
-    command: ["bsv", "login"]
+    command: ["bsv", "login", "--force"]
     stdout: StdioCollector {
       onStreamFinished: {
         root.identityBusy = false;
@@ -825,6 +825,16 @@ Panel {
           font.pixelSize: Style.font.caption
           wrapMode: Text.Wrap
           Layout.fillWidth: true
+        }
+      }
+
+      Button {
+        visible: root.identity !== null
+        text: root.identityBusy ? "Signing in…" : "Sign in again"
+        enabled: !root.identityBusy && root.daemonUp
+        onClicked: {
+          root.identityBusy = true;
+          loginProc.running = true;
         }
       }
 
