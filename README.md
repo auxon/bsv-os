@@ -14,7 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/auxon/bsv-os/main/scripts/install.s
 Installs the `bsv-os-meta` package from GitHub releases (SHA256-checked),
 enables the wallet daemon, and wires the shell plugin + share target.
 Dev checkout path: `scripts/post-install.sh` (clones, builds, runs tests).
-Full walkthrough: [UserGuide.md](UserGuide.md).
+Full walkthrough: [UserGuide.md](UserGuide.md). Building agents and apps
+that spend: [AGENT-ECONOMY.md](AGENT-ECONOMY.md).
 
 ## Layout
 
