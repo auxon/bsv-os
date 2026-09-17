@@ -693,6 +693,8 @@ async function main(): Promise<void> {
         }));
       } else if (tSub === "meme-folders" || tSub === "memefolders") {
         print(await call("twetchMemeFolders"));
+      } else if (tSub === "user" && tArg) {
+        print(await call("twetchUser", { id: Number(tArg), limit: Number(flag(tRest, "limit") ?? 20) }));
       } else if (tSub === "market" || tSub === "nft") {
         print(await call("twetchMarket", {
           view: tArg ?? flag(tRest, "view") ?? "listings",
@@ -729,7 +731,7 @@ async function main(): Promise<void> {
           process.exitCode = 2;
         }
       } else {
-        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--origin=name]|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|market [listings|sales|collections] [--cursor=C] [--limit=N]|status|account <status|import|import-phrase|import-seed|remove>>");
+        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--origin=name]|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|user <id> [--limit=N]|market [listings|sales|collections] [--cursor=C] [--limit=N]|status|account <status|import|import-phrase|import-seed|remove>>");
         process.exitCode = 2;
       }
       break;

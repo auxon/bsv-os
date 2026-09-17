@@ -40,6 +40,8 @@ import {
   postNotifications,
   postText,
   userByPubkey,
+  userPosts,
+  userProfile,
 } from "./twetch.ts";
 import {
   cancelLogin,
@@ -1004,6 +1006,23 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   twetchMemeFolders: async () => {
     needBackend();
     return { folders: await memeFolders(fetch) };
+  },
+  /** Public profile + recent posts for a Twetch user. */
+  twetchUser: async (params) => {
+    needBackend();
+    const raw = p(params);
+    const id = Math.floor(Number(raw.id) || 0);
+    if (!(id > 0)) {
+      throw Object.assign(new Error("userId required"), { code: "BAD_PARAM" });
+    }
+    const [user, posts] = await Promise.all([
+      userProfile(fetch, id),
+      userPosts(fetch, id, {
+        limit: typeof raw.limit === "number" ? raw.limit : 20,
+        cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,
+      }),
+    ]);
+    return { user, ...posts };
   },
   /** Read-only NFT Market: active listings, recent sales, collections. */
   twetchMarket: async (params) => {

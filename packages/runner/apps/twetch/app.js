@@ -113,6 +113,8 @@ function renderPost(post) {
 
   const head = document.createElement("div");
   head.className = "post-head";
+  head.title = `view @${post.userId}`;
+  head.addEventListener("click", () => openProfile(post.userId));
   const img = avatarEl(post.user);
   const who = document.createElement("div");
   const name = document.createElement("div");
@@ -218,6 +220,9 @@ async function loadNotifications() {
     const rows = (page?.notifications ?? []).map((n) => {
       const el = document.createElement("article");
       el.className = "post notif";
+      el.title = `view @${n.actorUserId}`;
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => openProfile(n.actorUserId));
       el.append(avatarEl(n.actor));
       const type = document.createElement("span");
       type.className = "notif-type";
@@ -382,7 +387,9 @@ $("lightbox").addEventListener("click", (e) => {
   if (e.target === $("lightbox")) closeLightbox();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("lightbox").classList.contains("hidden")) closeLightbox();
+  if (e.key !== "Escape") return;
+  if (!$("profile").classList.contains("hidden")) closeProfile();
+  else if (!$("lightbox").classList.contains("hidden")) closeLightbox();
 });
 $("meme-search").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -394,6 +401,79 @@ $("meme-sort").addEventListener("change", () => {
   loadMemes(true);
 });
 $("meme-more").addEventListener("click", () => loadMemes(false));
+
+// ── Profiles ─────────────────────────────────────────────────────────
+let profileOpenFor = 0;
+
+function profileAvatarEl(user) {
+  const url = mediaUrl(user?.icon) || user?.avatarUrl || "";
+  const img = document.createElement("img");
+  img.id = "profile-avatar";
+  img.className = "profile-avatar";
+  img.alt = "";
+  img.referrerPolicy = "no-referrer";
+  if (url) {
+    img.src = url;
+    img.onerror = () => img.replaceWith(avatarFallback(user));
+  } else {
+    return avatarFallback(user);
+  }
+  return img;
+}
+
+async function openProfile(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) return;
+  profileOpenFor = id;
+  const overlay = $("profile");
+  overlay.classList.remove("hidden");
+  $("profile-name").textContent = `user ${id}`;
+  $("profile-meta").textContent = "loading…";
+  $("profile-bio").textContent = "";
+  $("profile-posts").textContent = "";
+  const banner = $("profile-banner");
+  banner.classList.add("hidden");
+  banner.style.backgroundImage = "";
+  const avatarSlot = $("profile-avatar");
+  if (avatarSlot) avatarSlot.replaceWith(avatarFallback({ name: String(id) }));
+  try {
+    const res = await rpc("twetchUser", { id, limit: 20 });
+    if (profileOpenFor !== id) return;
+    const user = res?.user ?? {};
+    $("profile-name").textContent = user.name || `user ${id}`;
+    $("profile-meta").textContent = `u/${id} · ${user.numFollowers ?? 0} followers · ${user.numFollowing ?? 0} following${user.isGreen ? " · Green" : ""}`;
+    $("profile-bio").textContent = user.description || "";
+    const fresh = profileAvatarEl({ ...user, icon: user.avatarUrl });
+    const old = $("profile-avatar");
+    if (old) old.replaceWith(fresh);
+    else $("profile-posts").before(fresh);
+    if (user.bannerUrl) {
+      banner.style.backgroundImage = `url("${user.bannerUrl}")`;
+      banner.classList.remove("hidden");
+    }
+    $("profile-open").href = user.url || `https://twetch.com/u/${id}`;
+    const posts = res?.posts ?? [];
+    if (!posts.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No posts yet.";
+      $("profile-posts").append(empty);
+    }
+    for (const post of posts) $("profile-posts").append(renderPost(post));
+  } catch (e) {
+    if (profileOpenFor === id) $("profile-meta").textContent = e instanceof Error ? e.message : String(e);
+  }
+}
+
+function closeProfile() {
+  profileOpenFor = 0;
+  $("profile").classList.add("hidden");
+}
+
+$("profile-close").addEventListener("click", closeProfile);
+$("profile").addEventListener("click", (e) => {
+  if (e.target === $("profile")) closeProfile();
+});
 
 // ── NFT Market ───────────────────────────────────────────────────────
 const marketState = { view: "listings", cursor: null, items: [], loading: false };

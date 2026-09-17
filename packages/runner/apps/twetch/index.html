@@ -89,5 +89,23 @@
     </div>
 
     <script src="app.js"></script>
+    <div id="profile" class="lightbox hidden">
+      <div class="lightbox-card profile-card">
+        <button id="profile-close" class="ghost" aria-label="Close">×</button>
+        <div id="profile-banner" class="profile-banner hidden"></div>
+        <div class="profile-head">
+          <img id="profile-avatar" class="profile-avatar" alt="" />
+          <div>
+            <h2 id="profile-name"></h2>
+            <div id="profile-meta" class="post-meta"></div>
+          </div>
+        </div>
+        <p id="profile-bio" class="post-meta"></p>
+        <div class="lightbox-actions">
+          <a id="profile-open" href="#" target="_blank" rel="noopener noreferrer">Open on Twetch</a>
+        </div>
+        <div id="profile-posts" class="list"></div>
+      </div>
+    </div>
   </body>
 </html>

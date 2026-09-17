@@ -44,6 +44,13 @@ test("twetch app: market tab and endpoints are wired", () => {
   assert.ok(js.includes("twetchMarket"));
 });
 
+test("twetch app: profile overlay is wired to post heads and notifications", () => {
+  const html = fs.readFileSync(path.join(appDir, "index.html"), "utf8");
+  const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
+  assert.ok(html.includes('id="profile"') && html.includes('id="profile-posts"'));
+  assert.ok(js.includes("twetchUser") && js.includes("openProfile(post.userId)") && js.includes("openProfile(n.actorUserId)"));
+});
+
 test("twetch app: media resolver covers both icon shapes (b:// and relative)", () => {
   const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
   assert.ok(js.includes("api.twetch.com/v1/media/"));

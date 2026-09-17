@@ -687,3 +687,56 @@ export function marketCollections(
 ): Promise<MarketPage<MarketCollection>> {
   return marketPage(fetchFn, "/v1/market/collections", asCollection, opts);
 }
+
+// ── Profiles ──────────────────────────────────────────────────────────
+
+export interface TwetchProfile {
+  id: number;
+  name: string;
+  description: string;
+  avatarUrl: string;
+  bannerUrl: string;
+  publicKey: string;
+  isGreen: boolean;
+  numFollowers: number;
+  numFollowing: number;
+  createdAtMs: number;
+  url: string;
+}
+
+export async function userProfile(fetchFn: FetchFn, userId: number): Promise<TwetchProfile> {
+  if (!Number.isInteger(userId) || userId <= 0) fail("BAD_PARAM", "userId required");
+  const u = (await jget(fetchFn, `/v1/users/${userId}`)) as Record<string, unknown>;
+  return {
+    id: Math.floor(Number(u.id) || userId),
+    name: typeof u.name === "string" ? u.name : "",
+    description: typeof u.description === "string" ? u.description : "",
+    avatarUrl: mediaUrlOf(u.icon),
+    bannerUrl: mediaUrlOf(u.banner),
+    publicKey: typeof u.publicKey === "string" ? u.publicKey : "",
+    isGreen: u.isTwetchGreen === true,
+    numFollowers: Math.floor(Number(u.numFollowers) || 0),
+    numFollowing: Math.floor(Number(u.numFollowing) || 0),
+    createdAtMs: Math.floor(Number(u.createdAtMs) || 0),
+    url: `https://twetch.com/u/${userId}`,
+  };
+}
+
+/** A user's posts (same shape as the public feed). */
+export async function userPosts(
+  fetchFn: FetchFn,
+  userId: number,
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<FeedPage> {
+  if (!Number.isInteger(userId) || userId <= 0) fail("BAD_PARAM", "userId required");
+  const q = new URLSearchParams();
+  q.set("limit", String(Math.min(Math.max(Math.floor(opts.limit ?? 20), 1), 100)));
+  if (opts.cursor) q.set("cursor", opts.cursor);
+  const payload = (await jget(fetchFn, `/v1/users/${userId}/posts?${q.toString()}`)) as Record<string, unknown>;
+  const users = userMapOf(payload);
+  const data = Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : [];
+  return {
+    posts: data.map((p) => asPost(p, users)),
+    nextCursor: typeof payload.nextCursor === "string" ? payload.nextCursor : null,
+  };
+}

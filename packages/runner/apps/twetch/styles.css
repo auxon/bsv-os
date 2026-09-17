@@ -292,5 +292,27 @@ main { max-width: 720px; margin: 0 auto; padding: 16px; }
   font-size: 14px;
 }
 .lightbox-actions a { background: var(--accent); color: #04201c; border-color: var(--accent); font-weight: 700; }
+
+.profile-card { padding-top: 0; }
+.profile-banner {
+  height: 96px;
+  margin: -14px -14px 10px;
+  border-radius: 14px 14px 0 0;
+  background-size: cover;
+  background-position: center;
+  background-color: #0a0d12;
+}
+.profile-head { display: flex; align-items: center; gap: 12px; padding: 4px 4px 0; }
+.profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #2a3441;
+  flex: none;
+}
+.profile-head h2 { margin: 0; font-size: 18px; }
+.profile-card .post-head { cursor: pointer; }
+.profile-card .post-head:hover .post-name { color: var(--accent); }
 .hidden { display: none !important; }
 .error { color: var(--danger); padding: 12px 0; }

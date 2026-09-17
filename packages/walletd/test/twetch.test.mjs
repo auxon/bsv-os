@@ -533,3 +533,46 @@ test("twetch: market listings/sales/collections map and deep-link", async () => 
   assert.equal(collections.items[0].url, "https://twetch.com/market/c1fc");
   assert.ok(collections.items[0].imageUrl.startsWith("https://api.twetch.com/v1/media/"));
 });
+
+test("twetch: user profile + posts map for the profile view", async () => {
+  const { userProfile, userPosts } = await import("../src/twetch.ts");
+  const fetchFn = async (url) => {
+    const u = String(url);
+    if (u.endsWith("/v1/users/32324")) {
+      return new Response(
+        JSON.stringify({
+          id: 32324, name: "Richard A. Hein", icon: "64fa83.jpeg", banner: "654af3.jpeg",
+          description: "Software Developer & Architect", publicKey: "02a0fa42",
+          isTwetchGreen: false, numFollowers: 513, numFollowing: 709, createdAtMs: 1560693182313,
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes("/v1/users/32324/posts")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 1, txid: "a".repeat(64), userId: 32324, content: "hello", contentType: "text/plain", postedAtMs: 5, numLikes: 1, numReplies: 2, numBranches: 0, replyPostId: null },
+          ],
+          users: { "32324": { id: 32324, name: "Richard A. Hein", handle: "richard" } },
+          nextCursor: "uc1",
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const profile = await userProfile(fetchFn, 32324);
+  assert.equal(profile.name, "Richard A. Hein");
+  assert.equal(profile.avatarUrl, "https://media.ordinalswallet.com/64fa83.jpeg");
+  assert.equal(profile.bannerUrl, "https://media.ordinalswallet.com/654af3.jpeg");
+  assert.equal(profile.numFollowers, 513);
+  assert.equal(profile.url, "https://twetch.com/u/32324");
+
+  const page = await userPosts(fetchFn, 32324, { limit: 5 });
+  assert.equal(page.posts.length, 1);
+  assert.equal(page.posts[0].content, "hello");
+  assert.equal(page.posts[0].user.name, "Richard A. Hein");
+  assert.equal(page.nextCursor, "uc1");
+  await assert.rejects(userProfile(fetchFn, 0), (e) => e.code === "BAD_PARAM");
+});

@@ -176,6 +176,8 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   open-on-Twetch); reuse/mint/crosspost remain out of scope. NFT Market
   viewer shipped alongside (active listings, recent sales, collections
   with floor/listings/owners; buy/list/delist stay in the browser).
+  Profile overlay shipped: click any avatar/name/user number in the feed
+  or notifications for bio, counts, banner, and recent posts.
 
 ## Dependency sketch
 
