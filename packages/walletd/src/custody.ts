@@ -337,6 +337,23 @@ export function p2pkhUnlockHook(path: string, satoshis: number, lockingScript: S
   };
 }
 
+/**
+ * Atomic-swap variant: SIGHASH_SINGLE | ANYONECANPAY commits only to the
+ * output at the same index, so a pre-signature can never authorize any
+ * other payment. Same key custody as above — signatures, not secrets.
+ * Callers must enforce the fixed swap template (version, locktime,
+ * input/output positions) before signing.
+ */
+export function p2pkhUnlockHookSingle(path: string, satoshis: number, lockingScript: Script): UnlockHook {
+  const priv = childPriv(path);
+  const template = new P2PKH().unlock(priv, "single", true, satoshis, lockingScript);
+  return {
+    sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
+      return template.sign(tx, inputIndex);
+    },
+  };
+}
+
 /** Factory reset: wipes the enrolled secret. Caller must have a backup. */
 export async function destroyWallet(): Promise<void> {
   lock();

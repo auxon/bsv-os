@@ -2,7 +2,7 @@ import { createWallet, exportEntropy, getStatus, importWallet, lock, restoreFrom
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
-import { anchorTip, explorerTxUrl, getBalance, safeLabel, sendBsv21, sendOrdinal } from "./engine.ts";
+import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
@@ -21,6 +21,7 @@ import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./re
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
+import { completeSwap, signSwapOffer } from "./swaps.ts";
 import {
   cancelLogin,
   currentSession,
@@ -720,6 +721,83 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         const { sha256 } = args as { sha256?: unknown };
         if (typeof sha256 !== "string") throw Object.assign(new Error("sha256 required"), { code: "BAD_PARAM" });
         return anchorTip({ db: b.db, chain: b.chain, origin: app.domain, sha256 });
+      }
+      /**
+       * PocketPets cutover: the game runs on OS custody instead of
+       * browser keys. Reads are free; every write is policy-gated under
+       * the app's origin (ask-mode prompts in the panel) and tracked +
+       * labeled like any other spend. Pages describe intents — scripts
+       * are always fetched and verified daemon-side, never trusted.
+       */
+      case "getUtxos": {
+        const addr = selfAddress();
+        const u = await b.chain.utxos(addr);
+        return {
+          address: addr,
+          confirmed: u.confirmed,
+          unconfirmed: u.unconfirmed,
+          utxos: u.utxos.map((x) => ({ txid: x.txid, vout: x.vout, value: x.value, height: x.height ?? 0 })),
+        };
+      }
+      case "spend": {
+        const { payments, memo, label } = args as { payments?: unknown; memo?: unknown; label?: unknown };
+        if (!Array.isArray(payments) || !payments.length) {
+          throw Object.assign(new Error("payments required"), { code: "BAD_PARAM" });
+        }
+        return spendTo({
+          db: b.db, chain: b.chain, origin: app.domain,
+          payments: payments as Array<{ to: string; sats: number }>,
+          memo: Array.isArray(memo) ? (memo as string[]) : undefined,
+          label: typeof label === "string" ? label : undefined,
+        });
+      }
+      case "inscribe": {
+        const { dataHex, contentType, to, fee, memo, label } = args as {
+          dataHex?: unknown; contentType?: unknown; to?: unknown;
+          fee?: unknown; memo?: unknown; label?: unknown;
+        };
+        if (typeof dataHex !== "string" || !dataHex) {
+          throw Object.assign(new Error("dataHex required"), { code: "BAD_PARAM" });
+        }
+        if (typeof contentType !== "string" || !contentType) {
+          throw Object.assign(new Error("contentType required"), { code: "BAD_PARAM" });
+        }
+        return inscribeMint({
+          db: b.db, chain: b.chain, origin: app.domain, dataHex, contentType,
+          to: typeof to === "string" ? to : undefined,
+          fee: fee && typeof fee === "object" ? (fee as { to: string; sats: number }) : undefined,
+          memo: Array.isArray(memo) ? (memo as string[]) : undefined,
+          label: typeof label === "string" ? label : undefined,
+        });
+      }
+      case "transferNft": {
+        const { txid, vout, to, memo } = args as {
+          txid?: unknown; vout?: unknown; to?: unknown; memo?: unknown;
+        };
+        if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+        if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient address required"), { code: "BAD_PARAM" });
+        return sendOrdinal({
+          db: b.db, chain: b.chain, origin: app.domain,
+          txid, vout: Math.floor(Number(vout) || 0), to,
+          memo: Array.isArray(memo) ? (memo as string[]) : undefined,
+        });
+      }
+      case "signSwapOffer": {
+        const { txid, vout, priceSats } = args as { txid?: unknown; vout?: unknown; priceSats?: unknown };
+        if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+        return signSwapOffer({
+          db: b.db, chain: b.chain, origin: app.domain,
+          txid, vout: Math.floor(Number(vout) || 0), priceSats: Number(priceSats) || 0,
+        });
+      }
+      case "completeSwap": {
+        const { offer, fee, memo } = args as { offer?: unknown; fee?: unknown; memo?: unknown };
+        if (!offer || typeof offer !== "object") throw Object.assign(new Error("offer required"), { code: "BAD_PARAM" });
+        return completeSwap({
+          db: b.db, chain: b.chain, origin: app.domain, offer,
+          fee: fee && typeof fee === "object" ? (fee as { to: string; sats: number }) : undefined,
+          memo: Array.isArray(memo) ? (memo as string[]) : undefined,
+        });
       }
       default:
         throw Object.assign(new Error(`unknown app method ${String(method)}`), { code: "BAD_METHOD" });

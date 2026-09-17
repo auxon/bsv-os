@@ -1,11 +1,14 @@
 /* BSV OS wallet bridge — MAIN-world page script.
  *
  * Defines the capability-scoped `window.bsv` the runner injects into
- * installed Metanet apps. Four intents, nothing else: status, identity
- * (public key only), balance, and timestamping. Every call is relayed to
- * the isolated content script, which POSTs it to the per-window loopback
- * bridge; the daemon enforces the app's origin policy and the custody
- * lock. Keys are never exposed — there is no method that returns one.
+ * installed Metanet apps. Ten intents, nothing else: reads (status,
+ * identity, balance, UTXOs) plus policy-gated writes (timestamp, spend,
+ * inscribe, NFT transfer, atomic-swap offer/buy). Every call is relayed
+ * to the isolated content script, which POSTs it to the per-window
+ * loopback bridge; the daemon enforces the app's origin policy and the
+ * custody lock. Keys are never exposed — there is no method that returns
+ * one, and pages describe intents (outpoints, amounts, data) while the
+ * daemon fetches and verifies every script itself.
  *
  * Outside the runner (plain browser, no bridge fragment) every method
  * rejects with a plain-English error instead of failing silently.
@@ -51,7 +54,7 @@
   }
 
   window.bsv = Object.freeze({
-    version: "0.1.0",
+    version: "0.2.0",
     /** True when the bridge fragment is present (running inside the runner). */
     isBSVOS: bridged,
     /** { authenticated, locked, hasWallet } — never keys. */
@@ -60,13 +63,25 @@
     getIdentity: () => invoke("getIdentity"),
     /** { address, confirmed, unconfirmed, utxos } in sats. */
     getBalance: () => invoke("getBalance"),
+    /** { address, confirmed, unconfirmed, utxos[] } — outpoints/values only, never scripts. */
+    getUtxos: () => invoke("getUtxos"),
     /** Timestamp 64-hex on-chain under this app's origin policy. Returns { txid, fee }. */
     timestamp: (sha256) => invoke("timestamp", { sha256 }),
+    /** Daemon-built payments under this app's policy. Returns { txid, fee, hex }. */
+    spend: (payments, memo, label) => invoke("spend", { payments, memo, label }),
+    /** Mint a 1-sat inscription (≤256KB), optional operator fee. Returns { txid, fee, hex }. */
+    inscribe: (dataHex, contentType, to, fee, memo, label) => invoke("inscribe", { dataHex, contentType, to, fee, memo, label }),
+    /** Move one inscribed sat to an address. Returns { txid, fee }. */
+    transferNft: (txid, vout, to, memo) => invoke("transferNft", { txid, vout, to, memo }),
+    /** Pre-sign an atomic-swap listing on our carrier. Returns the market offer. */
+    signSwapOffer: (txid, vout, priceSats) => invoke("signSwapOffer", { txid, vout, priceSats }),
+    /** Buy a listing: payment + NFT move in one tx. Returns { txid, fee }. */
+    completeSwap: (offer, fee, memo) => invoke("completeSwap", { offer, fee, memo }),
   });
 
   // Visible-in-DOM proof of injection (works with --dump-dom and scrapers).
   try {
-    document.documentElement.setAttribute("data-bsvos", bridged ? "0.1.0" : "absent");
+    document.documentElement.setAttribute("data-bsvos", bridged ? "0.2.0" : "absent");
   } catch {
     /* document not ready in exotic contexts; window.bsv still works */
   }

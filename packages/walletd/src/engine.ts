@@ -15,6 +15,7 @@ import {
   BSV20_PROTOCOL,
   bsv21TransferScript,
   hasOrdEnvelope,
+  inscriptionScript,
   normalizeTokenId,
   parseBsv21Envelope,
   parseTokenAmount,
@@ -31,8 +32,17 @@ function fail(code: string, message: string): never {
   throw Object.assign(new Error(message), { code });
 }
 
+/** OP_RETURN memo guard: small human-readable tags, not a data hose. */
+export function checkMemo(memo: unknown): string[] {
+  if (memo === undefined) return [];
+  if (!Array.isArray(memo) || memo.length > 5 || memo.some((m) => typeof m !== "string" || m.length > 80)) {
+    fail("BAD_PARAM", "memo must be ≤5 strings of ≤80 chars");
+  }
+  return memo as string[];
+}
+
 /** Locking script + value of a confirmed outpoint (sighash needs the real script). */
-async function lockingScriptOf(
+export async function lockingScriptOf(
   txid: string,
   vout: number,
   fetchFn: typeof fetch,
@@ -125,6 +135,81 @@ export async function anchorTip(opts: {
 }
 
 /**
+ * PocketPets cutover: multi-payment app spends with an optional OP_RETURN
+ * memo (the game's action ledger rides in memos). Daemon-built from
+ * page-supplied descriptions, funded only from inscription-free UTXOs,
+ * policy-gated on the total leaving the wallet. Unlike sendSats (which
+ * assumes plain P2PKH funding for the hot path), this verifies funding
+ * scripts so an app can never melt the user's NFTs into fees.
+ */
+export async function spendTo(opts: {
+  db: Knex;
+  chain: ChainProvider;
+  origin: string;
+  payments: Array<{ to: string; sats: number }>;
+  memo?: string[];
+  label?: string;
+  fetchFn?: typeof fetch;
+}): Promise<{ txid: string; fee: number; hex: string }> {
+  if (!Array.isArray(opts.payments) || !opts.payments.length) fail("BAD_PARAM", "payments required");
+  const pays = opts.payments.map((p) => {
+    try {
+      p2pkhScript(p.to);
+    } catch {
+      fail("BAD_PARAM", "payment address must be a valid P2PKH address");
+    }
+    const sats = Math.floor(Number(p.sats) || 0);
+    if (!(sats > 0)) fail("BAD_PARAM", "payment sats must be positive");
+    return { address: p.to, sats };
+  });
+  const memo = checkMemo(opts.memo);
+  const fetchFn = opts.fetchFn ?? fetch;
+  const address = selfAddress();
+  const lock = p2pkhScript(address);
+  const u = await opts.chain.utxos(address);
+  const candidates = u.utxos
+    .filter((x) => x.value > 1)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12);
+  const scripts = await Promise.all(
+    candidates.map((x) => lockingScriptOf(x.txid, x.vout, fetchFn).catch(() => null)),
+  );
+  const funding: SpendableUtxo[] = [];
+  for (let i = 0; i < candidates.length && funding.length < 6; i++) {
+    const s = scripts[i];
+    if (!s || hasOrdEnvelope(s.scriptHex)) continue; // inscription carrier — hands off
+    const c = candidates[i]!;
+    funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: s.scriptHex });
+  }
+  if (!funding.length) fail("INSUFFICIENT", "no plain funding UTXOs (everything is inscribed?)");
+  const built = buildTx({
+    utxos: funding,
+    unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
+    payments: pays,
+    opReturn: memo.length ? memo : undefined,
+    changeScriptHex: lock.toHex(),
+  });
+  const total = pays.reduce((a, p) => a + p.sats, 0) + built.fee;
+  const gate = await check(opts.db, opts.origin, total, "app-spend");
+  if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
+  const { hex } = await signTx(built.tx);
+  const res = await opts.chain.broadcast(hex);
+  await track(opts.db, res.txid, opts.label ?? `app spend ${total} sats`, hex);
+  await recordSpend(opts.db, opts.origin, total);
+  const basket = await resolveBasketForOrigin(opts.db, opts.origin);
+  const changeHex = lock.toHex();
+  await labelOutputs(
+    opts.db,
+    res.txid,
+    built.tx.outputs
+      .map((o, vout) => ({ vout, script: o.lockingScript?.toHex(), value: o.satoshis ?? 0 }))
+      .filter((o) => o.script === changeHex)
+      .map((o) => ({ vout: o.vout, value: o.value, basket })),
+  );
+  return { txid: res.txid, fee: built.fee, hex };
+}
+
+/**
  * F5 ordinal send: move one inscribed sat to a P2PKH address. FIFO is
  * structural — the ordinal UTXO is inputs[0] and the 1-sat recipient
  * output is outputs[0], so the inscribed sat provably lands with the
@@ -138,6 +223,7 @@ export async function sendOrdinal(opts: {
   txid: string;
   vout: number;
   to: string;
+  memo?: string[];
 }): Promise<{ txid: string; fee: number }> {
   const parts = splitOutpoint(`${opts.txid}_${opts.vout}`);
   if (!parts) throw Object.assign(new Error("outpoint must be 64-hex txid + vout"), { code: "BAD_PARAM" });
@@ -165,10 +251,12 @@ export async function sendOrdinal(opts: {
     { ...ordinal, scriptHex: lock.toHex() },
     ...funding.map((x) => ({ ...x, scriptHex: lock.toHex() })),
   ];
+  const memo = checkMemo(opts.memo);
   const built = buildTx({
     utxos,
     unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
     payments: [{ address: opts.to, sats: 1 }],
+    opReturn: memo.length ? memo : undefined,
     changeScriptHex: lock.toHex(),
     keepOrder: true,
   });
@@ -372,4 +460,100 @@ export async function sendBsv21(opts: {
       .map((o) => ({ vout: o.vout, value: o.value, basket })),
   );
   return { txid: res.txid, fee: built.fee, sent: amtStr, change: remainder.toString(), tokenId };
+}
+
+/** Cap on inscription payloads (apps mint pixel-art NFTs, not archives). */
+export const MAX_INSCRIPTION_BYTES = 256 * 1024;
+
+/**
+ * F5/PocketPets inscribe: mint a 1-sat ordinal inscription (arbitrary
+ * content-type + data) to an address, defaulting to self. Daemon-built
+ * from page-supplied data, policy-gated on dust + fee, funded only from
+ * inscription-free UTXOs. The page never touches keys.
+ */
+export async function inscribeMint(opts: {
+  db: Knex;
+  chain: ChainProvider;
+  origin: string;
+  dataHex: string;
+  contentType: string;
+  to?: string;
+  fee?: { to: string; sats: number };
+  memo?: string[];
+  label?: string;
+  fetchFn?: typeof fetch;
+}): Promise<{ txid: string; fee: number; hex: string }> {
+  const data = String(opts.dataHex ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]+$/.test(data) || data.length < 2 || data.length > MAX_INSCRIPTION_BYTES * 2) {
+    fail("BAD_PARAM", `dataHex must be hex, 1B-${MAX_INSCRIPTION_BYTES / 1024}KB`);
+  }
+  const contentType = String(opts.contentType ?? "").trim();
+  if (!/^[\x21-\x7e]{1,128}$/.test(contentType) || contentType.includes(" ")) {
+    fail("BAD_PARAM", "contentType must be 1-128 printable ASCII chars without spaces");
+  }
+  const to = (opts.to ?? "").trim() || selfAddress();
+  try {
+    p2pkhScript(to);
+  } catch {
+    fail("BAD_PARAM", "recipient must be a valid P2PKH address");
+  }
+  const fetchFn = opts.fetchFn ?? fetch;
+  const address = selfAddress();
+  const lock = p2pkhScript(address);
+  const u = await opts.chain.utxos(address);
+  const candidates = u.utxos
+    .filter((x) => x.value > 1)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12);
+  const scripts = await Promise.all(
+    candidates.map((x) => lockingScriptOf(x.txid, x.vout, fetchFn).catch(() => null)),
+  );
+  const funding: SpendableUtxo[] = [];
+  for (let i = 0; i < candidates.length && funding.length < 6; i++) {
+    const s = scripts[i];
+    if (!s || hasOrdEnvelope(s.scriptHex)) continue; // inscription carrier — hands off
+    const c = candidates[i]!;
+    funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: s.scriptHex });
+  }
+  if (!funding.length) fail("INSUFFICIENT", "no plain funding UTXOs (everything is inscribed?)");
+  const script = inscriptionScript(to, contentType, data);
+  const pays: Array<{ address: string; sats: number; scriptHex?: string }> = [
+    { address: to, sats: 1, scriptHex: script },
+  ];
+  let feeSats = 0;
+  if (opts.fee !== undefined) {
+    try {
+      p2pkhScript(opts.fee.to);
+    } catch {
+      fail("BAD_PARAM", "fee.to must be a valid P2PKH address");
+    }
+    feeSats = Math.floor(Number(opts.fee.sats) || 0);
+    if (!(feeSats > 0)) fail("BAD_PARAM", "fee.sats must be positive");
+    pays.push({ address: opts.fee.to, sats: feeSats });
+  }
+  const memo = checkMemo(opts.memo);
+  const built = buildTx({
+    utxos: funding,
+    unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
+    payments: pays,
+    opReturn: memo.length ? memo : undefined,
+    changeScriptHex: lock.toHex(),
+  });
+  const gate = await check(opts.db, opts.origin, 1 + feeSats + built.fee, "app-inscribe");
+  if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
+  const { hex } = await signTx(built.tx);
+  const res = await opts.chain.broadcast(hex);
+  await track(opts.db, res.txid, opts.label ?? `inscribe ${contentType} to ${to.slice(0, 8)}`, hex);
+  await recordSpend(opts.db, opts.origin, built.fee);
+  const basket = await resolveBasketForOrigin(opts.db, opts.origin);
+  const changeHex = lock.toHex();
+  await labelOutputs(
+    opts.db,
+    res.txid,
+    built.tx.outputs
+      .map((o, vout) => ({ vout, script: o.lockingScript?.toHex(), value: o.satoshis ?? 0 }))
+      .filter((o) => o.script === changeHex)
+      .map((o) => ({ vout: o.vout, value: o.value, basket })),
+  );
+  return { txid: res.txid, fee: built.fee, hex };
 }

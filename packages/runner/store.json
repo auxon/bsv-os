@@ -6,6 +6,11 @@
       "name": "Runner Demo",
       "blurb": "Loopback click-through proving the window.bsv bridge. Serve it locally, then install with --manifest-file.",
       "devOnly": true
+    },
+    {
+      "domain": "entangleit.com",
+      "name": "Pocket Pets",
+      "blurb": "Gacha buddies on BSV: raise pets, mint 1Sat NFT ordinals, battle, trade on the market. Runs on OS custody via window.bsv (needs entangleit.com/manifest.json)."
     }
   ]
 }

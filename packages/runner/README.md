@@ -2,10 +2,13 @@
 
 Installed Metanet apps open in their own Chromium app window — not the
 default browser — with a capability-scoped `window.bsv` injected by a
-local-only MV3 extension. Four intents, nothing else: `getStatus`,
-`getIdentity` (public key only), `getBalance`, `timestamp`. Every spend
-goes through the daemon under the app's own origin policy, so approvals,
-caps, and agent budgets apply to apps exactly like CLI and MCP callers.
+local-only MV3 extension. Ten intents, nothing else: reads (`getStatus`,
+`getIdentity` public key only, `getBalance`, `getUtxos`) plus policy-gated
+writes (`timestamp`, `spend`, `inscribe`, `transferNft`, `signSwapOffer`,
+`completeSwap`). Every spend goes through the daemon under the app's own
+origin policy, so approvals, caps, and agent budgets apply to apps exactly
+like CLI and MCP callers. Pages describe intents — scripts are always
+fetched and verified daemon-side, never trusted.
 
 ## How it works
 

@@ -288,20 +288,25 @@ function pushBytes(bytes: Uint8Array): number[] {
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 
-/** Owner P2PKH script with the transfer inscription appended. Returns hex. */
-export function bsv21TransferScript(ownerAddress: string, tokenId: string, amt: string): string {
+/** Owner P2PKH script with a generic `ord` inscription appended. Returns hex. */
+export function inscriptionScript(ownerAddress: string, contentType: string, dataHex: string): string {
   const prefix = Buffer.from(p2pkhScript(ownerAddress).toHex(), "hex");
-  const json = Buffer.from(JSON.stringify({ p: BSV20_PROTOCOL, op: "transfer", id: tokenId, amt }), "utf8");
   const body = Buffer.from([
     0x00, 0x63, // OP_0 OP_IF
     ...pushBytes(utf8("ord")),
     0x51, // OP_1
-    ...pushBytes(utf8(BSV20_CONTENT_TYPE)),
+    ...pushBytes(utf8(String(contentType))),
     0x00, // OP_0
-    ...pushBytes(new Uint8Array(json)),
+    ...pushBytes(new Uint8Array(Buffer.from(String(dataHex), "hex"))),
     0x68, // OP_ENDIF
   ]);
   return Buffer.concat([prefix, body]).toString("hex");
+}
+
+/** Owner P2PKH script with the transfer inscription appended. Returns hex. */
+export function bsv21TransferScript(ownerAddress: string, tokenId: string, amt: string): string {
+  const json = Buffer.from(JSON.stringify({ p: BSV20_PROTOCOL, op: "transfer", id: tokenId, amt }), "utf8");
+  return inscriptionScript(ownerAddress, BSV20_CONTENT_TYPE, json.toString("hex"));
 }
 
 function readPush(buf: Buffer, at: number): { data: Buffer; next: number } | null {
