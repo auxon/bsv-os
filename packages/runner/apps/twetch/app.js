@@ -54,8 +54,57 @@ function linkify(text) {
   return frag;
 }
 
-function avatarUrl(post) {
-  return post.user?.avatarUrl || post.avatarUrl || null;
+// Twetch media resolver: b:// (or bare txid) -> api.twetch.com media,
+// relative filenames -> media.ordinalswallet.com, http(s) as-is.
+function mediaUrl(raw, type = "jpg") {
+  const s = (raw ?? "").toString().trim();
+  if (!s) return null;
+  if (/^(data:image\/|blob:)/i.test(s)) return s;
+  const out = /^(?:b:\/\/)?([a-f0-9]{64})@(\d{1,3})$/i.exec(s);
+  if (out) return `https://api.twetch.com/v1/media/${out[1].toLowerCase()}-o${Number(out[2])}.${type}?v=4`;
+  if (s.startsWith("b://")) {
+    const m = s.slice(4).match(/[a-f0-9]{64}/i);
+    return m ? `https://api.twetch.com/v1/media/${m[0].toLowerCase()}.${type}?v=4` : null;
+  }
+  if (/^https?:\/\//i.test(s)) {
+    let u;
+    try {
+      u = new URL(s);
+    } catch {
+      return null;
+    }
+    const host = u.hostname.toLowerCase();
+    if (host === "media.twetch.app" || host === "cimg.twetch.com") {
+      return s.replace(/^http:/i, "https:").replace(host, "media.ordinalswallet.com");
+    }
+    return s.replace(/^http:/i, "https:");
+  }
+  if (/^[a-f0-9]{64}$/i.test(s)) return `https://api.twetch.com/v1/media/${s.toLowerCase()}.${type}?v=4`;
+  if (/^[0-9a-f]{40,}$/i.test(s)) return `https://media.ordinalswallet.com/${s}`;
+  if (!s.includes("..") && (s.includes("/") || /\.[a-z0-9]{2,5}$/i.test(s))) {
+    return `https://media.ordinalswallet.com/${s}`;
+  }
+  return null;
+}
+
+function avatarFallback(user) {
+  const el = document.createElement("span");
+  el.className = "post-avatar avatar-fallback";
+  el.textContent = ((user?.name || user?.handle || "?").trim()[0] || "?").toUpperCase();
+  return el;
+}
+
+function avatarEl(user) {
+  const url = mediaUrl(user?.icon);
+  if (!url) return avatarFallback(user);
+  const img = document.createElement("img");
+  img.className = "post-avatar";
+  img.alt = "";
+  img.loading = "lazy";
+  img.referrerPolicy = "no-referrer";
+  img.src = url;
+  img.onerror = () => img.replaceWith(avatarFallback(user));
+  return img;
 }
 
 function renderPost(post) {
@@ -64,10 +113,7 @@ function renderPost(post) {
 
   const head = document.createElement("div");
   head.className = "post-head";
-  const img = document.createElement("img");
-  img.className = "post-avatar";
-  const av = avatarUrl(post);
-  if (av) img.src = av;
+  const img = avatarEl(post.user);
   const who = document.createElement("div");
   const name = document.createElement("div");
   name.className = "post-name";
@@ -134,8 +180,12 @@ async function loadStatus() {
       hint.classList.remove("warn");
       if (identity.picture) {
         const av = $("me-avatar");
-        av.src = identity.picture.startsWith("http") ? identity.picture : `https://twetch.com/${identity.picture}`;
-        av.classList.remove("hidden");
+        const url = mediaUrl(identity.picture);
+        if (url) {
+          av.src = url;
+          av.referrerPolicy = "no-referrer";
+          av.classList.remove("hidden");
+        }
       }
     } else {
       handle.textContent = "not signed in";
@@ -168,6 +218,7 @@ async function loadNotifications() {
     const rows = (page?.notifications ?? []).map((n) => {
       const el = document.createElement("article");
       el.className = "post notif";
+      el.append(avatarEl(n.actor));
       const type = document.createElement("span");
       type.className = "notif-type";
       type.textContent = n.type || "activity";

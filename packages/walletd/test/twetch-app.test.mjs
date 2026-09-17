@@ -24,6 +24,13 @@ test("twetch app: manifest validates for the localhost domain", () => {
 test("twetch app: page has no key material and calls same-origin rpc only", () => {
   const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
   assert.ok(js.includes("twetchFeed") && js.includes("twetchPost") && js.includes("twetchStatus"));
-  assert.ok(!/https?:\/\/(?!twetch\.com|localhost|127\.0\.0\.1)/.test(js.replace(/fragment|printable/g, "")));
+  assert.ok(!/https?:\/\/(?!(?:api\.)?twetch\.com|media\.ordinalswallet\.com|localhost|127\.0\.0\.1)/.test(js));
   assert.ok(!/WIF|privateKey|accessToken|idToken/i.test(js));
+});
+
+test("twetch app: media resolver covers both icon shapes (b:// and relative)", () => {
+  const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
+  assert.ok(js.includes("api.twetch.com/v1/media/"));
+  assert.ok(js.includes("media.ordinalswallet.com/"));
+  assert.ok(js.includes("avatarEl(post.user)"));
 });

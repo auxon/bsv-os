@@ -95,6 +95,21 @@ Panel {
     if (!statusProc.running) statusProc.running = true;
   }
 
+  // Twetch avatars: OIDC `picture` is either a relative media filename
+  // (media.ordinalswallet.com), a b:// reference, or an absolute URL.
+  function identityAvatar() {
+    const p = root.identity && root.identity.picture ? String(root.identity.picture) : "";
+    if (!p) return "";
+    if (/^https?:\/\//i.test(p)) return p.replace(/^http:/i, "https:");
+    if (p.startsWith("b://")) {
+      const m = p.slice(4).match(/[a-f0-9]{64}/i);
+      return m ? `https://api.twetch.com/v1/media/${m[0].toLowerCase()}.jpg?v=4` : "";
+    }
+    if (/^[a-f0-9]{64}$/i.test(p)) return `https://api.twetch.com/v1/media/${p.toLowerCase()}.jpg?v=4`;
+    if (!p.includes("..")) return `https://media.ordinalswallet.com/${p}`;
+    return "";
+  }
+
   // NOTE: do NOT override open()/toggle()/close() here — the Panel base
   // routes toggle() through open(), so an override that calls back into
   // toggle() recurses forever. reveal() is our refresh-then-show entry.
@@ -779,8 +794,8 @@ Panel {
       Layout.fillWidth: true
 
       Image {
-        visible: (root.identity && root.identity.picture) ? root.identity.picture !== "" : false
-        source: (root.identity && root.identity.picture) ? root.identity.picture : ""
+        visible: root.identityAvatar() !== ""
+        source: root.identityAvatar()
         sourceSize.width: 36
         sourceSize.height: 36
         Layout.preferredWidth: 36

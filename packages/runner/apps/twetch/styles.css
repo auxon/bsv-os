@@ -124,6 +124,15 @@ main { max-width: 720px; margin: 0 auto; padding: 16px; }
 }
 .post-head { display: flex; align-items: center; gap: 10px; }
 .post-avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; background: #202834; }
+.avatar-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 15px;
+  background: #2a3441;
+  flex: none;
+}
 .post-name { font-weight: 600; }
 .post-meta { color: var(--dim); font-size: 12.5px; }
 .post-body { margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
