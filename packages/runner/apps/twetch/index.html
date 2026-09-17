@@ -12,6 +12,7 @@
       <nav class="tabs">
         <button class="tab active" data-tab="feed">Feed</button>
         <button class="tab" data-tab="notifications">Notifications <span id="notif-badge" class="badge hidden"></span></button>
+        <button class="tab" data-tab="memes">Memes</button>
       </nav>
       <div class="me">
         <img id="me-avatar" class="avatar hidden" alt="" />
@@ -38,7 +39,40 @@
       <section id="notifications-view" class="hidden">
         <div id="notifications" class="list"></div>
       </section>
+
+      <section id="memes-view" class="hidden">
+        <form id="meme-search" class="meme-search">
+          <input id="meme-query" type="search" placeholder="Search the Meme Library (Pepe, Wojak, reaction…)" />
+          <select id="meme-sort" title="Sort">
+            <option value="recent">Recent</option>
+            <option value="top">Top</option>
+            <option value="popular">Popular</option>
+            <option value="rarity">Rarity</option>
+          </select>
+          <button type="submit">Search</button>
+        </form>
+        <div id="meme-folders" class="chips"></div>
+        <div id="meme-meta" class="status"></div>
+        <div id="meme-grid" class="grid"></div>
+        <div class="load-more">
+          <button id="meme-more" class="hidden">Load more</button>
+        </div>
+      </section>
     </main>
+
+    <div id="lightbox" class="lightbox hidden">
+      <div class="lightbox-card">
+        <button id="lightbox-close" class="ghost" aria-label="Close">×</button>
+        <div id="lightbox-media" class="lightbox-media"></div>
+        <h2 id="lightbox-title"></h2>
+        <p id="lightbox-desc" class="post-meta"></p>
+        <p id="lightbox-tags" class="post-meta"></p>
+        <div class="lightbox-actions">
+          <button id="lightbox-copy" type="button">Copy on-chain ref</button>
+          <a id="lightbox-open" href="#" target="_blank" rel="noopener noreferrer">Open on Twetch</a>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>

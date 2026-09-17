@@ -405,3 +405,57 @@ test("twetch: phrase import scans and stores only on a target match", async () =
   await twetchAccountRemove();
   __resetCache();
 });
+
+test("twetch: meme library browse/search maps media and folders", async () => {
+  const { memeLibrary, memeFolders } = await import("../src/twetch.ts");
+  const mediaPath = "/v1/media/deadbeef-o0.jpg?v=3";
+  const fetchFn = async (url) => {
+    const u = String(url);
+    if (u.includes("/v1/dank-rares/folders")) {
+      return new Response(
+        JSON.stringify({
+          categories: [
+            { slug: "laugh", label: "Laugh", name: "laugh", count: 466, cover: {} },
+            { slug: "happy", label: "Happy", name: "happy", count: 1046 },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes("/v1/dank-rares")) {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "abc:b://def@0", title: "Monkey Looking Awkwardly", description: "oops",
+              folder: "Reaction Memes", folderSlug: "reaction-memes", format: "gif",
+              mediaUrl: mediaPath, previewUrl: mediaPath, onchainRef: "b://deadbeef@0",
+              sha256: "a".repeat(64), tags: ["monkey", "funny"], tokenNumber: 7889,
+              ownerUserId: 259, uploadedAtMs: 17865400, bytes: 1832534,
+            },
+          ],
+          nextCursor: "cur2",
+          total: 2618,
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const page = await memeLibrary(fetchFn, { q: "monkey", folder: "reaction-memes", sort: "top", limit: 5 });
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0].mediaUrl, `https://api.twetch.com${mediaPath}`);
+  assert.equal(page.items[0].previewUrl, `https://api.twetch.com${mediaPath}`);
+  assert.equal(page.items[0].onchainRef, "b://deadbeef@0");
+  assert.equal(
+    page.items[0].url,
+    `https://twetch.com/meme-library/meme/${"a".repeat(64)}/monkey-looking-awkwardly`,
+  );
+  assert.deepEqual(page.items[0].tags, ["monkey", "funny"]);
+  assert.equal(page.nextCursor, "cur2");
+  assert.equal(page.total, 2618);
+
+  const folders = await memeFolders(fetchFn);
+  assert.equal(folders.length, 2);
+  assert.deepEqual(folders[0], { slug: "laugh", label: "Laugh", name: "laugh", count: 466 });
+});

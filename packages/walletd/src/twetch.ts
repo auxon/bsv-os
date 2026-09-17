@@ -398,3 +398,131 @@ export function verifyAip(content: string, aip: { address: string; signature: st
     return false;
   }
 }
+// ── Meme Library (Dank Rares) ─────────────────────────────────────────
+
+export interface MemeItem {
+  id: string;
+  title: string;
+  description: string;
+  folder: string;
+  folderSlug: string;
+  format: string;
+  mediaUrl: string;
+  previewUrl: string;
+  onchainRef: string;
+  sha256: string;
+  tags: string[];
+  tokenNumber: number | null;
+  ownerUserId: number | null;
+  uploadedAtMs: number;
+  bytes: number;
+  url: string;
+}
+
+export interface MemePage {
+  items: MemeItem[];
+  nextCursor: string | null;
+  total: number;
+}
+
+export interface MemeFolder {
+  slug: string;
+  label: string;
+  name: string;
+  count: number;
+}
+
+export interface MemeQuery {
+  q?: string;
+  folder?: string;
+  tag?: string;
+  format?: string;
+  sort?: string;
+  uploaderUserId?: number;
+  cursor?: string;
+  limit?: number;
+}
+
+function mediaUrlOf(raw: unknown): string {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s)) return s.replace(/^http:/i, "https:");
+  if (s.startsWith("/")) return `${TWETCH_API}${s}`;
+  if (s.startsWith("b://")) {
+    const m = s.slice(4).match(/[a-f0-9]{64}/i);
+    return m ? `${TWETCH_API}/v1/media/${m[0].toLowerCase()}.jpg?v=4` : "";
+  }
+  if (/^[a-f0-9]{64}$/i.test(s)) return `${TWETCH_API}/v1/media/${s.toLowerCase()}.jpg?v=4`;
+  if (/^[0-9a-f]{40,}$/i.test(s)) return `https://media.ordinalswallet.com/${s}`;
+  return `https://media.ordinalswallet.com/${s}`;
+}
+
+function memeSlug(title: string): string {
+  return (
+    title
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 90)
+      .replace(/-+$/g, "") || "meme"
+  );
+}
+
+function asMeme(m: Record<string, unknown>): MemeItem {
+  const sha256 = typeof m.sha256 === "string" ? m.sha256 : "";
+  const title = typeof m.title === "string" ? m.title : "";
+  const media = mediaUrlOf(m.mediaUrl);
+  const preview = mediaUrlOf(m.previewUrl);
+  return {
+    id: typeof m.id === "string" ? m.id : "",
+    title,
+    description: typeof m.description === "string" ? m.description : "",
+    folder: typeof m.folder === "string" ? m.folder : "",
+    folderSlug: typeof m.folderSlug === "string" ? m.folderSlug : "",
+    format: typeof m.format === "string" ? m.format : "",
+    mediaUrl: media,
+    previewUrl: preview || media,
+    onchainRef: typeof m.onchainRef === "string" ? m.onchainRef : typeof m.path === "string" ? m.path : "",
+    sha256,
+    tags: Array.isArray(m.tags) ? (m.tags as unknown[]).filter((t): t is string => typeof t === "string") : [],
+    tokenNumber: m.tokenNumber == null ? null : Math.floor(Number(m.tokenNumber) || 0),
+    ownerUserId: m.ownerUserId == null ? null : Math.floor(Number(m.ownerUserId) || 0),
+    uploadedAtMs: Math.floor(Number(m.uploadedAtMs) || 0),
+    bytes: Math.floor(Number(m.bytes) || 0),
+    url: sha256 ? `https://twetch.com/meme-library/meme/${sha256}/${memeSlug(title)}` : "https://twetch.com/meme-library",
+  };
+}
+
+/** Read-only Meme Library (Dank Rares) browse/search. */
+export async function memeLibrary(fetchFn: FetchFn, opts: MemeQuery = {}): Promise<MemePage> {
+  const q = new URLSearchParams();
+  if (opts.cursor) q.set("cursor", opts.cursor);
+  if (opts.q && opts.q.trim()) q.set("q", opts.q.trim());
+  if (opts.folder) q.set("folder", opts.folder);
+  if (opts.tag) q.set("tag", opts.tag);
+  if (opts.format && opts.format !== "all") q.set("format", opts.format);
+  if (opts.sort) q.set("sort", opts.sort);
+  if (opts.uploaderUserId && opts.uploaderUserId > 0) q.set("uploaderUserId", String(opts.uploaderUserId));
+  q.set("limit", String(Math.min(Math.max(Math.floor(opts.limit ?? 30), 1), 60)));
+  const payload = (await jget(fetchFn, `/v1/dank-rares?${q.toString()}`)) as Record<string, unknown>;
+  const items = Array.isArray(payload.items) ? (payload.items as Record<string, unknown>[]) : [];
+  return {
+    items: items.map(asMeme),
+    nextCursor: typeof payload.nextCursor === "string" ? payload.nextCursor : null,
+    total: Math.floor(Number(payload.total) || 0),
+  };
+}
+
+/** Meme Library category chips (labels + counts). */
+export async function memeFolders(fetchFn: FetchFn): Promise<MemeFolder[]> {
+  const payload = (await jget(fetchFn, "/v1/dank-rares/folders")) as Record<string, unknown>;
+  const cats = Array.isArray(payload.categories) ? (payload.categories as Record<string, unknown>[]) : [];
+  return cats.map((c) => ({
+    slug: typeof c.slug === "string" ? c.slug : "",
+    label: typeof c.label === "string" ? c.label : typeof c.name === "string" ? c.name : "",
+    name: typeof c.name === "string" ? c.name : "",
+    count: Math.floor(Number(c.count) || 0),
+  }));
+}

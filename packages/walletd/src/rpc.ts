@@ -29,7 +29,7 @@ import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer } from "./swaps.ts";
-import { feedLatest, notifications, postNotifications, postText, userByPubkey } from "./twetch.ts";
+import { feedLatest, memeFolders, memeLibrary, notifications, postNotifications, postText, userByPubkey } from "./twetch.ts";
 import {
   cancelLogin,
   currentSession,
@@ -975,6 +975,24 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   twetchAccountRemove: async () => {
     await twetchAccountRemove();
     return { removed: true };
+  },
+  /** Read-only Meme Library (Dank Rares) browse/search. */
+  twetchMemes: async (params) => {
+    needBackend();
+    const raw = p(params);
+    return memeLibrary(fetch, {
+      q: typeof raw.q === "string" ? raw.q : undefined,
+      folder: typeof raw.folder === "string" ? raw.folder : undefined,
+      tag: typeof raw.tag === "string" ? raw.tag : undefined,
+      format: typeof raw.format === "string" ? raw.format : undefined,
+      sort: typeof raw.sort === "string" ? raw.sort : undefined,
+      cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,
+      limit: typeof raw.limit === "number" ? raw.limit : 30,
+    });
+  },
+  twetchMemeFolders: async () => {
+    needBackend();
+    return { folders: await memeFolders(fetch) };
   },
 };
 

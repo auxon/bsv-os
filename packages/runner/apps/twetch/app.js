@@ -235,13 +235,178 @@ async function loadNotifications() {
   }
 }
 
+// ── Meme Library ─────────────────────────────────────────────────────
+const memeState = { q: "", folder: "", sort: "recent", cursor: null, total: 0, items: [], foldersLoaded: false, loading: false };
+
+function memeMediaEl(item, opts = {}) {
+  const format = (item.format || "").toLowerCase();
+  const isVideo = format === "mp4" || format === "webm" || format === "mov";
+  const el = document.createElement(isVideo ? "video" : "img");
+  if (isVideo) {
+    el.src = item.mediaUrl;
+    el.poster = item.previewUrl || undefined;
+    el.muted = true;
+    el.loop = true;
+    el.playsInline = true;
+    el.preload = "metadata";
+    if (opts.autoplay) {
+      el.autoplay = true;
+      el.controls = true;
+    }
+  } else {
+    el.src = format === "gif" ? item.mediaUrl : item.previewUrl || item.mediaUrl;
+    el.alt = item.title || "meme";
+    el.loading = "lazy";
+    el.decoding = "async";
+  }
+  el.referrerPolicy = "no-referrer";
+  el.onerror = () => {
+    if (!isVideo && el.src !== item.previewUrl && item.previewUrl) el.src = item.previewUrl;
+  };
+  return el;
+}
+
+function renderMemeCard(item) {
+  const card = document.createElement("article");
+  card.className = "meme-card";
+  card.append(memeMediaEl(item));
+  const title = document.createElement("div");
+  title.className = "meme-title";
+  title.textContent = item.title || "untitled";
+  const sub = document.createElement("div");
+  sub.className = "meme-sub";
+  sub.textContent = [item.folder, item.format, item.tokenNumber ? `#${item.tokenNumber}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  card.append(title, sub);
+  card.addEventListener("click", () => openLightbox(item));
+  return card;
+}
+
+async function loadMemeFolders() {
+  if (memeState.foldersLoaded) return;
+  try {
+    const res = await rpc("twetchMemeFolders");
+    const chips = $("meme-folders");
+    chips.textContent = "";
+    const make = (label, slug, count) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (memeState.folder === slug ? " active" : "");
+      b.textContent = count ? `${label} ${count}` : label;
+      b.addEventListener("click", () => {
+        memeState.folder = slug;
+        for (const c of chips.querySelectorAll(".chip")) c.classList.toggle("active", c === b);
+        loadMemes(true);
+      });
+      return b;
+    };
+    chips.append(make("All", "", 0));
+    for (const f of (res?.folders ?? []).slice(0, 18)) chips.append(make(f.label || f.name || f.slug, f.slug, f.count));
+    memeState.foldersLoaded = true;
+  } catch (e) {
+    $("meme-meta").textContent = e instanceof Error ? e.message : String(e);
+  }
+}
+
+async function loadMemes(reset) {
+  if (memeState.loading) return;
+  memeState.loading = true;
+  if (reset) {
+    memeState.cursor = null;
+    memeState.items = [];
+  }
+  const grid = $("meme-grid");
+  const meta = $("meme-meta");
+  meta.className = "status";
+  meta.textContent = "loading memes…";
+  try {
+    const page = await rpc("twetchMemes", {
+      q: memeState.q,
+      folder: memeState.folder,
+      sort: memeState.sort,
+      cursor: memeState.cursor ?? undefined,
+      limit: 30,
+    });
+    memeState.items = memeState.items.concat(page?.items ?? []);
+    memeState.cursor = page?.nextCursor ?? null;
+    memeState.total = page?.total ?? memeState.items.length;
+    grid.textContent = "";
+    if (!memeState.items.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No memes match.";
+      grid.append(empty);
+    }
+    for (const item of memeState.items) grid.append(renderMemeCard(item));
+    meta.textContent = `${memeState.items.length} of ${memeState.total} memes`;
+    $("meme-more").classList.toggle("hidden", !memeState.cursor);
+  } catch (e) {
+    meta.className = "status warn";
+    meta.textContent = e instanceof Error ? e.message : String(e);
+  } finally {
+    memeState.loading = false;
+  }
+}
+
+let lightboxRef = "";
+function openLightbox(item) {
+  const media = $("lightbox-media");
+  media.textContent = "";
+  media.append(memeMediaEl(item, { autoplay: true }));
+  $("lightbox-title").textContent = item.title || "untitled";
+  $("lightbox-desc").textContent = item.description || "";
+  $("lightbox-tags").textContent = (item.tags ?? []).slice(0, 18).map((t) => `#${t}`).join(" ");
+  lightboxRef = item.onchainRef || "";
+  $("lightbox-open").href = item.url || "https://twetch.com/meme-library";
+  const copy = $("lightbox-copy");
+  copy.textContent = "Copy on-chain ref";
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(lightboxRef);
+      copy.textContent = "Copied";
+    } catch {
+      copy.textContent = lightboxRef || "no ref";
+    }
+  };
+  $("lightbox").classList.remove("hidden");
+}
+
+function closeLightbox() {
+  $("lightbox").classList.add("hidden");
+  $("lightbox-media").textContent = "";
+}
+
+$("lightbox-close").addEventListener("click", closeLightbox);
+$("lightbox").addEventListener("click", (e) => {
+  if (e.target === $("lightbox")) closeLightbox();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("lightbox").classList.contains("hidden")) closeLightbox();
+});
+$("meme-search").addEventListener("submit", (e) => {
+  e.preventDefault();
+  memeState.q = $("meme-query").value.trim();
+  loadMemes(true);
+});
+$("meme-sort").addEventListener("change", () => {
+  memeState.sort = $("meme-sort").value;
+  loadMemes(true);
+});
+$("meme-more").addEventListener("click", () => loadMemes(false));
+
 function setTab(next) {
   tab = next;
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === next);
   $("feed-view").classList.toggle("hidden", next !== "feed");
   $("notifications-view").classList.toggle("hidden", next !== "notifications");
+  $("memes-view").classList.toggle("hidden", next !== "memes");
   if (next === "feed") loadFeed();
-  else loadNotifications();
+  else if (next === "notifications") loadNotifications();
+  else if (next === "memes") {
+    void loadMemeFolders();
+    if (!memeState.items.length) void loadMemes(true);
+  }
 }
 
 $("compose").addEventListener("submit", async (e) => {
@@ -290,7 +455,7 @@ async function boot() {
   pollTimer = setInterval(() => {
     loadStatus();
     if (tab === "feed") loadFeed();
-    else loadNotifications();
+    else if (tab === "notifications") loadNotifications();
   }, 60_000);
   window.addEventListener("beforeunload", () => clearInterval(pollTimer));
 }

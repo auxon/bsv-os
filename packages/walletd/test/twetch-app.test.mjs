@@ -28,6 +28,14 @@ test("twetch app: page has no key material and calls same-origin rpc only", () =
   assert.ok(!/WIF|privateKey|accessToken|idToken/i.test(js));
 });
 
+test("twetch app: meme library tab and endpoints are wired", () => {
+  const html = fs.readFileSync(path.join(appDir, "index.html"), "utf8");
+  const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
+  assert.ok(html.includes('data-tab="memes"'));
+  assert.ok(html.includes('id="meme-grid"'));
+  assert.ok(js.includes("twetchMemes") && js.includes("twetchMemeFolders"));
+});
+
 test("twetch app: media resolver covers both icon shapes (b:// and relative)", () => {
   const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
   assert.ok(js.includes("api.twetch.com/v1/media/"));

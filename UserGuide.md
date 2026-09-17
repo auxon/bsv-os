@@ -156,6 +156,8 @@ or browser extension is involved.
 ```bash
 bsv twetch feed                 # latest 30 posts (--limit=N)
 bsv twetch notifications        # replies/mentions + bell'ed accounts
+bsv twetch memes pepe           # Meme Library browse/search (--folder --tag --sort)
+bsv twetch meme-folders         # Meme Library categories with counts
 bsv twetch status               # identity + whether the posting key is imported
 bsv twetch account import-seed  # one-tap: derive at m/44'/0'/0'/0/0 from your wallet seed
 bsv twetch account import       # or prompt (hidden) for an external Twetch key

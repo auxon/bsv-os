@@ -682,6 +682,17 @@ async function main(): Promise<void> {
         print(await call("twetchNotifications", { limit: Number(flag(tRest, "limit") ?? 30) }));
       } else if (tSub === "status") {
         print(await call("twetchStatus"));
+      } else if (tSub === "memes" || tSub === "meme") {
+        print(await call("twetchMemes", {
+          q: tArg,
+          folder: flag(tRest, "folder"),
+          tag: flag(tRest, "tag"),
+          format: flag(tRest, "format"),
+          sort: flag(tRest, "sort"),
+          limit: Number(flag(tRest, "limit") ?? 30),
+        }));
+      } else if (tSub === "meme-folders" || tSub === "memefolders") {
+        print(await call("twetchMemeFolders"));
       } else if (tSub === "post" && tArg) {
         print(await call("twetchPost", { content: tArg, origin: flag(tRest, "origin") ?? "cli" }));
       } else if (tSub === "account") {
@@ -712,7 +723,7 @@ async function main(): Promise<void> {
           process.exitCode = 2;
         }
       } else {
-        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--origin=name]|status|account <status|import|import-phrase|import-seed|remove>>");
+        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--origin=name]|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|status|account <status|import|import-phrase|import-seed|remove>>");
         process.exitCode = 2;
       }
       break;

@@ -171,7 +171,9 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   Identity action). Size: **M**. State: pilot implemented and tested
   (166 tests); reply/media/green/paid-content remain out of scope until
   the read/post core proves out. Depends: **F2**
-  (runner), **P4** (Twetch OIDC identity).
+  (runner), **P4** (Twetch OIDC identity). Meme Library viewer shipped in
+  the same app (search, category chips, grid, lightbox with copy-ref and
+  open-on-Twetch); reuse/mint/crosspost remain out of scope.
 
 ## Dependency sketch
 
