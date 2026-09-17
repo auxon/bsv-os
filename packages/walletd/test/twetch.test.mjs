@@ -459,3 +459,77 @@ test("twetch: meme library browse/search maps media and folders", async () => {
   assert.equal(folders.length, 2);
   assert.deepEqual(folders[0], { slug: "laugh", label: "Laugh", name: "laugh", count: 466 });
 });
+
+test("twetch: market listings/sales/collections map and deep-link", async () => {
+  const { marketListings, marketSales, marketCollections } = await import("../src/twetch.ts");
+  const img = `b://${"1a".repeat(32)}`;
+  const fetchFn = async (url) => {
+    const u = String(url);
+    if (u.includes("/v1/market/listings")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 7244888, collection: "964a", collectionName: null, createdAtMs: 1, image: img,
+              name: "LizerVAXX #1396", number: 1396, outpoint: "5a94:0", priceSats: 99900000,
+              rarity: null, sellerAddress: "1K7f", sellerUserId: 296, status: "listed",
+            },
+          ],
+          nextCursor: "mc1",
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes("/v1/market/sales")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              txid: "deee", tokenName: "LizerVAXX #1563", number: 1563, collection: "964a",
+              collectionName: "LizerVAXX", image: img, priceSats: 99900000, listPriceSats: 169000000,
+              outpoint: "30de", timestampMs: 2,
+            },
+          ],
+          nextCursor: null,
+        }),
+        { status: 200 },
+      );
+    }
+    if (u.includes("/v1/market/collections")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              contractAddress: "c1fc", name: "Meme Library", description: "", profileImage: img,
+              bannerImage: img, floorSats: 21800000, volumeSats: 27656395680, numListings: 308,
+              owners: 86, salesCount: 345, circulating: 10043, total: 10043, status: "active",
+              launchDateMs: 3,
+            },
+          ],
+          nextCursor: null,
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response("{}", { status: 404 });
+  };
+
+  const listings = await marketListings(fetchFn, { limit: 5 });
+  assert.equal(listings.items.length, 1);
+  assert.ok(listings.items[0].imageUrl.startsWith("https://api.twetch.com/v1/media/"));
+  assert.equal(listings.items[0].priceSats, 99900000);
+  assert.equal(listings.items[0].url, "https://twetch.com/market/964a?token=1396");
+  assert.equal(listings.nextCursor, "mc1");
+
+  const sales = await marketSales(fetchFn, {});
+  assert.equal(sales.items[0].tokenName, "LizerVAXX #1563");
+  assert.equal(sales.items[0].soldAtMs, 2);
+  assert.equal(sales.items[0].listPriceSats, 169000000);
+  assert.equal(sales.items[0].url, "https://twetch.com/market/964a?token=1563");
+
+  const collections = await marketCollections(fetchFn, {});
+  assert.equal(collections.items[0].name, "Meme Library");
+  assert.equal(collections.items[0].floorSats, 21800000);
+  assert.equal(collections.items[0].url, "https://twetch.com/market/c1fc");
+  assert.ok(collections.items[0].imageUrl.startsWith("https://api.twetch.com/v1/media/"));
+});

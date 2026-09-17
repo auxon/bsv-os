@@ -13,6 +13,7 @@
         <button class="tab active" data-tab="feed">Feed</button>
         <button class="tab" data-tab="notifications">Notifications <span id="notif-badge" class="badge hidden"></span></button>
         <button class="tab" data-tab="memes">Memes</button>
+        <button class="tab" data-tab="market">Market</button>
       </nav>
       <div class="me">
         <img id="me-avatar" class="avatar hidden" alt="" />
@@ -56,6 +57,19 @@
         <div id="meme-grid" class="grid"></div>
         <div class="load-more">
           <button id="meme-more" class="hidden">Load more</button>
+        </div>
+      </section>
+
+      <section id="market-view" class="hidden">
+        <div class="chips" id="market-views">
+          <button type="button" class="chip active" data-view="listings">Listings</button>
+          <button type="button" class="chip" data-view="sales">Recent sales</button>
+          <button type="button" class="chip" data-view="collections">Collections</button>
+        </div>
+        <div id="market-meta" class="status"></div>
+        <div id="market-grid" class="grid"></div>
+        <div class="load-more">
+          <button id="market-more" class="hidden">Load more</button>
         </div>
       </section>
     </main>

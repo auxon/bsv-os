@@ -29,7 +29,18 @@ import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer } from "./swaps.ts";
-import { feedLatest, memeFolders, memeLibrary, notifications, postNotifications, postText, userByPubkey } from "./twetch.ts";
+import {
+  feedLatest,
+  marketCollections,
+  marketListings,
+  marketSales,
+  memeFolders,
+  memeLibrary,
+  notifications,
+  postNotifications,
+  postText,
+  userByPubkey,
+} from "./twetch.ts";
 import {
   cancelLogin,
   currentSession,
@@ -993,6 +1004,19 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   twetchMemeFolders: async () => {
     needBackend();
     return { folders: await memeFolders(fetch) };
+  },
+  /** Read-only NFT Market: active listings, recent sales, collections. */
+  twetchMarket: async (params) => {
+    needBackend();
+    const raw = p(params);
+    const view = typeof raw.view === "string" ? raw.view : "listings";
+    const opts = {
+      cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,
+      limit: typeof raw.limit === "number" ? raw.limit : 24,
+    };
+    if (view === "sales") return { view, ...(await marketSales(fetch, opts)) };
+    if (view === "collections") return { view, ...(await marketCollections(fetch, opts)) };
+    return { view: "listings", ...(await marketListings(fetch, opts)) };
   },
 };
 

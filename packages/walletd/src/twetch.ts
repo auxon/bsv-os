@@ -526,3 +526,164 @@ export async function memeFolders(fetchFn: FetchFn): Promise<MemeFolder[]> {
     count: Math.floor(Number(c.count) || 0),
   }));
 }
+
+// ── NFT Market ────────────────────────────────────────────────────────
+
+export interface MarketListing {
+  id: number;
+  name: string;
+  number: number | null;
+  collection: string;
+  collectionName: string | null;
+  imageUrl: string;
+  priceSats: number;
+  rarity: string | null;
+  outpoint: string;
+  sellerAddress: string;
+  sellerUserId: number | null;
+  status: string;
+  createdAtMs: number;
+  url: string;
+}
+
+export interface MarketSale {
+  txid: string;
+  tokenName: string;
+  number: number | null;
+  collection: string;
+  collectionName: string | null;
+  imageUrl: string;
+  priceSats: number;
+  listPriceSats: number | null;
+  rarity: string | null;
+  outpoint: string;
+  soldAtMs: number;
+  url: string;
+}
+
+export interface MarketCollection {
+  contractAddress: string;
+  name: string;
+  description: string;
+  imageUrl: string;
+  bannerUrl: string;
+  floorSats: number;
+  volumeSats: number;
+  numListings: number;
+  owners: number;
+  salesCount: number;
+  circulating: number;
+  total: number;
+  status: string;
+  launchDateMs: number;
+  url: string;
+}
+
+function marketItemUrl(collection: string, number: number | null): string {
+  const base = `https://twetch.com/market/${encodeURIComponent(collection)}`;
+  return number == null ? base : `${base}?token=${number}`;
+}
+
+function asListing(m: Record<string, unknown>): MarketListing {
+  const collection = typeof m.collection === "string" ? m.collection : "";
+  const number = m.number == null ? null : Math.floor(Number(m.number) || 0);
+  return {
+    id: Math.floor(Number(m.id) || 0),
+    name: typeof m.name === "string" ? m.name : "",
+    number,
+    collection,
+    collectionName: typeof m.collectionName === "string" ? m.collectionName : null,
+    imageUrl: mediaUrlOf(m.image),
+    priceSats: Math.floor(Number(m.priceSats) || 0),
+    rarity: typeof m.rarity === "string" ? m.rarity : null,
+    outpoint: typeof m.outpoint === "string" ? m.outpoint : "",
+    sellerAddress: typeof m.sellerAddress === "string" ? m.sellerAddress : "",
+    sellerUserId: m.sellerUserId == null ? null : Math.floor(Number(m.sellerUserId) || 0),
+    status: typeof m.status === "string" ? m.status : "",
+    createdAtMs: Math.floor(Number(m.createdAtMs) || 0),
+    url: marketItemUrl(collection, number),
+  };
+}
+
+function asSale(m: Record<string, unknown>): MarketSale {
+  const collection = typeof m.collection === "string" ? m.collection : "";
+  const number = m.number == null ? null : Math.floor(Number(m.number) || 0);
+  return {
+    txid: typeof m.txid === "string" ? m.txid : "",
+    tokenName: typeof m.tokenName === "string" ? m.tokenName : "",
+    number,
+    collection,
+    collectionName: typeof m.collectionName === "string" ? m.collectionName : null,
+    imageUrl: mediaUrlOf(m.image),
+    priceSats: Math.floor(Number(m.priceSats) || 0),
+    listPriceSats: m.listPriceSats == null ? null : Math.floor(Number(m.listPriceSats) || 0),
+    rarity: typeof m.rarity === "string" ? m.rarity : null,
+    outpoint: typeof m.outpoint === "string" ? m.outpoint : "",
+    soldAtMs: Math.floor(Number(m.timestampMs) || 0),
+    url: marketItemUrl(collection, number),
+  };
+}
+
+function asCollection(m: Record<string, unknown>): MarketCollection {
+  const contractAddress = typeof m.contractAddress === "string" ? m.contractAddress : "";
+  return {
+    contractAddress,
+    name: typeof m.name === "string" ? m.name : "",
+    description: typeof m.description === "string" ? m.description : "",
+    imageUrl: mediaUrlOf(m.profileImage ?? m.profileFallbackImage),
+    bannerUrl: mediaUrlOf(m.bannerImage),
+    floorSats: Math.floor(Number(m.floorSats) || 0),
+    volumeSats: Math.floor(Number(m.volumeSats) || 0),
+    numListings: Math.floor(Number(m.numListings) || 0),
+    owners: Math.floor(Number(m.owners) || 0),
+    salesCount: Math.floor(Number(m.salesCount) || 0),
+    circulating: Math.floor(Number(m.circulating) || 0),
+    total: Math.floor(Number(m.total) || 0),
+    status: typeof m.status === "string" ? m.status : "",
+    launchDateMs: Math.floor(Number(m.launchDateMs) || 0),
+    url: contractAddress ? `https://twetch.com/market/${encodeURIComponent(contractAddress)}` : "https://twetch.com/market",
+  };
+}
+
+interface MarketPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
+async function marketPage<T>(
+  fetchFn: FetchFn,
+  path: string,
+  map: (m: Record<string, unknown>) => T,
+  opts: { cursor?: string; limit?: number },
+): Promise<MarketPage<T>> {
+  const q = new URLSearchParams();
+  if (opts.cursor) q.set("cursor", opts.cursor);
+  q.set("limit", String(Math.min(Math.max(Math.floor(opts.limit ?? 24), 1), 50)));
+  const payload = (await jget(fetchFn, `${path}?${q.toString()}`)) as Record<string, unknown>;
+  const data = Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : [];
+  return {
+    items: data.map(map),
+    nextCursor: typeof payload.nextCursor === "string" ? payload.nextCursor : null,
+  };
+}
+
+export function marketListings(
+  fetchFn: FetchFn,
+  opts: { cursor?: string; limit?: number } = {},
+): Promise<MarketPage<MarketListing>> {
+  return marketPage(fetchFn, "/v1/market/listings", asListing, opts);
+}
+
+export function marketSales(
+  fetchFn: FetchFn,
+  opts: { cursor?: string; limit?: number } = {},
+): Promise<MarketPage<MarketSale>> {
+  return marketPage(fetchFn, "/v1/market/sales", asSale, opts);
+}
+
+export function marketCollections(
+  fetchFn: FetchFn,
+  opts: { cursor?: string; limit?: number } = {},
+): Promise<MarketPage<MarketCollection>> {
+  return marketPage(fetchFn, "/v1/market/collections", asCollection, opts);
+}

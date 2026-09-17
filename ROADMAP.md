@@ -173,7 +173,9 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   the read/post core proves out. Depends: **F2**
   (runner), **P4** (Twetch OIDC identity). Meme Library viewer shipped in
   the same app (search, category chips, grid, lightbox with copy-ref and
-  open-on-Twetch); reuse/mint/crosspost remain out of scope.
+  open-on-Twetch); reuse/mint/crosspost remain out of scope. NFT Market
+  viewer shipped alongside (active listings, recent sales, collections
+  with floor/listings/owners; buy/list/delist stay in the browser).
 
 ## Dependency sketch
 

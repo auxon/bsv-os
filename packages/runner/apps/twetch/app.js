@@ -395,17 +395,117 @@ $("meme-sort").addEventListener("change", () => {
 });
 $("meme-more").addEventListener("click", () => loadMemes(false));
 
+// ── NFT Market ───────────────────────────────────────────────────────
+const marketState = { view: "listings", cursor: null, items: [], loading: false };
+
+function fmtBsv(sats) {
+  const n = Number(sats);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  return `${(n / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "")} BSV`;
+}
+
+function marketCard(view, item) {
+  const a = document.createElement("a");
+  a.className = "meme-card market-card";
+  a.href = item.url || "https://twetch.com/market";
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+
+  const isCollection = view === "collections";
+  const img = document.createElement("img");
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  img.alt = "";
+  img.src = isCollection ? item.imageUrl || item.bannerUrl : item.imageUrl;
+  const fallback = document.createElement("div");
+  fallback.className = "meme-card-fallback";
+  fallback.textContent = "no image";
+  img.onerror = () => img.replaceWith(fallback);
+  a.append(img);
+
+  const title = document.createElement("div");
+  title.className = "meme-title";
+  title.textContent = isCollection ? item.name : item.name || item.tokenName || "untitled";
+
+  const price = document.createElement("div");
+  price.className = "price-tag";
+  price.textContent = isCollection ? `floor ${fmtBsv(item.floorSats)}` : fmtBsv(item.priceSats);
+
+  const sub = document.createElement("div");
+  sub.className = "meme-sub";
+  if (isCollection) {
+    sub.textContent = `${item.numListings ?? 0} listings · ${item.owners ?? 0} owners · ${item.salesCount ?? 0} sales`;
+  } else {
+    const bits = [item.collectionName || "", item.number != null ? `#${item.number}` : ""].filter(Boolean);
+    if (view === "sales" && item.soldAtMs) bits.push(timeAgo(item.soldAtMs));
+    sub.textContent = bits.join(" · ");
+  }
+
+  a.append(title, price, sub);
+  return a;
+}
+
+async function loadMarket(reset) {
+  if (marketState.loading) return;
+  marketState.loading = true;
+  if (reset) {
+    marketState.cursor = null;
+    marketState.items = [];
+  }
+  const grid = $("market-grid");
+  const meta = $("market-meta");
+  meta.className = "status";
+  meta.textContent = "loading market…";
+  try {
+    const page = await rpc("twetchMarket", {
+      view: marketState.view,
+      cursor: marketState.cursor ?? undefined,
+      limit: 24,
+    });
+    marketState.items = marketState.items.concat(page?.items ?? []);
+    marketState.cursor = page?.nextCursor ?? null;
+    grid.textContent = "";
+    if (!marketState.items.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "Nothing here right now.";
+      grid.append(empty);
+    }
+    for (const item of marketState.items) grid.append(marketCard(marketState.view, item));
+    meta.textContent = `${marketState.items.length} ${marketState.view}`;
+    $("market-more").classList.toggle("hidden", !marketState.cursor);
+  } catch (e) {
+    meta.className = "status warn";
+    meta.textContent = e instanceof Error ? e.message : String(e);
+  } finally {
+    marketState.loading = false;
+  }
+}
+
+for (const b of document.querySelectorAll("#market-views .chip")) {
+  b.addEventListener("click", () => {
+    marketState.view = b.dataset.view;
+    for (const c of document.querySelectorAll("#market-views .chip")) c.classList.toggle("active", c === b);
+    loadMarket(true);
+  });
+}
+$("market-more").addEventListener("click", () => loadMarket(false));
+
 function setTab(next) {
   tab = next;
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === next);
   $("feed-view").classList.toggle("hidden", next !== "feed");
   $("notifications-view").classList.toggle("hidden", next !== "notifications");
   $("memes-view").classList.toggle("hidden", next !== "memes");
+  $("market-view").classList.toggle("hidden", next !== "market");
   if (next === "feed") loadFeed();
   else if (next === "notifications") loadNotifications();
   else if (next === "memes") {
     void loadMemeFolders();
     if (!memeState.items.length) void loadMemes(true);
+  } else if (next === "market") {
+    if (!marketState.items.length) void loadMarket(true);
   }
 }
 
