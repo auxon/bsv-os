@@ -13,6 +13,10 @@ import { dispatch, setBackend } from "./rpc.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { migrate, openDb } from "./storage.ts";
+import { createBrc100Wallet } from "./brc100.ts";
+import { WalletWireProcessor } from "@bsv/sdk";
+import type { Knex } from "knex";
+import type { ChainProvider } from "./chain.ts";
 import { tick } from "./monitor.ts";
 import { tickOrders } from "./nightshift.ts";
 
@@ -46,11 +50,129 @@ async function readJson(req: NodeJS.ReadableStream): Promise<unknown> {
   return raw ? (JSON.parse(raw) as unknown) : {};
 }
 
+async function readBytes(req: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+  return Buffer.concat(chunks);
+}
+
+let wireBackend: { db: Knex; chain: ChainProvider } | null = null;
+
+/** Wired by main() next to setBackend; the /w/:call surface stays dead without it. */
+export function setWireBackend(b: { db: Knex; chain: ChainProvider } | null): void {
+  wireBackend = b;
+}
+
+function corsHeaders(origin: string | undefined): Record<string, string> {
+  return {
+    "access-control-allow-origin": origin ?? "*",
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-private-network": "true",
+    vary: "Origin",
+  };
+}
+
+/**
+ * BRC-100 wire call codes (WalletWireCalls, @bsv/sdk 2.6.0 — wire-stable
+ * by design). The HTTP transport posts payload-only bodies to /w/:call,
+ * so the daemon rebuilds the frame: [code][olen][originator][payload].
+ */
+const WIRE_CALL_CODES: Record<string, number> = {
+  createAction: 1,
+  signAction: 2,
+  abortAction: 3,
+  listActions: 4,
+  internalizeAction: 5,
+  listOutputs: 6,
+  relinquishOutput: 7,
+  getPublicKey: 8,
+  revealCounterpartyKeyLinkage: 9,
+  revealSpecificKeyLinkage: 10,
+  encrypt: 11,
+  decrypt: 12,
+  createHmac: 13,
+  verifyHmac: 14,
+  createSignature: 15,
+  verifySignature: 16,
+  acquireCertificate: 17,
+  listCertificates: 18,
+  proveCertificate: 19,
+  relinquishCertificate: 20,
+  discoverByIdentityKey: 21,
+  discoverByAttributes: 22,
+  isAuthenticated: 23,
+  waitForAuthentication: 24,
+  getHeight: 25,
+  getHeader: 26,
+  getNetwork: 27,
+  getVersion: 28,
+};
+
+function originHost(origin: string | undefined): string | null {
+  if (!origin) return null;
+  try {
+    return new URL(origin).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function handler() {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.url === "/health" && req.method === "GET") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, version: VERSION }));
+      return;
+    }
+    // BRC-100 wire surface: the HTTP transport posts payload-only bodies
+    // to /w/:call (originator travels in the Origin header, browser-
+    // stamped and unspoofable). The daemon rebuilds the standard frame
+    // and runs it through WalletWireProcessor, so off-the-shelf
+    // WalletClients interoperate with zero adaptation.
+    if (typeof req.url === "string" && req.url.startsWith("/w/")) {
+      const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, corsHeaders(origin));
+        res.end();
+        return;
+      }
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json", ...corsHeaders(origin) });
+        res.end(JSON.stringify({ error: "POST only" }));
+        return;
+      }
+      if (!wireBackend) {
+        res.writeHead(503, { "content-type": "application/json", ...corsHeaders(origin) });
+        res.end(JSON.stringify({ error: { code: "NO_BACKEND", message: "wallet engine offline" } }));
+        return;
+      }
+      const call = req.url.slice(3).split("?")[0]!;
+      const code = WIRE_CALL_CODES[call];
+      if (code === undefined) {
+        res.writeHead(404, { "content-type": "application/json", ...corsHeaders(origin) });
+        res.end(JSON.stringify({ error: { code: "BAD_METHOD", message: `unknown wire call ${call}` } }));
+        return;
+      }
+      const originator = originHost(origin) ?? "unknown";
+      const payload = await readBytes(req);
+      const originatorBytes = Buffer.from(originator, "utf8");
+      if (originatorBytes.length > 255) {
+        res.writeHead(400, { "content-type": "application/json", ...corsHeaders(origin) });
+        res.end(JSON.stringify({ error: { code: "BAD_PARAM", message: "originator too long" } }));
+        return;
+      }
+      const frame = Buffer.concat([Buffer.from([code, originatorBytes.length]), originatorBytes, payload]);
+      try {
+        const wallet = createBrc100Wallet({ db: wireBackend.db, chain: wireBackend.chain, fetchFn: fetch });
+        const processor = new WalletWireProcessor(wallet as never);
+        const out = await processor.transmitToWalletUint8Array(frame);
+        res.writeHead(200, { "content-type": "application/octet-stream", ...corsHeaders(origin) });
+        res.end(Buffer.from(out));
+      } catch (e) {
+        res.writeHead(400, { "content-type": "application/json", ...corsHeaders(origin) });
+        res.end(JSON.stringify({ error: { code: "WIRE", message: e instanceof Error ? e.message : String(e) } }));
+      }
       return;
     }
     if (req.method !== "POST") {
@@ -124,6 +246,7 @@ export async function main(): Promise<void> {
     await migrate(db);
     const chain = new CombinedProvider();
     setBackend({ db, chain });
+    setWireBackend({ db, chain });
     const loop = async (): Promise<void> => {
       try {
         const res = await tick(

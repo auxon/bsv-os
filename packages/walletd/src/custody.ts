@@ -25,7 +25,9 @@ import {
   Mnemonic,
   P2PKH,
   PrivateKey,
+  Point,
   PublicKey,
+  Schnorr,
   Script,
   Signature,
   Transaction,
@@ -253,7 +255,9 @@ function brc42SignDigest(
   digest: number[],
 ): number[] {
   const root = identityRoot();
-  const cp = (counterparty === "self" ? "self" : checkPeer(counterparty)) as Counterparty;
+  const cp = (counterparty === "self" || counterparty === "anyone"
+    ? counterparty
+    : checkPeer(counterparty)) as Counterparty;
   const key = new KeyDeriver(root).derivePrivateKey(protocolID, keyID, cp);
   const sig = ECDSA.sign(BigNumber.fromString(Buffer.from(digest).toString("hex"), 16), key);
   return Array.from(sig.toDER() as number[]);
@@ -321,6 +325,120 @@ export function brc42VerifyHmac(
   } catch {
     return false;
   }
+}
+
+/** BRC-42 public-key derivation for BRC-100 getPublicKey. */
+export function derivePublicKey(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  forSelf: boolean,
+): string {
+  const cp = (counterparty === "self" || counterparty === "anyone"
+    ? counterparty
+    : checkPeer(counterparty)) as Counterparty;
+  return new KeyDeriver(identityRoot()).derivePublicKey(protocolID, keyID, cp, forSelf).toString();
+}
+
+/** Generic BRC-42 symmetric encryption for BRC-100 encrypt. */
+export function brc42Encrypt(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  plaintext: number[],
+): number[] {
+  const cp = (counterparty === "self" || counterparty === "anyone"
+    ? counterparty
+    : checkPeer(counterparty)) as Counterparty;
+  const out = new KeyDeriver(identityRoot()).deriveSymmetricKey(protocolID, keyID, cp).encrypt(plaintext);
+  return Array.from(out as number[]);
+}
+
+/** Generic BRC-42 symmetric decryption for BRC-100 decrypt. */
+export function brc42Decrypt(
+  protocolID: WalletProtocol,
+  keyID: string,
+  counterparty: string,
+  ciphertext: number[],
+): number[] {
+  const cp = (counterparty === "self" || counterparty === "anyone"
+    ? counterparty
+    : checkPeer(counterparty)) as Counterparty;
+  const out = new KeyDeriver(identityRoot()).deriveSymmetricKey(protocolID, keyID, cp).decrypt(ciphertext);
+  return Array.from(out as number[]);
+}
+
+export interface RevealedLinkage {
+  prover: string;
+  verifier: string;
+  counterparty: string;
+  revelationTime: string;
+  encryptedLinkage: number[];
+  encryptedLinkageProof: number[];
+}
+
+/**
+ * BRC-69 counterparty linkage, built EXACTLY like the reference wallet
+ * (SDK ProtoWallet): raw shared secret plus a Schnorr proof of the root
+ * key, both AES-GCM encrypted to the verifier under the linkage protocol.
+ */
+export function revealCounterpartyLinkage(counterparty: string, verifier: string): RevealedLinkage {
+  const root = identityRoot();
+  const cp = checkPeer(counterparty);
+  const vf = checkPeer(verifier);
+  const kd = new KeyDeriver(root);
+  const linkage = kd.revealCounterpartySecret(cp) as unknown as number[];
+  const proof = new Schnorr().generateProof(root, root.toPublicKey(), PublicKey.fromString(cp), Point.fromDER(linkage));
+  const proofBin = [...proof.R.encode(true), ...proof.SPrime.encode(true), ...proof.z.toArray("be", 32)] as number[];
+  const revelationTime = new Date().toISOString();
+  const enc = (bytes: number[]): number[] => {
+    const out = kd.deriveSymmetricKey([2, "counterparty linkage revelation"], revelationTime, vf).encrypt(bytes);
+    return Array.from(out as number[]);
+  };
+  return {
+    prover: root.toPublicKey().toString(),
+    verifier: vf,
+    counterparty: cp,
+    revelationTime,
+    encryptedLinkage: enc(linkage),
+    encryptedLinkageProof: enc(proofBin),
+  };
+}
+
+/**
+ * BRC-69 specific linkage, same reference construction: the protocol/keyID
+ * offset secret plus a type-0 (empty) proof, both encrypted to the verifier.
+ */
+export function revealSpecificLinkage(
+  counterparty: string,
+  verifier: string,
+  protocolID: WalletProtocol,
+  keyID: string,
+): RevealedLinkage & { protocolID: WalletProtocol; keyID: string; proofType: number } {
+  const root = identityRoot();
+  const cp = (counterparty === "self" || counterparty === "anyone"
+    ? counterparty
+    : checkPeer(counterparty)) as Counterparty;
+  const vf = checkPeer(verifier);
+  const kd = new KeyDeriver(root);
+  const linkage = kd.revealSpecificSecret(cp, protocolID, keyID);
+  const revelationTime = new Date().toISOString();
+  const encProto: WalletProtocol = [2, `specific linkage revelation ${protocolID[0]} ${protocolID[1]}`];
+  const enc = (bytes: number[]): number[] => {
+    const out = kd.deriveSymmetricKey(encProto, keyID, vf).encrypt(bytes);
+    return Array.from(out as number[]);
+  };
+  return {
+    prover: root.toPublicKey().toString(),
+    verifier: vf,
+    counterparty: typeof cp === "string" ? cp : (cp as PublicKey).toString(),
+    revelationTime,
+    encryptedLinkage: enc(linkage),
+    encryptedLinkageProof: enc([0]),
+    protocolID,
+    keyID,
+    proofType: 0,
+  };
 }
 
 /**
