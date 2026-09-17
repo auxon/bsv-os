@@ -23,6 +23,7 @@ import {
 import {
   __setRelay,
   ackDm,
+  createMessageBoxRelay,
   listStored,
   migrateMsgs,
   packEnvelope,
@@ -46,10 +47,25 @@ test("envelopes validate strictly", () => {
   const good = packEnvelope("a".repeat(66), PEER, "deadbeef");
   assert.equal(good.v, 1);
   assert.deepEqual(parseEnvelope(JSON.parse(JSON.stringify(good))), good);
+  assert.deepEqual(parseEnvelope({ message: good }), good); // live relay nests list items
+  assert.deepEqual(parseEnvelope(JSON.stringify({ message: good })), good); // …double-encoded
+  assert.throws(() => parseEnvelope("nope{"), /object/);
   assert.throws(() => parseEnvelope(null), /object/);
   assert.throws(() => parseEnvelope({ ...good, v: 2 }), /version/);
   assert.throws(() => parseEnvelope({ ...good, from: "xyz" }), /pubkeys/);
   assert.throws(() => parseEnvelope({ ...good, body: "zz" }), /hex/);
+});
+
+test("relay list normalizes double-encoded wrapped bodies", async () => {
+  const envelope = packEnvelope("a".repeat(66), PEER, "deadbeef");
+  const fetchFn = async () => new Response(
+    JSON.stringify([{ messageId: "m-1", body: JSON.stringify({ message: envelope }) }]),
+    { status: 200 },
+  );
+  const relay = createMessageBoxRelay(fetchFn);
+  const items = await relay.list("bsv-os-dm");
+  assert.equal(items.length, 1);
+  assert.deepEqual(parseEnvelope(items[0].body), envelope);
 });
 
 function fakeRelay() {
@@ -190,11 +206,23 @@ it("outbox stores ciphertext; inbox decrypts on read; ack marks", async () => {
     const read = await readDm(db, "in-1");
     assert.equal(read.text, "note to self");
     assert.equal(read.peer, self);
+    // live relay nests list items ({ message: {...} }) — same result
+    f.inbox.push({ messageId: "in-2", body: { message: f.calls.sent[0].body } });
+    assert.equal((await syncInbox(db, f.relay)).fresh, 1);
+    const read2 = await readDm(db, "in-2");
+    assert.equal(read2.text, "note to self");
+    assert.equal(read2.peer, self);
+    // live relay double-encodes the body as a JSON string — same result
+    f.inbox.push({ messageId: "in-3", body: JSON.stringify({ message: f.calls.sent[0].body }) });
+    assert.equal((await syncInbox(db, f.relay)).fresh, 1);
+    const read3 = await readDm(db, "in-3");
+    assert.equal(read3.text, "note to self");
+    assert.equal(read3.peer, self);
     const acked = await ackDm(db, f.relay, "in-1");
     assert.equal(acked.acked, true);
     assert.deepEqual(f.calls.acked, ["in-1"]);
     const all = await listStored(db);
-    assert.equal(all.length, 2);
+    assert.equal(all.length, 4);
   } finally {
     __setRelay(null);
     await db.destroy();

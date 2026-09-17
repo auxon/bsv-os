@@ -1,7 +1,7 @@
 # Maintainer: EntangleIT <bsv-os@entangleit.com>
 pkgname=bsv-os-meta
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="BSV OS layer for Omarchy: system BRC-100 wallet daemon, CLI, shell plugins"
 arch=('aarch64')
 url="https://github.com/auxon/bsv-os"
@@ -51,5 +51,13 @@ package() {
     cp -a "$runner/extension" "$pkgdir/usr/share/bsv-os/runner/"
     [ -f "$runner/store.json" ] && cp -a "$runner/store.json" "$pkgdir/usr/share/bsv-os/runner/"
     [ -d "$runner/demo" ] && cp -a "$runner/demo" "$pkgdir/usr/share/bsv-os/runner/"
+  fi
+
+  # File-manager share target (scripts/install.sh copies it into the
+  # Nautilus scripts dir — no $HOME mutation at package time).
+  local nautilus="$startdir/../../../packages/shell/nautilus"
+  if [ -d "$nautilus" ]; then
+    install -dm755 "$pkgdir/usr/share/bsv-os/nautilus"
+    cp -a "$nautilus/." "$pkgdir/usr/share/bsv-os/nautilus/"
   fi
 }

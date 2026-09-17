@@ -3,6 +3,19 @@
 Omarchy remix with a system BRC-100 wallet. Every app, agent, and shell
 interaction can transact; keys never leave the daemon.
 
+## Install
+
+Fresh aarch64 Omarchy machine, one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/auxon/bsv-os/main/scripts/install.sh | bash
+```
+
+Installs the `bsv-os-meta` package from GitHub releases (SHA256-checked),
+enables the wallet daemon, and wires the shell plugin + share target.
+Dev checkout path: `scripts/post-install.sh` (clones, builds, runs tests).
+Full walkthrough: [UserGuide.md](UserGuide.md).
+
 ## Layout
 
 - `packages/walletd/` — `bsv-walletd` daemon (P0 in progress)
@@ -55,7 +68,7 @@ bsv cert list | bsv cert show <id> [--fields a,b] | bsv cert revoke <id>
 bsv basket list | bsv basket balance [name]  # per-basket ledger
 bsv basket create <name> | bsv basket remove <name> | bsv basket assign <txid:vout> --to <basket>
 bsv ord list [--address=<addr>] | bsv ord send <txid:vout> --to <address>
-bsv bsv21 list [--address=<addr>]  # fungible positions (sends deferred, see engine.ts)
+bsv bsv21 list [--address=<addr>] | bsv bsv21 send --id <tokenId> --to <address> --amt <base-units>
 bsv msg send <identityKey> --text <msg> | bsv msg sync|list|show <id>|ack <id>
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
@@ -93,4 +106,5 @@ agent at it.
 - M2: chain + monitor (ARC, reorgs, SQLite), PocketPets regression tests
 - M3: permissions + `bsv` CLI + first migrated app flow
 - Then: Quickshell UI ✅, Twetch identity ✅ (OIDC sign-in; cert issuance
-  binding next), agentpay/x402 rails ✅, ISO (in progress)
+  binding next), agentpay/x402 rails ✅, one-command install ✅
+  (`bsv-os-meta` release + `scripts/install.sh`; bootable ISO still open)

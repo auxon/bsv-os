@@ -6,11 +6,14 @@
  * - ORDFS bulk metadata (`/1sat/ordfs/metadata`) to identify inscriptions,
  * - BSV21 token registry + per-token ordlock balances.
  *
- * Send side lives in engine.ts (ordinal transfers only). BSV21 transfers
- * need protocol-aware tx building and are explicitly deferred (see
- * engine.ts) — the spec's "read-only-first" half is this module.
+ * Send side lives in engine.ts (ordinal + BSV21 transfers). BSV21 transfers
+ * spend token UTXOs and recreate them per the bsv-20 protocol: every token
+ * output carries its own `transfer` inscription (`OP_0 OP_IF "ord" OP_1
+ * <"application/bsv-20"> OP_0 <json> OP_ENDIF`) appended to the owner's
+ * P2PKH script, with conservation enforced (outputs ≤ inputs).
  */
 import type { ChainProvider } from "./chain.ts";
+import { p2pkhScript } from "./tx.ts";
 
 export const ONESAT = "https://api.1sat.app";
 
@@ -235,6 +238,220 @@ export async function bsv21For(
       }),
     );
     for (const r of results) if (r) out.push(r);
+  }
+  return out;
+}
+
+/**
+ * F5 send side: BSV21 (bsv-20 protocol) transfer construction.
+ *
+ * Envelope bytes follow the 1Sat Ordinals standard, verified against the
+ * 1sat-sdk reference (`packages/templates/src/inscription`):
+ *   [owner P2PKH] OP_0 OP_IF "ord" OP_1 <content-type> OP_0 <json> OP_ENDIF
+ * with content-type `application/bsv-20` and JSON
+ * `{"p":"bsv-20","op":"transfer","id":"<txid>_<vout>","amt":"<uint64>"}`.
+ * Amounts are base-unit strings everywhere — never floats.
+ */
+export const BSV20_PROTOCOL = "bsv-20";
+export const BSV20_CONTENT_TYPE = "application/bsv-20";
+const MAX_UINT64 = BigInt(2) ** BigInt(64) - BigInt(1);
+
+/** Canonical `<txid>_<vout>` (lowercase); accepts dot separators. */
+export function normalizeTokenId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const m = /^([0-9a-fA-F]{64})[_.](\d+)$/.exec(raw.trim());
+  if (!m) return null;
+  return `${m[1]!.toLowerCase()}_${Number(m[2])}`;
+}
+
+/** Canonical base-unit amount. Rejects floats, signs, zero, > uint64. */
+export function parseTokenAmount(raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const s = String(raw).trim();
+  if (!/^\d+$/.test(s)) return null;
+  let n: bigint;
+  try {
+    n = BigInt(s);
+  } catch {
+    return null;
+  }
+  if (n <= BigInt(0) || n > MAX_UINT64) return null;
+  return n.toString();
+}
+
+function pushBytes(bytes: Uint8Array): number[] {
+  const arr = Array.from(bytes);
+  if (arr.length <= 75) return [arr.length, ...arr];
+  if (arr.length <= 255) return [0x4c, arr.length, ...arr];
+  return [0x4d, arr.length & 0xff, (arr.length >> 8) & 0xff, ...arr];
+}
+
+const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+/** Owner P2PKH script with the transfer inscription appended. Returns hex. */
+export function bsv21TransferScript(ownerAddress: string, tokenId: string, amt: string): string {
+  const prefix = Buffer.from(p2pkhScript(ownerAddress).toHex(), "hex");
+  const json = Buffer.from(JSON.stringify({ p: BSV20_PROTOCOL, op: "transfer", id: tokenId, amt }), "utf8");
+  const body = Buffer.from([
+    0x00, 0x63, // OP_0 OP_IF
+    ...pushBytes(utf8("ord")),
+    0x51, // OP_1
+    ...pushBytes(utf8(BSV20_CONTENT_TYPE)),
+    0x00, // OP_0
+    ...pushBytes(new Uint8Array(json)),
+    0x68, // OP_ENDIF
+  ]);
+  return Buffer.concat([prefix, body]).toString("hex");
+}
+
+function readPush(buf: Buffer, at: number): { data: Buffer; next: number } | null {
+  if (at >= buf.length) return null;
+  const op = buf[at]!;
+  if (op <= 75) {
+    if (at + 1 + op > buf.length) return null;
+    return { data: buf.subarray(at + 1, at + 1 + op), next: at + 1 + op };
+  }
+  if (op === 0x4c) {
+    if (at + 2 > buf.length) return null;
+    const len = buf[at + 1]!;
+    if (at + 2 + len > buf.length) return null;
+    return { data: buf.subarray(at + 2, at + 2 + len), next: at + 2 + len };
+  }
+  if (op === 0x4d) {
+    if (at + 3 > buf.length) return null;
+    const len = buf[at + 1]! | (buf[at + 2]! << 8);
+    if (at + 3 + len > buf.length) return null;
+    return { data: buf.subarray(at + 3, at + 3 + len), next: at + 3 + len };
+  }
+  return null;
+}
+
+/** Byte offset just past `OP_0 OP_IF`, or -1 when no ord envelope. */
+function ordEnvelopeStart(buf: Buffer): number {
+  for (let i = 0; i + 1 < buf.length; i++) {
+    if (buf[i] === 0x00 && buf[i + 1] === 0x63) return i + 2;
+  }
+  return -1;
+}
+
+/** True when the script carries any `ord` inscription envelope. */
+export function hasOrdEnvelope(scriptHex: string): boolean {
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(String(scriptHex), "hex");
+  } catch {
+    return false;
+  }
+  const start = ordEnvelopeStart(buf);
+  if (start < 0) return false;
+  const tag = readPush(buf, start);
+  return !!tag && tag.data.toString("utf8") === "ord" && buf[tag.next] === 0x51;
+}
+
+export interface Bsv21Envelope {
+  protocol: string;
+  op: string;
+  id: string;
+  amt: string;
+  contentType: string;
+}
+
+/** Parse the first `ord` envelope. Null on any deviation. */
+export function parseBsv21Envelope(scriptHex: string): Bsv21Envelope | null {
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(String(scriptHex), "hex");
+  } catch {
+    return null;
+  }
+  const start = ordEnvelopeStart(buf);
+  if (start < 0) return null;
+  const tag = readPush(buf, start);
+  if (!tag || tag.data.toString("utf8") !== "ord") return null;
+  if (buf[tag.next] !== 0x51) return null; // OP_1
+  const ct = readPush(buf, tag.next + 1);
+  if (!ct) return null;
+  if (buf[ct.next] !== 0x00) return null; // OP_0
+  const body = readPush(buf, ct.next + 1);
+  if (!body) return null;
+  if (buf[body.next] !== 0x68) return null; // OP_ENDIF
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.data.toString("utf8"));
+  } catch {
+    return null;
+  }
+  const o = (parsed ?? {}) as Record<string, unknown>;
+  if (typeof o.p !== "string" || typeof o.op !== "string") return null;
+  return {
+    protocol: o.p,
+    op: o.op,
+    id: typeof o.id === "string" ? o.id : "",
+    amt: typeof o.amt === "string" ? o.amt : "",
+    contentType: ct.data.toString("utf8"),
+  };
+}
+
+export interface TokenHolding {
+  txid: string;
+  vout: number;
+  amt: string;
+  op: string;
+  id: string;
+}
+
+/**
+ * Our unspent carriers of one token: bulk-validate outpoints against the
+ * 1Sat indexer (`POST /1sat/bsv21/{id}/outputs`), keep unspent rows whose
+ * inscription id matches and whose amount parses. Spent rows (`spend`
+ * set) are skipped — the indexer is the arbiter of spend state, the
+ * engine re-verifies scripts before signing.
+ */
+export async function tokenHoldings(
+  tokenId: string,
+  outpoints: string[],
+  opts: { fetchFn?: FetchFn; base?: string } = {},
+): Promise<TokenHolding[]> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const base = opts.base ?? ONESAT;
+  const mine = outpoints
+    .map((o) => {
+      const p = splitOutpoint(o);
+      return p ? `${p.txid}_${p.vout}` : null;
+    })
+    .filter((o): o is string => o !== null);
+  if (!mine.length) return [];
+  let res: Response;
+  try {
+    res = await fetchFn(`${base}/1sat/bsv21/${encodeURIComponent(tokenId)}/outputs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(mine),
+    });
+  } catch (e) {
+    const err = new Error(`token lookup unreachable: ${e instanceof Error ? e.message : String(e)}`) as Error & { code: string };
+    err.code = "RAILS";
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error(`token lookup failed (${res.status})`) as Error & { code: string };
+    err.code = "RAILS";
+    throw err;
+  }
+  const parsed: unknown = await res.json().catch(() => []);
+  // the indexer answers JSON null (200) when none of the outpoints are
+  // known token outputs — treat any non-array as "no holdings"
+  const rows = Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : [];
+  const out: TokenHolding[] = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object" || r.spend) continue;
+    const bsv21 = (r.data as Record<string, unknown> | undefined)?.bsv21 as Record<string, unknown> | undefined;
+    if (!bsv21 || bsv21.id !== tokenId) continue;
+    const amt = parseTokenAmount(bsv21.amt);
+    if (!amt) continue;
+    const p = splitOutpoint(String(r.outpoint ?? ""));
+    if (!p) continue;
+    out.push({ ...p, amt, op: String(bsv21.op ?? ""), id: String(bsv21.id) });
   }
   return out;
 }

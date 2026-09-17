@@ -2,7 +2,7 @@ import { createWallet, exportEntropy, getStatus, importWallet, lock, restoreFrom
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
-import { anchorTip, explorerTxUrl, getBalance, safeLabel, sendOrdinal } from "./engine.ts";
+import { anchorTip, explorerTxUrl, getBalance, safeLabel, sendBsv21, sendOrdinal } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
@@ -565,6 +565,23 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       db: b.db, chain: b.chain,
       origin: typeof origin === "string" ? origin : "cli",
       txid, vout: Math.floor(Number(vout) || 0), to,
+    });
+  },
+  bsv21Send: async (params) => {
+    const b = needBackend();
+    const { tokenId, id, to, amt, origin } = p(params) as {
+      tokenId?: unknown; id?: unknown; to?: unknown; amt?: unknown; origin?: unknown;
+    };
+    const idStr = typeof tokenId === "string" && tokenId ? tokenId : typeof id === "string" ? id : "";
+    if (!idStr) throw Object.assign(new Error("token id required"), { code: "BAD_PARAM" });
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient address required"), { code: "BAD_PARAM" });
+    if (typeof amt !== "string" && typeof amt !== "number") {
+      throw Object.assign(new Error("amt required (base units)"), { code: "BAD_PARAM" });
+    }
+    return sendBsv21({
+      db: b.db, chain: b.chain,
+      origin: typeof origin === "string" ? origin : "cli",
+      tokenId: idStr, to, amt,
     });
   },
   basketCreate: async (params) => {

@@ -5,14 +5,56 @@
  */
 import type { Knex } from "knex";
 import { p2pkhUnlockHook, selfAddress } from "./custody.ts";
-import { Script } from "@bsv/sdk";
+import { Script, Transaction } from "@bsv/sdk";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
 import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
-import { splitOutpoint } from "./tokens.ts";
+import {
+  BSV20_CONTENT_TYPE,
+  BSV20_PROTOCOL,
+  bsv21TransferScript,
+  hasOrdEnvelope,
+  normalizeTokenId,
+  parseBsv21Envelope,
+  parseTokenAmount,
+  splitOutpoint,
+  tokenHoldings,
+  type TokenHolding,
+} from "./tokens.ts";
 import { track } from "./monitor.ts";
 import type { ChainProvider } from "./chain.ts";
+
+const WOC_TX = "https://api.whatsonchain.com/v1/bsv/main/tx";
+
+function fail(code: string, message: string): never {
+  throw Object.assign(new Error(message), { code });
+}
+
+/** Locking script + value of a confirmed outpoint (sighash needs the real script). */
+async function lockingScriptOf(
+  txid: string,
+  vout: number,
+  fetchFn: typeof fetch,
+): Promise<{ scriptHex: string; value: number }> {
+  let res: Response;
+  try {
+    res = await fetchFn(`${WOC_TX}/${txid}/hex`);
+  } catch (e) {
+    fail("RAILS", `tx fetch unreachable: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!res.ok) fail("RAILS", `tx fetch failed (${res.status})`);
+  const hex = (await res.text()).trim();
+  let tx: Transaction;
+  try {
+    tx = Transaction.fromHex(hex);
+  } catch {
+    fail("RAILS", "tx hex unparseable");
+  }
+  const out = tx.outputs[vout];
+  if (!out || !out.lockingScript) fail("RAILS", `vout ${vout} missing from ${txid.slice(0, 12)}`);
+  return { scriptHex: out.lockingScript.toHex(), value: out.satoshis ?? 0 };
+}
 
 export async function getBalance(chain: ChainProvider): Promise<{
   address: string; confirmed: number; unconfirmed: number; utxos: number;
@@ -88,8 +130,6 @@ export async function anchorTip(opts: {
  * output is outputs[0], so the inscribed sat provably lands with the
  * recipient (no other 1-sat input is allowed in funding). Policy-gated
  * on the real fee like anchors; budgets debit on accept only.
- *
- * BSV21 transfers need protocol-aware construction and are deferred.
  */
 export async function sendOrdinal(opts: {
   db: Knex;
@@ -208,4 +248,128 @@ export async function sendSats(opts: {
       .map((o) => ({ vout: o.vout, value: o.value, basket })),
   );
   return { txid: res.txid, fee: built.fee, hex };
+}
+
+/**
+ * F5 BSV21 send: move `amt` base units of one token to a P2PKH address.
+ *
+ * Protocol-aware per the bsv-20 spec (docs.1satordinals.com): the indexer
+ * is the arbiter of spend state (bulk-validated holdings, unspent only),
+ * every token output carries its own `transfer` inscription, and token
+ * conservation is structural — recipient output first, token change
+ * second, so outputs can never exceed inputs (any remainder we forgot
+ * would burn, so the change output is mandatory, not optional).
+ *
+ * Sighash commits to the real carrier scripts (fetched, then cross-checked
+ * against the indexer's amounts), and funding inputs are verified
+ * inscription-free so we never melt an NFT or another token into fees.
+ * Policy-gated on the fee like ordinal sends; tracked + labeled the same.
+ */
+export async function sendBsv21(opts: {
+  db: Knex;
+  chain: ChainProvider;
+  origin: string;
+  tokenId: string;
+  to: string;
+  amt: string | number;
+  fetchFn?: typeof fetch;
+}): Promise<{ txid: string; fee: number; sent: string; change: string; tokenId: string }> {
+  const tokenId = normalizeTokenId(opts.tokenId);
+  if (!tokenId) fail("BAD_PARAM", "tokenId must be <64-hex-txid>_<vout>");
+  try {
+    p2pkhScript(opts.to);
+  } catch {
+    fail("BAD_PARAM", "recipient must be a valid P2PKH address");
+  }
+  const amtStr = parseTokenAmount(opts.amt);
+  if (!amtStr) fail("BAD_PARAM", "amt must be a positive base-unit integer (no decimals)");
+  const amt = BigInt(amtStr);
+  const fetchFn = opts.fetchFn ?? fetch;
+
+  const address = selfAddress();
+  const lock = p2pkhScript(address);
+  const u = await opts.chain.utxos(address);
+
+  // 1. Token carriers: the indexer decides what is unspent and ours.
+  const holdings = await tokenHoldings(
+    tokenId,
+    u.utxos.map((x) => `${x.txid}_${x.vout}`),
+    { fetchFn },
+  );
+  if (!holdings.length) fail("NOT_FOUND", `no unspent ${tokenId.slice(0, 12)} tokens in wallet`);
+  holdings.sort((a, b) => (BigInt(b.amt) === BigInt(a.amt) ? 0 : BigInt(b.amt) > BigInt(a.amt) ? 1 : -1));
+  const picked: TokenHolding[] = [];
+  let have = BigInt(0);
+  for (const h of holdings) {
+    picked.push(h);
+    have += BigInt(h.amt);
+    if (have >= amt) break;
+  }
+  if (have < amt) fail("INSUFFICIENT", `have ${have} need ${amt} base units of ${tokenId.slice(0, 12)}`);
+
+  // 2. Real carrier scripts (sighash commits to the envelope), verified
+  // against the indexer's amounts; plain funding verified inscription-free.
+  const taken = new Set(picked.map((h) => `${h.txid}:${h.vout}`));
+  const fundCandidates = u.utxos
+    .filter((x) => !taken.has(`${x.txid}:${x.vout}`) && x.value > 1)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12);
+  const [tokenScripts, fundScripts] = await Promise.all([
+    Promise.all(picked.map((h) => lockingScriptOf(h.txid, h.vout, fetchFn))),
+    Promise.all(fundCandidates.map((x) => lockingScriptOf(x.txid, x.vout, fetchFn).catch(() => null))),
+  ]);
+  const tokenInputs: SpendableUtxo[] = picked.map((h, i) => {
+    const s = tokenScripts[i]!;
+    const env = parseBsv21Envelope(s.scriptHex);
+    if (
+      !env || env.protocol !== BSV20_PROTOCOL || env.contentType !== BSV20_CONTENT_TYPE ||
+      env.id !== tokenId || env.amt !== h.amt || s.value < 1
+    ) {
+      fail("RAILS", `carrier ${h.txid.slice(0, 8)}:${h.vout} disagrees with the indexer — aborted`);
+    }
+    return { txid: h.txid, vout: h.vout, value: s.value, scriptHex: s.scriptHex };
+  });
+  const funding: SpendableUtxo[] = [];
+  for (let i = 0; i < fundCandidates.length && funding.length < 6; i++) {
+    const s = fundScripts[i];
+    if (!s || hasOrdEnvelope(s.scriptHex)) continue; // inscription carrier — hands off
+    const c = fundCandidates[i]!;
+    funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: s.scriptHex });
+  }
+
+  // 3. Recipient output first, token change second (mandatory), sat change last.
+  const remainder = have - amt;
+  const recipientScript = bsv21TransferScript(opts.to, tokenId, amtStr);
+  const payments: Array<{ address: string; sats: number; scriptHex?: string }> = [
+    { address: opts.to, sats: 1, scriptHex: recipientScript },
+  ];
+  let tokenChangeScript: string | null = null;
+  if (remainder > BigInt(0)) {
+    tokenChangeScript = bsv21TransferScript(address, tokenId, remainder.toString());
+    payments.push({ address, sats: 1, scriptHex: tokenChangeScript });
+  }
+  const built = buildTx({
+    utxos: [...tokenInputs, ...funding],
+    unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
+    payments,
+    changeScriptHex: lock.toHex(),
+    keepOrder: true,
+  });
+  const gate = await check(opts.db, opts.origin, built.fee, "bsv21-send");
+  if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
+  const { hex } = await signTx(built.tx);
+  const res = await opts.chain.broadcast(hex);
+  await track(opts.db, res.txid, `bsv21 send ${amtStr} ${tokenId.slice(0, 8)} to ${opts.to.slice(0, 8)}`, hex);
+  await recordSpend(opts.db, opts.origin, built.fee);
+  const basket = await resolveBasketForOrigin(opts.db, opts.origin);
+  const ours = new Set([lock.toHex(), ...(tokenChangeScript ? [tokenChangeScript] : [])]);
+  await labelOutputs(
+    opts.db,
+    res.txid,
+    built.tx.outputs
+      .map((o, vout) => ({ vout, script: o.lockingScript?.toHex(), value: o.satoshis ?? 0 }))
+      .filter((o) => o.script !== undefined && ours.has(o.script))
+      .map((o) => ({ vout: o.vout, value: o.value, basket })),
+  );
+  return { txid: res.txid, fee: built.fee, sent: amtStr, change: remainder.toString(), tokenId };
 }

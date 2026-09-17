@@ -51,7 +51,13 @@ export interface BuiltTx {
 export function buildTx(opts: {
   utxos: SpendableUtxo[];
   unlockFor: (u: SpendableUtxo) => UnlockHook;
-  payments: Array<{ address: string; sats: number }>;
+  /**
+   * F5 BSV21: token outputs carry a transfer inscription appended to the
+   * owner's P2PKH script. Pass the full script hex and it is used verbatim
+   * (and measured for the fee estimate); address-only payments keep the
+   * plain P2PKH behavior.
+   */
+  payments: Array<{ address: string; sats: number; scriptHex?: string }>;
   opReturn?: string[];
   changeScriptHex: string;
   /**
@@ -75,9 +81,10 @@ export function buildTx(opts: {
   }
   if (total < need) throw new Error(`insufficient funds (have ${total}, need ${need} + fee)`);
 
-  const outLens: number[] = opts.payments.map(
-    (p) => 8 + 1 + p2pkhScript(p.address).toHex().length / 2,
-  );
+  const outLens: number[] = opts.payments.map((p) => {
+    const scriptLen = p.scriptHex ? p.scriptHex.length / 2 : p2pkhScript(p.address).toHex().length / 2;
+    return 8 + 1 + scriptLen;
+  });
   if (opts.opReturn?.length) outLens.push(8 + 1 + opReturnScript(opts.opReturn).toHex().length / 2);
   const estVsize = 10 + 1 + picked.length * 148 + 1 + outLens.reduce((a, b) => a + b, 0) + 8 + 1 + 34;
   let fee = Math.max(MIN_MINER_FEE, Math.ceil((estVsize / 1000) * FEE_SATS_PER_KB));
@@ -99,7 +106,10 @@ export function buildTx(opts: {
     });
   }
   for (const p of opts.payments) {
-    tx.addOutput({ lockingScript: p2pkhScript(p.address), satoshis: p.sats });
+    tx.addOutput({
+      lockingScript: p.scriptHex ? Script.fromHex(p.scriptHex) : p2pkhScript(p.address),
+      satoshis: p.sats,
+    });
   }
   if (opts.opReturn?.length) tx.addOutput({ lockingScript: opReturnScript(opts.opReturn), satoshis: 0 });
   const changeVout = useChange ? tx.outputs.length : -1;

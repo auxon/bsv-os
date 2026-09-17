@@ -550,11 +550,21 @@ async function main(): Promise<void> {
       break;
     }
     case "bsv21": {
-      const [tokSub] = rest;
+      const [tokSub, ...tokRest] = rest;
       if (tokSub === "list" || tokSub === undefined) {
         print(await call("bsv21List", flag(rest, "address") ? { address: flag(rest, "address") } : {}));
+      } else if (tokSub === "send") {
+        const id = flag(rest, "id") ?? tokRest.find((a) => !a.startsWith("--"));
+        const to = flag(rest, "to");
+        const amt = flag(rest, "amt");
+        if (!id || !to || !amt) {
+          console.error("usage: bsv bsv21 send --id <tokenId> --to <address> --amt <base-units> [--origin=name]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("bsv21Send", { tokenId: id, to, amt, origin: flag(rest, "origin") ?? "cli" }));
       } else {
-        console.error("usage: bsv bsv21 <list [--address=<addr>]>");
+        console.error("usage: bsv bsv21 <list [--address=<addr>]|send --id <tokenId> --to <address> --amt <base-units>>");
         process.exitCode = 2;
       }
       break;

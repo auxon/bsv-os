@@ -51,6 +51,20 @@ to macOS. No USB stick.
 Full machine-specific steps, rollback paths, and M1 Air notes:
 [`RUNBOOK-M1.md`](RUNBOOK-M1.md).
 
+### Path C — one command (BSV OS layer, aarch64)
+
+On an existing Omarchy install (either boot path above):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/auxon/bsv-os/main/scripts/install.sh | bash
+```
+
+Installs the `bsv-os-meta` package from GitHub releases (SHA256-checked),
+enables the wallet daemon as a user service, and wires the shell plugin and
+the Files share target. Re-run to upgrade. Developers who want to hack on
+walletd should use `scripts/post-install.sh` (clones, builds, runs tests).
+The bootable macOS-native installer app (Path A) is still separate work.
+
 ## 3. First boot: create your wallet
 
 ```bash
@@ -91,7 +105,8 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Disclose attributes | `bsv cert show <id> --fields a,b` (only those fields, logged) |
 | Split money into pots | `bsv basket create savings` → `bsv basket list` (per-basket balances) |
 | See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
-| Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery experimental, see below) |
+| Send NFTs and tokens | `bsv ord send <txid:vout> --to <addr>`, `bsv bsv21 send --id <id> --to <addr> --amt <base-units>` (amounts are base units; token change returns automatically) |
+| Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery verified peer-to-peer) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
@@ -185,7 +200,7 @@ alongside budgets; an explicit `deny` always wins.
 | Forgot which agent is which | `bsv policies` lists every approval and cap |
 | `login says SETUP_REQUIRED` | Create the bsv-os client at `id.entangleit.com/console` with redirect `http://127.0.0.1:2122/callback`, then `bsv login --client-id=…` |
 | New machine | Install, then `bsv import` — type the 12 words at the hidden prompt (never as a command argument, never into chat). Same identity back. |
-| Inbox stays empty | Delivery over the message relay is experimental: handshake, account, and sends are live, but inbox round-trip is unconfirmed (self-sends may be suppressed or need funded storage). Crypto and outbox are unaffected. |
+| Inbox stays empty | The relay does not list your own sends back — that is expected, not a bug. Messages from other identities arrive via `bsv msg sync` and decrypt with `bsv msg show`. |
 
 ## 8. What's coming
 

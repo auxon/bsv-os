@@ -11,11 +11,12 @@
  * pricing (→ F14), BSV21 sends. BSV21 transfers need protocol-aware
  * construction and are deferred.
  *
- * Relay status (2026-09-15): handshake, account registration, and sends
- * are proven live against messagebox.1sat.app, but inbox delivery is
- * UNCONFIRMED (self-sends never list back — possibly self-suppression or
- * unpaid storage quota). Treat delivery as experimental until a funded
- * inbox or second identity proves the round trip (→ F14 funds this).
+ * Relay status (2026-09-16): handshake, account registration, sends, and
+ * inbox delivery are proven live against messagebox.1sat.app — a second
+ * identity's DM arrived, listed, decrypted, and acked. The account holds
+ * a 1 GiB free baseline (no funding needed for this). Caveat: the relay
+ * does not return your own sends in the inbox list (self-suppression),
+ * so round-trips must be proven peer-to-peer, never self-to-self.
  */
 import type { Knex } from "knex";
 import { randomBytes } from "node:crypto";
@@ -53,8 +54,23 @@ export function packEnvelope(from: string, to: string, bodyHex: string): DmEnvel
 }
 
 export function parseEnvelope(raw: unknown): DmEnvelope {
-  if (!raw || typeof raw !== "object") fail("BAD_ENVELOPE", "envelope must be an object");
-  const e = raw as Record<string, unknown>;
+  let r = raw;
+  // Live list responses double-encode (body arrives as a JSON string).
+  if (typeof r === "string") {
+    try {
+      r = JSON.parse(r) as unknown;
+    } catch {
+      fail("BAD_ENVELOPE", "envelope must be an object");
+    }
+  }
+  if (!r || typeof r !== "object") fail("BAD_ENVELOPE", "envelope must be an object");
+  let e = r as Record<string, unknown>;
+  // Live list responses nest the envelope one level ({ message: {...} },
+  // mirroring the send payload) — accept both shapes so already-stored
+  // rows keep reading.
+  if (e.v === undefined && e.from === undefined && e.message && typeof e.message === "object") {
+    e = e.message as Record<string, unknown>;
+  }
   if (e.v !== 1) fail("BAD_ENVELOPE", "unsupported envelope version");
   for (const k of ["from", "to", "body"] as const) {
     if (typeof e[k] !== "string" || !(e[k] as string)) fail("BAD_ENVELOPE", `envelope.${k} required`);
@@ -124,7 +140,25 @@ export function createMessageBoxRelay(authFetch: FetchLike, base = MESSAGE_BOX):
           : Array.isArray(j.items) ? j.items : []);
       return (rows as Array<Record<string, unknown>>).flatMap((m) => {
         const id = m.messageId ?? m.messageID ?? m.id ?? m.message_id;
-        const body = (m.body ?? m.message ?? m.data ?? m.payload) as unknown;
+        let body = (m.body ?? m.message ?? m.data ?? m.payload) as unknown;
+        // Live list responses double-encode the body (a JSON string of
+        // { message: {...} }, mirroring the send payload) — parse once,
+        // then unwrap to the canonical envelope before storing.
+        if (typeof body === "string") {
+          try {
+            body = JSON.parse(body) as unknown;
+          } catch {
+            /* keep as-is; parseEnvelope rejects it downstream */
+          }
+        }
+        // Live list responses nest the envelope ({ message: {...} }) —
+        // store the canonical envelope, not the wrapper.
+        if (body && typeof body === "object" && !Array.isArray(body)) {
+          const o = body as Record<string, unknown>;
+          if (o.v === undefined && o.from === undefined && o.message && typeof o.message === "object") {
+            body = o.message;
+          }
+        }
         return typeof id === "string" && id ? [{ messageId: id, body }] : [];
       });
     },
