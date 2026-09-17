@@ -178,8 +178,13 @@ async function loadStatus() {
     const hint = $("me-hint");
     if (identity?.handle || identity?.name) {
       handle.textContent = `@${identity.handle || identity.name}`;
-      hint.textContent = "signed in with Twetch";
-      hint.classList.remove("warn");
+      if (identity.stale) {
+        hint.textContent = "session expired — run: bsv login --force";
+        hint.classList.add("warn");
+      } else {
+        hint.textContent = "signed in with Twetch";
+        hint.classList.remove("warn");
+      }
       if (identity.picture) {
         const av = $("me-avatar");
         const url = mediaUrl(identity.picture);
@@ -191,7 +196,7 @@ async function loadStatus() {
       }
     } else {
       handle.textContent = "not signed in";
-      hint.textContent = "run: bsv login";
+      hint.textContent = "run: bsv login --force";
       hint.classList.add("warn");
       $("me-avatar").classList.add("hidden");
     }

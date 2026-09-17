@@ -904,6 +904,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         identity = {
           sub: s.sub, handle: s.handle, name: s.name,
           picture: s.picture, profile: s.profile,
+          stale: s.stale === true,
         };
       }
     } catch {
