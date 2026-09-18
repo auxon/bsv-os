@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import knex from "knex";
 import {
   appIdFor, applyAppUpdate, checkAppUpdates, diffPermissions, getApp, installApp,
-  isLoopbackHost, listApps, manifestSha256, readCatalog, removeApp, stableStringify,
-  storeList, validateManifest,
+  isLoopbackHost, listApps, manifestSha256, manifestUrlFor, readCatalog, removeApp,
+  stableStringify, storeList, validateManifest,
 } from "../src/apps.ts";
 import { migrate } from "../src/storage.ts";
 import { desktopFile } from "../src/desktop.ts";
@@ -55,6 +55,38 @@ test("validateManifest allows an explicit port on the same host", () => {
   );
 });
 
+test("installApp accepts an https URL and fetches <dir>/manifest.json", async () => {
+  const db = await memdb();
+  try {
+    const seen = [];
+    const { app } = await installApp(
+      db,
+      "https://localhost:2121/explorer/",
+      { seedPolicyRequest: async () => {} },
+      {
+        fetchUrl: async (url) => {
+          seen.push(url);
+          return {
+            name: "bsvOS Explorer",
+            start_url: "https://localhost:2121/explorer/",
+            metanet: {
+              schemaVersion: "1",
+              groupPermissions: { description: "read-only", spendingAuthorization: { amount: 0 } },
+            },
+          };
+        },
+      },
+    );
+    assert.equal(seen[0], "https://localhost:2121/explorer/manifest.json");
+    assert.equal(app.domain, "localhost");
+    assert.equal(app.startUrl, "https://localhost:2121/explorer/");
+    assert.equal(manifestUrlFor(app), "https://localhost:2121/explorer/manifest.json");
+    assert.equal((await listApps(db)).length, 1);
+  } finally {
+    await db.destroy();
+  }
+});
+
 test("appIdFor is a safe filename slug", () => {
   assert.equal(appIdFor("https://Demo.Example/path"), "demo-example");
   assert.equal(appIdFor("a"), "a");
@@ -74,7 +106,12 @@ test("install pins, seeds policy, lists, removes", async () => {
       db,
       "https://Demo.Example/extra",
       { seedPolicyRequest: async (o, a, act) => void seeded.push([o, a, act]) },
-      { fetchManifest: async () => GOOD },
+      {
+        fetchUrl: async (url) => {
+          assert.equal(url, "https://demo.example/extra/manifest.json");
+          return GOOD;
+        },
+      },
     );
     assert.equal(app.domain, "demo.example");
     assert.equal(asked.spendCapSats, 50000);

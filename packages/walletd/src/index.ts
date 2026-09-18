@@ -121,7 +121,10 @@ function originHost(origin: string | undefined): string | null {
   }
 }
 
-const TWETCH_ASSETS: Record<string, string> = {
+/** Bundled runner apps served from the daemon's own origin. */
+const RUNNER_APPS = new Set(["twetch", "explorer"]);
+
+const RUNNER_APP_ASSETS: Record<string, string> = {
   "/": "index.html",
   "/index.html": "index.html",
   "/app.js": "app.js",
@@ -129,19 +132,20 @@ const TWETCH_ASSETS: Record<string, string> = {
   "/manifest.json": "manifest.json",
 };
 
-const TWETCH_MIME: Record<string, string> = {
+const RUNNER_APP_MIME: Record<string, string> = {
   "index.html": "text/html; charset=utf-8",
   "app.js": "text/javascript; charset=utf-8",
   "styles.css": "text/css; charset=utf-8",
   "manifest.json": "application/json",
 };
 
-function twetchAppDir(): string | null {
+function runnerAppDir(name: string): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    process.env.BSV_TWETCH_APP_DIR,
-    path.resolve(here, "../../runner/apps/twetch"),
-    "/usr/share/bsv-os/runner/apps/twetch",
+    name === "twetch" ? process.env.BSV_TWETCH_APP_DIR : undefined,
+    process.env.BSV_RUNNER_APPS_DIR ? path.join(process.env.BSV_RUNNER_APPS_DIR, name) : undefined,
+    path.resolve(here, `../../runner/apps/${name}`),
+    `/usr/share/bsv-os/runner/apps/${name}`,
   ].filter((c): c is string => typeof c === "string" && c.length > 0);
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, "index.html"))) return dir;
@@ -282,10 +286,15 @@ function handler() {
     // own HTTPS origin, so the page's JSON-RPC calls are same-origin and
     // the pinned loopback cert already covers it. Domain "localhost" keys
     // the runner app; nothing here touches custody or the app bridge.
-    if (req.method === "GET" && typeof req.url === "string" && (req.url === "/twetch" || req.url.startsWith("/twetch/"))) {
-      const rel = req.url.slice("/twetch".length).split("?")[0]!;
-      const file = TWETCH_ASSETS[rel === "" || rel === "/" ? "/" : rel];
-      const dir = file ? twetchAppDir() : null;
+    const appMatch =
+      req.method === "GET" && typeof req.url === "string"
+        ? /^\/([a-z0-9-]+)(\/[^?]*)?/.exec(req.url.split("?")[0]!)
+        : null;
+    if (appMatch && RUNNER_APPS.has(appMatch[1]!)) {
+      const name = appMatch[1]!;
+      const rel = appMatch[2] ?? "/";
+      const file = RUNNER_APP_ASSETS[rel === "" ? "/" : rel];
+      const dir = file ? runnerAppDir(name) : null;
       if (!file || !dir) {
         res.writeHead(404, { "content-type": "text/plain" });
         res.end("not found");
@@ -293,7 +302,7 @@ function handler() {
       }
       try {
         const body = fs.readFileSync(path.join(dir, file));
-        res.writeHead(200, { "content-type": TWETCH_MIME[file] ?? "application/octet-stream", "cache-control": "no-store" });
+        res.writeHead(200, { "content-type": RUNNER_APP_MIME[file] ?? "application/octet-stream", "cache-control": "no-store" });
         res.end(body);
       } catch {
         res.writeHead(500, { "content-type": "text/plain" });

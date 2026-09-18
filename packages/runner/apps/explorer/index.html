@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bsvOS Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/blocks">
+      <span class="brand-mark">◈</span>
+      <span class="brand-name">bsvOS</span>
+      <span class="brand-sub">Explorer</span>
+    </a>
+    <div class="live" id="live">
+      <span class="live-chip" id="chip-height" title="Block height">—</span>
+      <span class="live-chip" id="chip-mempool" title="Mempool">—</span>
+      <span class="live-chip" id="chip-difficulty" title="Difficulty">—</span>
+    </div>
+    <form class="search" id="search-form" autocomplete="off">
+      <input id="search-input" placeholder="Search txid / block hash / height / address" spellcheck="false" aria-label="Search the chain">
+      <button type="submit" aria-label="Search">↵</button>
+    </form>
+    <nav class="tabs">
+      <a class="tab" data-tab="blocks" href="#/blocks">Blocks</a>
+      <a class="tab" data-tab="wallet" href="#/wallet">My Wallet</a>
+    </nav>
+  </header>
+  <main id="view" class="view"></main>
+  <div class="toast" id="toast" hidden></div>
+  <footer class="footer">
+    <span>local-only · reads WhatsOnChain · no keys, no tracking</span>
+    <span id="clock"></span>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

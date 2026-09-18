@@ -1,0 +1,13 @@
+{
+  "name": "bsvOS Explorer",
+  "short_name": "Explorer",
+  "start_url": "https://localhost:2121/explorer/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Local block explorer: reads the public chain through WhatsOnChain and the local wallet's own history. Read-only; never signs or spends.",
+      "spendingAuthorization": { "amount": 0, "description": "read-only — no spending" }
+    }
+  }
+}

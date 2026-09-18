@@ -303,14 +303,41 @@ export async function installApp(
   hooks: {
     seedPolicyRequest(origin: string, amountSats: number, action: string): Promise<void>;
   },
-  opts: { fetchManifest?: (domain: string) => Promise<unknown>; manifestJson?: unknown } = {},
+  opts: {
+    fetchManifest?: (domain: string) => Promise<unknown>;
+    manifestJson?: unknown;
+    /** Test/embedding override for URL installs (default: fetchManifestFrom). */
+    fetchUrl?: (url: string) => Promise<unknown>;
+  } = {},
 ): Promise<{ app: AppRecord; asked: AppAsked }> {
-  const clean = domain.toLowerCase().trim().replace(/^https?:\/\//, "").split("/")[0]!;
-  // manifestJson is the dev-install path (`bsv app install --manifest-file`):
-  // same validation, network fetch skipped.
-  const manifest = opts.manifestJson !== undefined
-    ? opts.manifestJson
-    : await (opts.fetchManifest ?? fetchManifest)(clean);
+  const input = domain.trim();
+  const isUrl = /^https?:\/\//i.test(input);
+  let clean: string;
+  let manifest: unknown;
+  if (opts.manifestJson !== undefined) {
+    // dev-install path (`bsv app install --manifest-file`): same validation,
+    // network fetch skipped.
+    clean = input.toLowerCase().replace(/^https?:\/\//, "").split("/")[0]!;
+    manifest = opts.manifestJson;
+  } else if (isUrl) {
+    // URL install: `bsv app install https://host:port/path/` fetches
+    // <dir>/manifest.json (loopback certs are trusted for 127.0.0.0/8 and
+    // localhost), and the host (with explicit port) is the app identity.
+    let parsed: URL;
+    try {
+      parsed = new URL(input);
+    } catch {
+      throw new Error("install URL is not a URL");
+    }
+    if (parsed.protocol !== "https:") throw new Error("install URL must be https");
+    clean = parsed.hostname.toLowerCase();
+    const dir = parsed.href.endsWith("/") ? parsed.href : `${parsed.href}/`;
+    const manifestUrl = new URL("manifest.json", dir).toString();
+    manifest = await (opts.fetchUrl ?? fetchManifestFrom)(manifestUrl);
+  } else {
+    clean = input.toLowerCase().replace(/^https?:\/\//, "").split("/")[0]!;
+    manifest = await (opts.fetchManifest ?? fetchManifest)(clean);
+  }
   const v = validateManifest(clean, manifest);
   await saveApp(db, clean, {
     name: v.name, startUrl: v.startUrl, icon: v.icon, spendCapSats: v.spendCapSats,
@@ -355,11 +382,14 @@ export interface UpdateCheck {
 /** Manifest fetcher: domain for identity, url for transport. */
 export type ManifestFetch = (domain: string, url?: string) => Promise<unknown>;
 
-/** Manifest URL follows the installed start_url (host + explicit port). */
+/** Manifest URL follows the installed start_url (host, port, and path). */
 export function manifestUrlFor(app: Pick<AppRecord, "domain" | "startUrl">): string {
   try {
     const u = new URL(app.startUrl);
-    if (u.protocol === "https:") return `${u.protocol}//${u.host}/manifest.json`;
+    if (u.protocol === "https:") {
+      const dir = u.pathname.endsWith("/") ? u.pathname : u.pathname.slice(0, u.pathname.lastIndexOf("/") + 1);
+      return `${u.protocol}//${u.host}${dir}manifest.json`;
+    }
   } catch {
     /* fall through to the default */
   }
