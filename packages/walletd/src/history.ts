@@ -35,6 +35,8 @@ export interface HistoryRequest {
   amount_sats: number;
   action: string;
   created_at: number;
+  /** Calibrated Jev advisor score, when one was recorded (null otherwise). */
+  jev: { verdict: string; prob: number; risk: number; riskLevel: string; confidence: number } | null;
   commands: { allow: string; deny: string };
 }
 
@@ -117,10 +119,12 @@ export async function getHistory(db: Knex, chain?: ChainProvider): Promise<Histo
     last_check: number; detail: string | null; created_at: number;
   }>;
   const reqRows = (await db("policy_requests")
-    .select("id", "origin", "amount_sats", "action", "created_at")
+    .select("id", "origin", "amount_sats", "action", "created_at", "jev_verdict", "jev_prob", "jev_risk", "jev_risk_level", "jev_confidence")
     .orderBy("created_at", "desc")
     .limit(100)) as Array<{
     id: number; origin: string; amount_sats: number; action: string; created_at: number;
+    jev_verdict: string | null; jev_prob: number | null; jev_risk: number | null;
+    jev_risk_level: string | null; jev_confidence: number | null;
   }>;
   const polRows = (await db("policies")
     .select("origin", "mode", "spend_cap_sats", "updated_at")
@@ -130,7 +134,16 @@ export async function getHistory(db: Knex, chain?: ChainProvider): Promise<Histo
 
   const transactions: HistoryTransaction[] = txRows.map((t) => ({ ...t, hint: txHint(t.status) }));
   const requests: HistoryRequest[] = reqRows.map((r) => ({
-    ...r,
+    id: r.id, origin: r.origin, amount_sats: r.amount_sats, action: r.action, created_at: r.created_at,
+    jev: r.jev_verdict
+      ? {
+          verdict: r.jev_verdict,
+          prob: Number(r.jev_prob ?? 0),
+          risk: Number(r.jev_risk ?? 0),
+          riskLevel: r.jev_risk_level ?? "routine",
+          confidence: Number(r.jev_confidence ?? 0),
+        }
+      : null,
     commands: { allow: `bsv allow ${r.origin}`, deny: `bsv deny ${r.origin}` },
   }));
   const policies: HistoryPolicy[] = polRows.map((row) => ({

@@ -25,6 +25,8 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `anchor_tip` | `{ sha256 }` | Timestamp 64-hex on-chain (OP_RETURN). Policy-gated. Returns `{ txid, fee }`. |
 | `list_pending` | — | Txs the daemon is watching: `seen` / `mined` / `failed`. |
 | `x402_pay` | `{ url, method?, data? }` | Metered fetch: quotes, pays from YOUR budget through policy, retries with proof. Returns resource + receipt. Denials work like `anchor_tip`. |
+| `jev_decide` | `{ state, questions, model? }` | Calibrated decision call (TypeSafe System One): `noul` (yes/no probability), `choice`, `score`; returns probabilities + confidence in ~250 ms. Batch all questions into one call; ~$0.00002/call. For classification, routing, risk scoring, triage — not writing or open-ended reasoning. |
+| `jev_status` | — | Whether Jev is configured in the daemon, the model, and the auto-approval thresholds. |
 
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
@@ -38,6 +40,12 @@ asks you to import a phrase, refuse and point them at `bsv import`.
 2. A denial names the exact fix: `ask your human to run: bsv allow <your-agent-name>`.
 3. Relay that command verbatim to your human and stop. Do not retry-spam, do not rephrase, do not try another tool to route around it.
 4. After approval, retry once. Caps may still bind you (`over spend cap`) — same handling: relay, stop, wait.
+
+When the daemon has Jev configured, a denial may carry a Jev verdict
+(`Jev ask …`, `Jev deny …`). That is advisory context for the human, not an
+invitation to rephrase the request and retry — a human approval is still
+what unblocks you. Origins approved with `--auto` let confident, routine
+spends through; if yours is not, the same relay rule applies.
 
 For long-running work, ask your human for a **sub-wallet** instead of a bare
 approval: `bsv agent mint <your-agent-name> --budget=<sats> [--daily=<sats>]
@@ -79,9 +87,10 @@ If step 3 returns the approval message instead, send your human:
 
 ```bash
 bsv status                    # locked? enrolled?
-bsv allow <agent> [capSats]   # approve an agent, optionally capped
+bsv allow <agent> [capSats] [--auto]  # approve an agent, optionally capped; --auto lets Jev approve routine spends
 bsv deny <agent>              # revoke
 bsv pending                   # watch queue
+bsv jev status                # Jev advisor on/off + thresholds
 bsv unlock | bsv lock
 ```
 

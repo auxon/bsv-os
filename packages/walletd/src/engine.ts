@@ -25,6 +25,7 @@ import {
 } from "./tokens.ts";
 import { track } from "./monitor.ts";
 import type { ChainProvider } from "./chain.ts";
+import type { JevDecide, SpendContext } from "./jev.ts";
 
 const WOC_TX = "https://api.whatsonchain.com/v1/bsv/main/tx";
 
@@ -190,7 +191,9 @@ export async function spendTo(opts: {
     changeScriptHex: lock.toHex(),
   });
   const total = pays.reduce((a, p) => a + p.sats, 0) + built.fee;
-  const gate = await check(opts.db, opts.origin, total, "app-spend");
+  const gate = await check(opts.db, opts.origin, total, "app-spend", {
+    context: { label: opts.label, to: pays.length === 1 ? pays[0]!.address : `${pays.length} recipients` },
+  });
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);
@@ -260,7 +263,9 @@ export async function sendOrdinal(opts: {
     changeScriptHex: lock.toHex(),
     keepOrder: true,
   });
-  const gate = await check(opts.db, opts.origin, built.fee, "ordinal-send");
+  const gate = await check(opts.db, opts.origin, built.fee, "ordinal-send", {
+    context: { to: opts.to, label: `ordinal ${parts.txid.slice(0, 8)}:${parts.vout}` },
+  });
   if (gate.verdict !== "allow") {
     const err = new Error(`denied: ${gate.reason}`) as Error & { code: string };
     err.code = "POLICY_DENY";
@@ -296,6 +301,8 @@ export async function sendSats(opts: {
   to: string;
   sats: number;
   label?: string;
+  context?: Partial<Omit<SpendContext, "origin" | "action" | "amountSats">>;
+  jev?: JevDecide;
 }): Promise<{ txid: string; fee: number; hex: string }> {
   const amount = Math.floor(Number(opts.sats) || 0);
   if (!(amount > 0)) throw Object.assign(new Error("amount must be a positive sat number"), { code: "BAD_PARAM" });
@@ -315,7 +322,10 @@ export async function sendSats(opts: {
     changeScriptHex: lock.toHex(),
   });
   const total = amount + built.fee;
-  const gate = await check(opts.db, opts.origin, total, "send");
+  const gate = await check(opts.db, opts.origin, total, "send", {
+    context: { label: opts.label, to: opts.to, ...opts.context },
+    ...(opts.jev ? { jev: opts.jev } : {}),
+  });
   if (gate.verdict !== "allow") {
     const err = new Error(`denied: ${gate.reason}`) as Error & { code: string };
     err.code = "POLICY_DENY";
@@ -443,7 +453,9 @@ export async function sendBsv21(opts: {
     changeScriptHex: lock.toHex(),
     keepOrder: true,
   });
-  const gate = await check(opts.db, opts.origin, built.fee, "bsv21-send");
+  const gate = await check(opts.db, opts.origin, built.fee, "bsv21-send", {
+    context: { to: opts.to, label: `bsv21 ${amtStr} ${tokenId.slice(0, 8)}` },
+  });
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);
@@ -539,7 +551,9 @@ export async function inscribeMint(opts: {
     opReturn: memo.length ? memo : undefined,
     changeScriptHex: lock.toHex(),
   });
-  const gate = await check(opts.db, opts.origin, 1 + feeSats + built.fee, "app-inscribe");
+  const gate = await check(opts.db, opts.origin, 1 + feeSats + built.fee, "app-inscribe", {
+    context: { label: opts.label, to },
+  });
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);

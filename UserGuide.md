@@ -219,6 +219,33 @@ separate `allow` needed, every spend debits the budget, and `bsv history`
 (plus the bar panel) shows per-agent spend. Caps still apply per action
 alongside budgets; an explicit `deny` always wins.
 
+### Jev decisions (optional)
+
+Give the daemon an OpenRouter key and every spend request gets a second
+opinion from Jev (TypeSafe System One): a calibrated allow/ask/deny plus a
+routine/unverified/harmful risk score, shown in `bsv requests` and the
+panel next to the Approve button. You still approve — Jev advises.
+
+```bash
+mkdir -p ~/.config/bsv-os && printf 'OPENROUTER_API_KEY=sk-or-...\n' > ~/.config/bsv-os/walletd.env
+chmod 600 ~/.config/bsv-os/walletd.env
+systemctl --user restart bsv-walletd
+bsv jev status              # enabled: true, model, auto thresholds
+```
+
+To let a trusted origin spend without waking you when Jev is confident it
+is routine, approve it in **auto mode** with a cap:
+
+```bash
+bsv allow researcher 50000 --auto   # cap 50k sats; Jev allow + high confidence only
+bsv allow researcher 50000          # plain allow: no Jev call, cap only
+```
+
+Auto mode is fail-closed: a low-confidence or ask/deny answer (or no
+answer at all) becomes a normal pending request you see in Approvals.
+`bsv jev decide --state '<json|text>' --questions '<json>'` lets you (and
+agents, via the `jev_decide` MCP tool) ask Jev directly.
+
 ## 6. Safety rules (read once, remember forever)
 
 1. **Recovery phrase = everything.** Paper or password manager. Never in

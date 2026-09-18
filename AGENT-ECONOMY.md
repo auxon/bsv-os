@@ -133,6 +133,16 @@ bsv agent mint sell4sats --budget=2000000 --daily=500000 --expiry=30d
 Budget denials (`over lifetime budget`, `over daily allowance`, `expired`,
 `revoked`) are final until the human re-mints.
 
+**The Jev layer (optional).** With `OPENROUTER_API_KEY` in the daemon
+environment, every pending request carries a calibrated allow/ask/deny +
+risk score from Jev (visible in `bsv requests`, `bsv history`, and the
+panel). Approving an origin with `bsv allow <origin> <cap> --auto` lets a
+confident, routine `allow` verdict spend within the cap without waking the
+human; anything else — ask/deny, low confidence, no answer — still becomes
+a pending request. Agents and apps that want their own decisions call the
+daemon (`bsv jev decide` or the `jev_decide` MCP tool) so the OpenRouter
+key stays in the daemon environment, never in the app.
+
 ### 3.3 Spending: the createAction facade
 
 Everything that moves money funnels through one call shape:

@@ -17,6 +17,7 @@ import type { Knex } from "knex";
 import { brc42SignData, brc42Verify } from "./custody.ts";
 import { sendSats } from "./engine.ts";
 import type { ChainProvider } from "./chain.ts";
+import type { JevDecide } from "./jev.ts";
 import type { WalletProtocol } from "@bsv/sdk";
 import { createHash } from "node:crypto";
 
@@ -135,6 +136,10 @@ export interface PayResult {
 /**
  * One-shot metered fetch: quote → policy-gated pay → retry with proof →
  * receipt. Non-402 responses return {paid:false} with the data.
+ *
+ * Quote screening: the requirement (host, amount, description, resource)
+ * travels into the policy decision state, so a Jev-scored origin judges
+ * the actual quote — not just "an x402 payment happened".
  */
 export async function x402Pay(opts: {
   db: Knex;
@@ -144,6 +149,7 @@ export async function x402Pay(opts: {
   body?: unknown;
   origin: string;
   fetchFn?: FetchFn;
+  jev?: JevDecide;
 }): Promise<PayResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const method = (opts.method ?? "GET").toUpperCase();
@@ -170,6 +176,14 @@ export async function x402Pay(opts: {
   const { txid, hex: txHex } = await sendSats({
     db: opts.db, chain: opts.chain, origin: opts.origin,
     to: req.payTo, sats: req.amount, label: `x402 ${host} ${req.amount} sats`,
+    context: {
+      kind: "x402",
+      host,
+      resourceUrl: req.resourceUrl,
+      description: req.description,
+      to: req.payTo,
+    },
+    ...(opts.jev ? { jev: opts.jev } : {}),
   });
   // Exact gateway envelope (auxon/x402-gateway src/x402.ts): the gateway
   // verifies the raw tx itself and broadcasts via ARC. One txid pays for

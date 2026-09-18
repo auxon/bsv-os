@@ -31,7 +31,16 @@ test("history merges txs, requests, and policies with action commands", async ()
       { txid: "b".repeat(64), label: "anchor cafe", status: "seen", attempts: 0, last_check: 0, created_at: now - 1 },
       { txid: "c".repeat(64), label: "anchor lost-race", status: "failed", attempts: 3, last_check: now, detail: "double-spend lost", created_at: now },
     ]);
-    await check(db, "research-agent", 250, "anchor");
+    await check(db, "research-agent", 250, "anchor", {
+      jev: async () => ({
+        model: "fake",
+        answers: {
+          verdict: { type: "choice", choice: "allow", probabilities: { allow: 0.9, ask: 0.05, deny: 0.05 }, confidence: 0.85 },
+          risk: { type: "score", score: 0.2, legend: { 0: "routine", 1: "unverified", 2: "harmful" }, probabilities: { 0: 0.9 }, confidence: 0.8 },
+        },
+        elapsedMs: 1,
+      }),
+    });
     await setPolicy(db, "cli", "allow", 50000);
     await setPolicy(db, "evil.example", "deny");
     await mintAgent(db, { name: "nightshift", budgetSats: 1000 });
@@ -46,6 +55,7 @@ test("history merges txs, requests, and policies with action commands", async ()
 
     assert.equal(h.requests.length, 1);
     assert.deepEqual(h.requests[0].commands, { allow: "bsv allow research-agent", deny: "bsv deny research-agent" });
+    assert.deepEqual(h.requests[0].jev, { verdict: "allow", prob: 0.9, risk: 0.2, riskLevel: "routine", confidence: 0.8 });
 
     assert.equal(h.policies.length, 2);
     const cli = h.policies.find((p) => p.origin === "cli");

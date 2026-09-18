@@ -131,6 +131,11 @@ function flag(rest: string[], name: string): string | undefined {
   return undefined;
 }
 
+/** Inline value, or @file to read the value from a file. */
+function argText(raw: string): string {
+  return raw.startsWith("@") ? fs.readFileSync(raw.slice(1), "utf8") : raw;
+}
+
 /** --expiry 30d | 2026-10-14 | <ms epoch> → ms epoch, 0 = never. */
 function parseExpiry(raw: string | undefined): number {
   if (!raw) return 0;
@@ -283,13 +288,17 @@ async function main(): Promise<void> {
       break;
     }
     case "allow": {
-      const [origin, cap] = rest;
+      const [origin, cap] = rest.filter((a) => !a.startsWith("--"));
       if (!origin) {
-        console.error("usage: bsv allow <origin> [capSats]");
+        console.error("usage: bsv allow <origin> [capSats] [--auto]");
         process.exitCode = 2;
         break;
       }
-      print(await call("policyApprove", { origin, capSats: Number(cap ?? 0) }));
+      print(await call("policyApprove", {
+        origin,
+        capSats: Number(cap ?? 0),
+        ...(rest.includes("--auto") ? { auto: true } : {}),
+      }));
       break;
     }
     case "deny": {
@@ -305,6 +314,46 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "jev": {
+      const [jSub, ...jRest] = rest;
+      if (jSub === "status" || jSub === undefined) {
+        print(await call("jevStatus"));
+        break;
+      }
+      if (jSub !== "decide") {
+        console.error("usage: bsv jev <status|decide>");
+        process.exitCode = 2;
+        break;
+      }
+      const stateRaw = flag(jRest, "state");
+      const questionsRaw = flag(jRest, "questions");
+      if (stateRaw === undefined || questionsRaw === undefined) {
+        console.error("usage: bsv jev decide --state <json|text|@file> --questions <json|@file> [--model=m]");
+        process.exitCode = 2;
+        break;
+      }
+      let state: unknown;
+      let questions: unknown;
+      try {
+        const stateText = argText(stateRaw);
+        try {
+          state = JSON.parse(stateText);
+        } catch {
+          state = stateText; // a plain string is a valid state
+        }
+        questions = JSON.parse(argText(questionsRaw));
+      } catch (e) {
+        console.error(`jev decide: ${e instanceof Error ? e.message : e}`);
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("jevDecide", {
+        state,
+        questions,
+        ...(flag(jRest, "model") ? { model: flag(jRest, "model") } : {}),
+      }));
+      break;
+    }
     case "overlay": {
       const [ovSub, ...ovRest] = rest;
       const ovArg = ovRest.find((a) => !a.startsWith("--"));
@@ -745,6 +794,8 @@ async function main(): Promise<void> {
           mediaBase64,
           mediaMime,
         }));
+      } else if (tSub === "index" && tArg) {
+        print(await call("twetchIndex", { txid: tArg }));
       } else if (tSub === "account") {
         if (tArg === "import-seed" || tArg === "derive") {
           print(await call("twetchAccountImportFromSeed", { path: flag(tRest, "path") }));
@@ -773,7 +824,7 @@ async function main(): Promise<void> {
           process.exitCode = 2;
         }
       } else {
-        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--media=<file> [--media-mime=<mime>]] [--origin=name]|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|user <id> [--limit=N]|market [listings|sales|collections] [--cursor=C] [--limit=N]|status|account <status|import|import-phrase|import-seed|remove>>");
+        console.error("usage: bsv twetch <feed [--limit=N]|notifications [--limit=N]|post <text> [--media=<file> [--media-mime=<mime>]] [--origin=name]|index <txid>|memes [query] [--folder=slug] [--tag=x] [--format=all|gif|png|webp] [--sort=recent|top|popular|rarity] [--limit=N]|meme-folders|user <id> [--limit=N]|market [listings|sales|collections] [--cursor=C] [--limit=N]|status|account <status|import|import-phrase|import-seed|remove>>");
         process.exitCode = 2;
       }
       break;
@@ -929,7 +980,7 @@ async function main(): Promise<void> {
           }
         }
       } else {
-        console.error("usage: bsv app <install <domain> [--manifest-file <path>]|list|remove <domain>|update [<domain>|--all] [--approve-widening]|open <domain>>");
+        console.error("usage: bsv app <install <domain|https://host/path/> [--manifest-file <path>]|list|remove <domain>|update [<domain>|--all] [--approve-widening]|open <domain>>");
         process.exitCode = 2;
       }
       break;
@@ -999,7 +1050,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|history|anchor|share|allow|deny|requests|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|history|anchor|share|allow|deny|requests|jev|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

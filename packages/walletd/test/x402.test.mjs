@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 
 // partitioned keyring namespace (see custody.ts svc())
 process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-x402";
+// Hermetic: the policy advisor must never reach a real decision endpoint.
+delete process.env.OPENROUTER_API_KEY;
 import knex from "knex";
 import { MockChainProvider } from "../src/chain.ts";
 import { migrate } from "../src/storage.ts";
 import { createWallet, destroyWallet, getStatus, hasWallet, __resetCache, selfAddress } from "../src/custody.ts";
 import { sendSats } from "../src/engine.ts";
-import { setPolicy } from "../src/policy.ts";
+import { pendingRequests, setPolicy } from "../src/policy.ts";
 import {
   attestSpend,
   listReceipts,
@@ -175,6 +177,50 @@ it("attestations mint and verify; tampering fails", async () => {
     const tampered = { ...a.statement, txCount: 999 };
     assert.equal(verifyAttestation({ statement: tampered, keyId: a.keyId, signature: a.signature }).valid, false);
     assert.equal(verifyAttestation({ statement: a.statement, keyId: "deadbeef", signature: a.signature }).valid, false);
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("x402 quote screening: quote details reach the decision and a deny blocks payment", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const chain = new MockChainProvider();
+    chain.credit(selfAddress(), { txid: "c".repeat(64), vout: 0, value: 5_000_000, height: 900 });
+    await setPolicy(db, "cli", "ask");
+    let state = null;
+    let questions = null;
+    const jev = async (s, q) => {
+      state = s;
+      questions = q;
+      return {
+        model: "fake",
+        answers: {
+          verdict: { type: "choice", choice: "deny", probabilities: { allow: 0.02, ask: 0.08, deny: 0.9 }, confidence: 0.9 },
+          risk: { type: "score", score: 1.8, legend: { 0: "routine", 1: "unverified", 2: "harmful" }, probabilities: { 2: 0.9 }, confidence: 0.9 },
+        },
+        elapsedMs: 1,
+      };
+    };
+    await assert.rejects(
+      x402Pay({ db, chain, url: "https://x.example/r", origin: "cli", fetchFn: stubGateway({ quoteB64: QUOTE_B64 }), jev }),
+      /first-run approval required/,
+    );
+    assert.equal(state.kind, "x402");
+    assert.equal(state.host, "x.example");
+    assert.equal(state.pay_to, "1DHBH964yuvJnneuUe7EKFpVyJK1Vkz8Y4");
+    assert.equal(state.resource_url, "https://x.example/r");
+    assert.equal(state.description, "demo");
+    assert.ok(state.amount_sats >= 2); // quote + fee, the total leaving the wallet
+    assert.match(questions.verdict.instructions, /pay-per-call/);
+    const rows = await pendingRequests(db);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].jev_verdict, "deny");
+    assert.equal(rows[0].jev_risk_level, "harmful");
+    assert.equal((await listReceipts(db)).length, 0); // nothing paid
   } finally {
     await db.destroy();
     await destroyWallet();

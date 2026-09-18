@@ -13,10 +13,13 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the six wallet tools", async () => {
+test("lists the eight wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-  assert.deepEqual(tools, ["anchor_tip", "get_version", "list_pending", "wallet_balance", "wallet_status", "x402_pay"]);
+  assert.deepEqual(tools, [
+    "anchor_tip", "get_version", "jev_decide", "jev_status",
+    "list_pending", "wallet_balance", "wallet_status", "x402_pay",
+  ]);
   await client.close();
   await server.close();
 });
@@ -83,5 +86,44 @@ test("locked wallet and bad input surface cleanly", async () => {
   await assert.rejects(client.callTool({ name: "nope", arguments: {} }), /unknown tool/);
   await client.close();
   await server.close();
+});
+
+test("jev_decide forwards state and questions to the daemon", async () => {
+  let seen = null;
+  const { client, server } = await pair(async (method, params) => {
+    seen = { method, params };
+    return { model: "typesafe/jev-1.13", answers: { q: { type: "noul", noul: 0.9 } } };
+  });
+  const questions = { q: { type: "noul", instructions: "yes?" } };
+  const res = await client.callTool({ name: "jev_decide", arguments: { state: { a: 1 }, questions } });
+  assert.equal(seen.method, "jevDecide");
+  assert.deepEqual(seen.params.state, { a: 1 });
+  assert.deepEqual(seen.params.questions, questions);
+  assert.equal(JSON.parse(res.content[0].text).answers.q.noul, 0.9);
+  await assert.rejects(client.callTool({ name: "jev_decide", arguments: { questions } }), /state is required/);
+  await assert.rejects(client.callTool({ name: "jev_decide", arguments: { state: "x" } }), /questions map is required/);
+  await client.close();
+  await server.close();
+});
+
+test("jev_status reports the advisor config and a missing key is actionable", async () => {
+  const { client, server } = await pair(async (method) => {
+    assert.equal(method, "jevStatus");
+    return { enabled: false, model: "typesafe/jev-1.13", auto: { minVerdictProb: 0.7, maxRisk: 0.5, minConfidence: 0.6 } };
+  });
+  const res = await client.callTool({ name: "jev_status", arguments: {} });
+  assert.equal(JSON.parse(res.content[0].text).enabled, false);
+  await client.close();
+  await server.close();
+
+  const { client: c2, server: s2 } = await pair(async () => {
+    throw { code: "NO_KEY", message: "OPENROUTER_API_KEY is not set" };
+  });
+  await assert.rejects(
+    c2.callTool({ name: "jev_decide", arguments: { state: "x", questions: { q: { type: "noul", instructions: "y" } } } }),
+    /OPENROUTER_API_KEY/,
+  );
+  await c2.close();
+  await s2.close();
 });
 

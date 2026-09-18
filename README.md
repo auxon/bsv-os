@@ -53,7 +53,9 @@ bsv unlock | bsv lock
 bsv balance                 # live chain lookup
 bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
 bsv share <file>            # hash + anchor a file (label + explorer link)
-bsv allow <origin> [cap] | bsv deny <origin> | bsv requests | bsv policies
+bsv allow <origin> [cap] [--auto] | bsv deny <origin> | bsv requests | bsv policies
+bsv jev status              # advisor on/off, model, auto-approval thresholds
+bsv jev decide --state <json|text|@file> --questions <json|@file>  # one calibrated decision
 bsv agent mint <name> --budget=N [--daily=N] [--expiry=30d|YYYY-MM-DD]
 bsv agent list | bsv agent show <name> | bsv agent revoke <name>
 bsv pending                 # monitor queue
@@ -90,15 +92,37 @@ working as designed.
 bsv mcp --agent=research-agent   # stdio server: Claude Code, OpenCode, etc.
 ```
 
-Six tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
+Eight tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
 `list_pending`, `x402_pay` (metered fetch, spends the agent's own budget
-through policy). Every call is stamped with the agent name, so daemon policy
+through policy), `jev_decide` (calibrated decision calls, ~$0.00002 each),
+and `jev_status`. Every call is stamped with the agent name, so daemon policy
 and the custody lock apply per-agent. A first-run denial surfaces as
 `ask your human to run: bsv allow research-agent` — the agent loop closes
 without ever touching keys.
 
 Agent instructions live in [SKILLS.md](SKILLS.md) — point any MCP-capable
 agent at it.
+
+## Jev decisions
+
+With `OPENROUTER_API_KEY` set in the daemon environment (see
+`packages/walletd/bsv-walletd.service`, `EnvironmentFile`), Jev
+(TypeSafe System One) scores spends and x402 quotes before policy decides:
+
+- **Advisor** — every pending request carries a calibrated verdict + risk
+  score (`bsv requests`, `bsv history`, the panel's Approvals). The human
+  still approves; nothing spends on advice.
+- **Auto mode** — `bsv allow <origin> <cap> --auto` lets a confident,
+  routine `allow` verdict (P ≥ 0.7, risk < 0.5, confidence ≥ 0.6; tunable
+  via `BSV_WALLETD_JEV_AUTO_*`) spend within the cap without waking you.
+  Anything else — ask/deny verdicts, low confidence, no answer — becomes a
+  pending request. Fail-closed by design.
+- **x402 quote screening** — the quote's host, amount, description, and
+  resource URL travel into the decision state, so suspicious quotes are
+  denied before any sats move.
+
+Turn the advisor off with `BSV_WALLETD_JEV=off`; `bsv jev decide` stays
+available for agents and apps (the key never leaves the daemon).
 
 ## Roadmap
 

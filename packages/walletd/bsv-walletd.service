@@ -9,12 +9,14 @@ ExecStartPre=/usr/bin/mkdir -p %h/.local/share/bsv-os
 ExecStart=%h/.local/bin/bsv-walletd
 Restart=on-failure
 RestartSec=3
+# Jev decisions: OPENROUTER_API_KEY lives in this 0600 env file, not the unit
+EnvironmentFile=-%h/.config/bsv-os/walletd.env
 # Hardening: keys live in the login keyring, daemon never touches the net but ARC
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/bsv-os %t
+ReadWritePaths=%h/.local/share/bsv-os %h/.local/share/applications %t
 
 [Install]
 WantedBy=default.target

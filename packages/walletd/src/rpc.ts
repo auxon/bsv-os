@@ -9,6 +9,7 @@ import {
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
+import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
@@ -31,6 +32,7 @@ import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer } from "./swaps.ts";
 import {
   feedLatest,
+  indexPost,
   marketCollections,
   marketListings,
   marketSales,
@@ -182,10 +184,11 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   },
   policyApprove: async (params) => {
     const b = needBackend();
-    const { origin, capSats } = p(params) as { origin?: unknown; capSats?: unknown };
+    const { origin, capSats, auto } = p(params) as { origin?: unknown; capSats?: unknown; auto?: unknown };
     if (typeof origin !== "string" || !origin) throw Object.assign(new Error("origin required"), { code: "BAD_PARAM" });
-    await setPolicy(b.db, origin, "allow", Math.max(0, Math.floor(Number(capSats) || 0)));
-    return { origin, mode: "allow" };
+    const mode = auto === true ? "auto" : "allow";
+    await setPolicy(b.db, origin, mode, Math.max(0, Math.floor(Number(capSats) || 0)));
+    return { origin, mode };
   },
   policyDeny: async (params) => {
     const b = needBackend();
@@ -201,6 +204,23 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   policyPending: async () => {
     const b = needBackend();
     return { requests: await pendingRequests(b.db) };
+  },
+  /** Jev advisor status: enabled, model, auto-approval thresholds (never the key). */
+  jevStatus: () => ({
+    enabled: jevEnabled(),
+    model: jevModel(),
+    auto: autoThresholds(),
+  }),
+  /**
+   * One calibrated decision call. Agents and apps go through the daemon so
+   * the OpenRouter key stays in the daemon environment; ~$0.00002/call.
+   */
+  jevDecide: async (params) => {
+    const { state, questions, model } = p(params) as { state?: unknown; questions?: unknown; model?: unknown };
+    if (state === undefined || state === null) throw Object.assign(new Error("state required"), { code: "BAD_PARAM" });
+    return jevDecideCall(state, questions as Record<string, JevQuestion>, {
+      model: typeof model === "string" && model ? model : undefined,
+    });
   },
   agentMint: async (params) => {
     const b = needBackend();
@@ -961,6 +981,18 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       },
       raw.content,
       { userId, media },
+    );
+  },
+  twetchIndex: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    const txid = typeof raw.txid === "string" ? raw.txid.trim() : "";
+    const session = await currentSession(b.db).catch(() => null);
+    const userId = Math.floor(Number(session?.sub ?? 0));
+    return indexPost(
+      { db: b.db, chain: b.chain, fetchFn: fetch, origin: "twetch", expectUserId: userId },
+      txid,
+      { userId },
     );
   },
   twetchAccountImport: async (params) => {

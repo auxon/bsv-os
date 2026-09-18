@@ -64,6 +64,27 @@ const TOOLS = [
       required: ["url"],
     },
   },
+  {
+    name: "jev_decide",
+    description: "Ask Jev (TypeSafe System One) for a calibrated decision: a state (facts) plus typed questions — noul (yes/no probability), choice (pick from a set you define), score (rate on ordered levels) — returns probabilities and confidence in ~250 ms. Batch all questions into one call. ~$0.00002/call. Use for classification, routing, risk scoring, triage; not for writing or open-ended reasoning.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        state: { description: "facts to judge: string, object, or array (redact secrets)" },
+        questions: {
+          type: "object" as const,
+          description: 'map of id -> { type: "noul"|"choice"|"score", instructions, criteria? }; choice needs { option: description }, score needs >=2 level strings',
+        },
+        model: { type: "string", description: "default typesafe/jev-1.13" },
+      },
+      required: ["state", "questions"],
+    },
+  },
+  {
+    name: "jev_status",
+    description: "Whether Jev is configured in the daemon, which model is used, and the auto-approval thresholds.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
 ];
 
 function text(value: unknown) {
@@ -88,6 +109,12 @@ export function friendlyError(agent: string, err: unknown): McpError {
   }
   if (code === "WALLET_LOCKED" || code === "NO_WALLET") {
     return new McpError(ErrorCode.InvalidRequest, `wallet unavailable (${message}). Ask your human to unlock it.`);
+  }
+  if (code === "NO_KEY" || code === "JEV_UNAVAILABLE" || code === "JEV_TIMEOUT") {
+    return new McpError(
+      ErrorCode.InvalidRequest,
+      `Jev unavailable (${message}). Ask your human to set OPENROUTER_API_KEY for the daemon.`,
+    );
   }
   return new McpError(ErrorCode.InternalError, `${code}: ${message}`.slice(0, 500));
 }
@@ -130,6 +157,21 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             origin: agent,
           }));
         }
+        case "jev_decide": {
+          if (args.state === undefined || args.state === null) {
+            throw new McpError(ErrorCode.InvalidParams, "state is required");
+          }
+          if (args.questions === null || typeof args.questions !== "object") {
+            throw new McpError(ErrorCode.InvalidParams, "questions map is required");
+          }
+          return text(await callDaemon("jevDecide", {
+            state: args.state,
+            questions: args.questions,
+            ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
+          }));
+        }
+        case "jev_status":
+          return text(await callDaemon("jevStatus"));
         default:
           throw new McpError(ErrorCode.MethodNotFound, `unknown tool: ${name}`);
       }

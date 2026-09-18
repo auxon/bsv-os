@@ -904,12 +904,28 @@ Panel {
           spacing: 8
           Layout.fillWidth: true
 
-          Text {
-            text: `${modelData.origin ?? "?"} · ${modelData.action ?? "spend"}${modelData.amount_sats ? ` · ${modelData.amount_sats} sats` : ""}`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
+          ColumnLayout {
+            spacing: 2
             Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.origin ?? "?"} · ${modelData.action ?? "spend"}${modelData.amount_sats ? ` · ${modelData.amount_sats} sats` : ""}`
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Text {
+              visible: !!modelData.jev
+              text: modelData.jev
+                ? `Jev: ${modelData.jev.verdict} p=${modelData.jev.prob.toFixed(2)} · risk ${modelData.jev.riskLevel} ${modelData.jev.risk.toFixed(2)} · conf ${modelData.jev.confidence.toFixed(2)}`
+                : ""
+              color: modelData.jev && modelData.jev.verdict === "deny" ? Color.urgent : Color.muted
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
           }
 
           Button {
