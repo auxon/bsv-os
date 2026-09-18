@@ -26,7 +26,9 @@ import {
   buildMediaScript,
   buildPostScript,
   feedLatest,
+  indexPost,
   notifications,
+  parsePostTx,
   postFields,
   postNotifications,
   postText,
@@ -604,6 +606,71 @@ test("twetch: media script matches Twetch's B:// media output", () => {
   assert.equal(k, b.length);
 });
 
+test("twetch: parsePostTx recovers text and media ref from a broadcast tx", () => {
+  const address = "1FgiUa9oMqcEsHyPD6i3yLTu2qq9BzdxR7";
+  const textHex = buildPostScript("hello chain\n\nb://abc", { address, signature: "sig" });
+  const textOnly = parsePostTx(textHex);
+  assert.equal(textOnly.content, "hello chain\n\nb://abc");
+  assert.equal(textOnly.mime, "text/markdown");
+  assert.equal(textOnly.encoding, "UTF-8");
+  assert.equal(textOnly.media, null);
+
+  const media = Array.from({ length: 300 }, (_, i) => (i * 13) % 256);
+  const withMedia = parsePostTx(textHex + buildMediaScript(media, "image/jpeg"));
+  assert.equal(withMedia.content, textOnly.content);
+  assert.equal(withMedia.media.mime, "image/jpeg");
+  assert.equal(withMedia.media.sha256, Utils.toHex(Hash.sha256(media)));
+
+  assert.equal(parsePostTx("deadbeef"), null);
+  assert.equal(parsePostTx(""), null);
+});
+
+test("twetch: index falls back to the locally stored tx hex when WoC is down", async () => {
+  const db = await memdb();
+  try {
+    await destroyWallet();
+    __resetCache();
+    await createWallet();
+    await twetchAccountRemove();
+    const key = PrivateKey.fromRandom();
+    await twetchAccountImport(key.toWif());
+    const address = key.toPublicKey().toAddress("mainnet");
+
+    const scriptHex =
+      buildPostScript("db fallback post", { address, signature: "sig" }) +
+      buildMediaScript([1, 2, 3, 4], "image/png");
+    const txid = "e".repeat(64);
+    await db("pending_txs").insert({ txid, label: "test", status: "seen", created_at: Date.now(), tx_hex: scriptHex });
+
+    const apiCalls = [];
+    const fetchFn = async (url, init) => {
+      const u = String(url);
+      if (u.includes("whatsonchain.com")) return new Response("not found", { status: 404 });
+      if (u.includes("/v1/auth/user-by-pubkey/")) return new Response(JSON.stringify({ userId: 32324 }), { status: 200 });
+      if (u.endsWith("/v1/posts")) {
+        apiCalls.push(init);
+        return new Response(JSON.stringify({ id: 1 }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const res = await indexPost(
+      { db, chain: null, fetchFn, origin: "twetch", expectUserId: 32324 },
+      txid,
+      { userId: 32324 },
+    );
+    assert.equal(res.content, "db fallback post");
+    assert.equal(res.mediaRef, `b://${Utils.toHex(Hash.sha256([1, 2, 3, 4]))}`);
+    assert.equal(apiCalls.length, 1);
+    assert.equal(JSON.parse(apiCalls[0].body).txHex, scriptHex);
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    await twetchAccountRemove();
+    __resetCache();
+  }
+});
+
 test("twetch: posting with media embeds a second OP_RETURN and pays for it", async () => {
   const db = await memdb();
   try {
@@ -671,6 +738,26 @@ test("twetch: posting with media embeds a second OP_RETURN and pays for it", asy
     const body = JSON.parse(apiCalls[0].init.body);
     assert.equal(body.content, expectedText);
     assert.deepEqual(body.mediaRefs, [mediaRef], "mediaRefs drives twetch.com rendering");
+
+    // Recovery path: re-submitting an already-broadcast post parses the tx
+    // back (content + media sha) instead of needing the original text.
+    const reindexed = await indexPost(
+      { db, chain, fetchFn, origin: "twetch", expectUserId: 32324 },
+      res.txid,
+      { userId: 32324 },
+    );
+    assert.equal(reindexed.content, expectedText);
+    assert.equal(reindexed.mediaRef, mediaRef);
+    assert.equal(reindexed.submitted, true);
+    assert.equal(apiCalls.length, 2, "re-index submitted to the Twetch API");
+    const reBody = JSON.parse(apiCalls[1].init.body);
+    assert.equal(reBody.txHex, hex);
+    assert.equal(reBody.content, expectedText);
+    assert.deepEqual(reBody.mediaRefs, [mediaRef]);
+    await assert.rejects(
+      indexPost({ db, chain, fetchFn, origin: "twetch" }, "not-a-txid", { userId: 32324 }),
+      (e) => e.code === "BAD_PARAM",
+    );
 
     const change = tx.outputs.find((o) => o.lockingScript.toHex().startsWith("76a914"));
     assert.ok(change, "change output present");

@@ -352,14 +352,16 @@ export async function postText(
       options: { randomizeOutputs: false },
     },
     ctx.origin,
-  )) as { txid?: string };
+  )) as { txid?: string; rawTx?: string };
   const txid = action.txid;
   if (!txid) fail("RAILS", "post transaction was not broadcast");
 
   let submitted = false;
   let submitDetail = "not submitted";
   try {
-    const hex = await txHex(ctx.fetchFn, txid);
+    // The wallet already has the signed tx; WoC is only a fallback (its
+    // mempool view can lag right after broadcast).
+    const hex = action.rawTx ?? (await txHex(ctx.fetchFn, txid, ctx.db));
     if (hex) {
       const userId = opts.userId ?? 0;
       if (userId > 0) {
@@ -378,19 +380,40 @@ export async function postText(
   return { txid, content: text, authorAddress: address, submitted, submitDetail, mediaBytes: media?.bytes.length ?? 0 };
 }
 
-async function txHex(fetchFn: FetchFn, txid: string): Promise<string | null> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 20000);
-  try {
-    const res = await fetchFn(`https://api.whatsonchain.com/v1/bsv/main/tx/${txid}/hex`, { signal: ctrl.signal });
-    if (!res.ok) return null;
-    const hex = (await res.text()).trim();
-    return /^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0 ? hex : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
+/**
+ * Raw tx hex for indexing. Local first (the daemon stores every broadcast
+ * in pending_txs — authoritative and instant), then WhatsOnChain with
+ * retries: a just-broadcast tx can take a few seconds to appear in WoC's
+ * mempool view. Returns null when everything fails; callers treat that as
+ * "on-chain only" and can recover later with `bsv twetch index <txid>`.
+ */
+async function txHex(fetchFn: FetchFn, txid: string, db?: Knex, attempts = 4): Promise<string | null> {
+  if (db) {
+    try {
+      const row = (await db("pending_txs").where({ txid }).first()) as { tx_hex?: string } | undefined;
+      const local = typeof row?.tx_hex === "string" ? row.tx_hex.trim() : "";
+      if (local.length > 0 && /^[0-9a-fA-F]+$/.test(local) && local.length % 2 === 0) return local;
+    } catch {
+      /* fall through to the network */
+    }
   }
+  for (let i = 0; i < attempts; i++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetchFn(`https://api.whatsonchain.com/v1/bsv/main/tx/${txid}/hex`, { signal: ctrl.signal });
+      if (res.ok) {
+        const hex = (await res.text()).trim();
+        if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) return hex;
+      }
+    } catch {
+      /* retry below */
+    } finally {
+      clearTimeout(t);
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+  }
+  return null;
 }
 
 /** x-twetch-sig: BSM(`${method}\n${path}\n${userId}\n${ts}\n${body}`). */
@@ -414,30 +437,151 @@ async function submitPost(
     txHex: txHexStr,
     ...(mediaRef ? { mediaRefs: [mediaRef] } : {}),
   });
-  const ts = Date.now();
-  const sig = await twetchSignBytes(Utils.toArray(authMessage("POST", path, userId, ts, body), "utf8"));
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 20000);
-  try {
-    const res = await ctx.fetchFn(`${TWETCH_API}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        "x-twetch-user": String(userId),
-        "x-twetch-ts": String(ts),
-        "x-twetch-sig": sig,
-      },
-      body,
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
+  // Submission is idempotent by txid; retry transient indexer failures
+  // (5xx/429/network) with a fresh auth timestamp each attempt.
+  let lastDetail = "twetch index failed";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ts = Date.now();
+    const sig = await twetchSignBytes(Utils.toArray(authMessage("POST", path, userId, ts, body), "utf8"));
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 20000);
+    try {
+      const res = await ctx.fetchFn(`${TWETCH_API}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "x-twetch-user": String(userId),
+          "x-twetch-ts": String(ts),
+          "x-twetch-sig": sig,
+        },
+        body,
+        signal: ctrl.signal,
+      });
+      if (res.ok) return;
       const detail = (await res.text().catch(() => "")).slice(0, 200);
-      fail("RAILS", `twetch index ${res.status}: ${detail}`);
+      lastDetail = `twetch index ${res.status}: ${detail}`;
+      if (res.status < 500 && res.status !== 429) fail("RAILS", lastDetail);
+    } catch (e) {
+      if (e instanceof Error && (e as { code?: string }).code === "RAILS") throw e;
+      lastDetail = e instanceof Error ? e.message.slice(0, 200) : String(e);
+    } finally {
+      clearTimeout(t);
     }
-  } finally {
-    clearTimeout(t);
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
   }
+  fail("RAILS", lastDetail);
+}
+
+interface Push {
+  data: Buffer;
+  next: number;
+}
+
+/** Read one data push (0x01..0x4b, OP_PUSHDATA1/2/4) at `p`. */
+function readPush(buf: Buffer, p: number): Push | null {
+  const op = buf[p];
+  if (op === undefined) return null;
+  if (op >= 0x01 && op <= 0x4b) return { data: buf.subarray(p + 1, p + 1 + op), next: p + 1 + op };
+  if (op === 0x4c) {
+    const n = buf[p + 1];
+    if (n === undefined) return null;
+    return { data: buf.subarray(p + 2, p + 2 + n), next: p + 2 + n };
+  }
+  if (op === 0x4d) {
+    if (p + 2 >= buf.length) return null;
+    const n = buf[p + 1]! | (buf[p + 2]! << 8);
+    return { data: buf.subarray(p + 3, p + 3 + n), next: p + 3 + n };
+  }
+  if (op === 0x4e) {
+    if (p + 4 >= buf.length) return null;
+    const n = buf.readUInt32LE(p + 1);
+    return { data: buf.subarray(p + 5, p + 5 + n), next: p + 5 + n };
+  }
+  return null;
+}
+
+export interface ParsedPostTx {
+  content: string;
+  mime: string;
+  encoding: string;
+  media: { sha256: string; mime: string } | null;
+}
+
+/** Extract the B:// text (and optional media) record from a broadcast tx. */
+export function parsePostTx(hexStr: string): ParsedPostTx | null {
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(hexStr, "hex");
+  } catch {
+    return null;
+  }
+  if (!buf.length) return null;
+  const marker = Buffer.from(B_PREFIX, "utf8");
+  const at = buf.indexOf(marker);
+  if (at < 0) return null;
+  const content = readPush(buf, at + marker.length);
+  if (!content) return null;
+  const mime = readPush(buf, content.next);
+  const encoding = mime ? readPush(buf, mime.next) : null;
+  const parsed: ParsedPostTx = {
+    content: content.data.toString("utf8"),
+    mime: mime ? mime.data.toString("utf8") : "",
+    encoding: encoding ? encoding.data.toString("utf8") : "",
+    media: null,
+  };
+  const second = buf.indexOf(marker, at + marker.length);
+  if (second >= 0) {
+    const bytes = readPush(buf, second + marker.length);
+    if (bytes && bytes.data.length) {
+      const mediaMime = readPush(buf, bytes.next);
+      parsed.media = {
+        sha256: Utils.toHex(Hash.sha256(Array.from(bytes.data))),
+        mime: mediaMime ? mediaMime.data.toString("utf8") : "",
+      };
+    }
+  }
+  return parsed;
+}
+
+export interface IndexResult {
+  txid: string;
+  content: string;
+  mediaRef: string | null;
+  submitted: boolean;
+  submitDetail: string;
+}
+
+/**
+ * Re-submit an already-broadcast post to Twetch's indexer. Recovery path
+ * for posts published while the tx hex was unavailable ("on-chain only");
+ * safe to retry — the indexer dedupes by txid.
+ */
+export async function indexPost(
+  ctx: PostContext,
+  txid: string,
+  opts: { userId?: number } = {},
+): Promise<IndexResult> {
+  const id = String(txid || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(id)) fail("BAD_PARAM", "txid must be 64 hex characters");
+  const address = await twetchAddress();
+  if (!address) fail("NO_TWETCH_ACCOUNT", "no Twetch key imported — run: bsv twetch account import");
+  const publicKey = await twetchPublicKey();
+  if (ctx.expectUserId && ctx.expectUserId > 0 && publicKey) {
+    const owner = await userByPubkey(ctx.fetchFn, publicKey);
+    if (owner !== ctx.expectUserId) {
+      fail("TWETCH_KEY_MISMATCH", "the imported Twetch key is not linked to your account — re-import the account key");
+    }
+  }
+  const userId = opts.userId ?? 0;
+  if (userId <= 0) fail("BAD_PARAM", "signed-in Twetch account required — run: bsv login");
+  const hex = await txHex(ctx.fetchFn, id, ctx.db);
+  if (!hex) fail("RAILS", "tx hex unavailable locally and from WhatsOnChain — is the txid correct?");
+  const parsed = parsePostTx(hex);
+  if (!parsed) fail("BAD_PARAM", "no B:// post output found in this transaction");
+  const mediaRef = parsed.media ? `b://${parsed.media.sha256}` : null;
+  await submitPost(ctx, userId, parsed.content, id, hex, mediaRef);
+  return { txid: id, content: parsed.content, mediaRef, submitted: true, submitDetail: "indexed by twetch" };
 }
 
 /** Verify an AIP record the same way Twetch's indexer must. */

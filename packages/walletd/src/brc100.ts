@@ -805,12 +805,12 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
       const { hex, txid } = await signTx(built.tx);
       if (noSend) {
         await afterBroadcast(txid, hex, context, "nosend", { fee: built.fee, changeSats: 0, changeVout: -1 }, { recordOutputs: false });
-        return { txid };
+        return { txid, rawTx: hex };
       }
       const res = await chain.broadcast(hex);
       await afterBroadcast(res.txid, hex, context, "sending", built);
       if (options.returnTXIDOnly === true) return { txid: res.txid };
-      return { txid: res.txid };
+      return { txid: res.txid, rawTx: hex };
     },
     signAction: async (args, originator) => {
       void originator;
