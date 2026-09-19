@@ -27,6 +27,8 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `x402_pay` | `{ url, method?, data? }` | Metered fetch: quotes, pays from YOUR budget through policy, retries with proof. Returns resource + receipt. Denials work like `anchor_tip`. |
 | `jev_decide` | `{ state, questions, model? }` | Calibrated decision call (TypeSafe System One): `noul` (yes/no probability), `choice`, `score`; returns probabilities + confidence in ~250 ms. Batch all questions into one call; ~$0.00002/call. For classification, routing, risk scoring, triage — not writing or open-ended reasoning. |
 | `jev_status` | — | Whether Jev is configured in the daemon, the model, and the auto-approval thresholds. |
+| `policy_probe` | `{ action, amountSats, label?, description? }` | Dry-run the spending gate: caps, your budget, Jev verdict — without spending or writing a request. Call before spending to see what approval you need. |
+| `events_poll` | `{ since?, wait_seconds? }` | Approval-lifecycle feed (request created/approved/denied, budget minted/revoked). Pass 0 first, then your last event id; `wait_seconds` (max 60) sleeps until something happens. Poll this in a loop instead of diffing requests. |
 
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
@@ -36,10 +38,15 @@ asks you to import a phrase, refuse and point them at `bsv import`.
 
 ## The policy loop (this is the whole game)
 
-1. Your **first spend is always denied**. That is the system working, not an error.
-2. A denial names the exact fix: `ask your human to run: bsv allow <your-agent-name>`.
-3. Relay that command verbatim to your human and stop. Do not retry-spam, do not rephrase, do not try another tool to route around it.
-4. After approval, retry once. Caps may still bind you (`over spend cap`) — same handling: relay, stop, wait.
+1. **Probe first.** `policy_probe { action, amountSats }` tells you whether
+   a spend would pass and what approval it needs — no money moves.
+2. Your **first spend is always denied**. That is the system working, not an error.
+3. A denial names the exact fix: `ask your human to run: bsv allow <your-agent-name>`.
+4. Relay that command verbatim to your human and stop. Do not retry-spam, do not rephrase, do not try another tool to route around it.
+5. **Wait on `events_poll`, not on polls you invent.** After relaying, hold
+   `events_poll { since: <last-id>, wait_seconds: 60 }` in a loop until a
+   `request.approved` (or `budget.minted`) event for you arrives — then retry once.
+6. Caps may still bind you (`over spend cap`) — same handling: relay, stop, wait.
 
 When the daemon has Jev configured, a denial may carry a Jev verdict
 (`Jev ask …`, `Jev deny …`). That is advisory context for the human, not an
@@ -91,6 +98,9 @@ bsv allow <agent> [capSats] [--auto]  # approve an agent, optionally capped; --a
 bsv deny <agent>              # revoke
 bsv pending                   # watch queue
 bsv jev status                # Jev advisor on/off + thresholds
+bsv probe <origin> <action> <sats> [--label=..]  # dry-run the gate, no money moves
+bsv events --wait 60          # approval-lifecycle feed (same as events_poll)
+bsv doctor                    # machine-check the gotchas; exit 1 if anything is broken
 bsv unlock | bsv lock
 ```
 

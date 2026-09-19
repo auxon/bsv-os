@@ -377,6 +377,15 @@ The Twetch flow generalizes:
 - Ship a **manifest** with the app: name, entry, and the policy spend cap
   the app will request (Sell4Sats: 500,000 sats — enough for network fees
   on photo posts). The human still approves once.
+- Declare your **spend intents** in `metanet.intents`: one entry per action
+  tag your memos carry (`{ action, label?, typical_sats?, description? }`).
+  Declared intents show in `bsv store`, feed the Jev decision state, and a
+  newly declared action counts as a permission widening on update.
+- Tag every spend at the source: the **first memo entry is the action tag**
+  (it becomes the policy label and the ledger label), the rest is the
+  description Jev reads. A spend with no tag is judged on amount + origin
+  alone — and Jev will not clear it (see the PocketPets probe: 0/9
+  auto-approved without tags).
 - Integrate with the panel where identity matters (the Twetch app's
   "Import to Twetch" and "Sign in again" live there, next to the app
   card).
@@ -523,6 +532,9 @@ systemctl --user restart sell4sats
 bsv status | bsv balance | bsv utxos | bsv pending
 bsv unlock | bsv lock
 bsv policies | bsv requests
+bsv probe <origin> <action> <sats> [--label=..]  # dry-run the gate first — no money moves
+bsv events --wait 60                             # wake on approvals instead of polling
+bsv doctor                                       # machine-check the gotchas (§12)
 bsv allow sell4sats 500000          # origin, cap (omit cap = UNCAPPED)
 bsv deny <origin>
 bsv agent mint sell4sats --budget=2000000 --daily=500000 --expiry=30d
@@ -557,6 +569,7 @@ curl -sk https://127.0.0.2:8790/api/listings -X POST \
    fallbacks for every network dependency.
 4. **Money paths through `createAction`** with meaningful labels;
    `randomizeOutputs: false` when output order is protocol.
+   Probe every spend first: `bsv probe <origin> <action> <sats>`.
 5. **Handle the four wallet states** (locked, denied, deferred signing,
    failed tx) explicitly, with human-readable remediation.
 6. **Test with MockChain**: protocol bytes, policy paths, store

@@ -2,7 +2,9 @@
 
 > Read-only planning doc. The M0–M3 + P1–P4 spine below is preserved as-is from
 > `README.md` / `UserGuide.md` / `RUNBOOK-M1.md`; everything new is an
-> F-item with problem → behavior → layer → size → dependencies.
+> F-item with problem → behavior → layer → size → dependencies → accept.
+> `Accept` is the click-path or command transcript that proves the item:
+> no item is done until its acceptance runs green on a real machine.
 
 ## Preserved spine M0–M3 + P1–P4 (do not reorder)
 
@@ -37,15 +39,21 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   permissions/caps shown pre-install, one-tap install/remove, background
   manifest re-pin with diff prompt on permission widening. Layer:
   daemon (apps registry + re-pin job) + shell (store UI) + packaging
-  (ships in ISO). Size: **M**. Depends: **P3** (apps registry).
+   (ships in ISO). Size: **M**. Depends: **P3** (apps registry).
+   Accept: `bsv store` shows requested caps pre-install; install + remove
+   one-tap from the panel; a widened re-pin prompts a diff, never applies
+   silently.
 - **F2 — Sandboxed runner with `window.bsv` (BRC-100 bridge).** Problem:
   installed apps today hop out to the default browser with no wallet
   bridge, so they are bookmarks, not native citizens, and any injection
   would be unenforced. Behavior: sandboxed webview shell that opens
   installed `start_url`s, injects a capability-scoped `window.bsv`
   (spend/sign only via daemon intents under the app's origin policy),
-  no key/DOM-escape surface. Layer: daemon (origin-scoped RPC) +
-  packaging (webview runtime). Size: **L**. Depends: **P3, F1**.
+   no key/DOM-escape surface. Layer: daemon (origin-scoped RPC) +
+   packaging (webview runtime). Size: **L**. Depends: **P3, F1**.
+   Accept: two installed apps open concurrently from the panel with no
+   blocking; every window.bsv write gates on its origin policy; the
+   custody-boundary test proves no key material reaches the page.
 - **F3 — Identity Center (Twetch OIDC + certs + selective disclosure).**
   Problem: the daemon has an `identityKey` but the OS has no login,
   no certificate holdings, and no way to prove attributes without
@@ -53,47 +61,59 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   wallet identity, cert wallet (store/hold/present BRC- certificates),
   per-request disclosure sheet (reveal only checked fields, policy-logged).
   Layer: daemon (cert store + disclosure RPC) + shell (login +
-  disclosure UI) + rails (Twetch OIDC). Size: **L**. Depends: **P4**
-  (Twetch), **F8** for audit view.
+   disclosure UI) + rails (Twetch OIDC). Size: **L**. Depends: **P4**
+   (Twetch), **F8** for audit view.
+   Accept: sign in with Twetch binds the wallet identity; a disclosure
+   sheet reveals only checked fields and logs the disclosure.
 - **F4 — Money views: baskets (multi-balance ledger).** Problem: `bsv
   balance` shows one P2PKH pot, so app-held, escrowed, or protocol-locked
   funds are invisible or conflated with spendable balance. Behavior:
   BRC- basket accounting in daemon (per-basket balances from chain +
   app attributions), CLI `bsv basket list/balance`, shell pill expands
   to per-basket rows. Layer: daemon (indexer + RPC) + shell (money
-  view). Size: **M**. Depends: **P2** (chain reads), **F2** (app
-  attribution).
+   view). Size: **M**. Depends: **P2** (chain reads), **F2** (app
+   attribution).
+   Accept: `bsv basket list/balance` reconciles with chain + app
+   attributions; the panel pill expands to per-basket rows.
 - **F5 — Money views: Ordinals (1Sat) + BSV21 tokens.** Problem: NFTs
   and fungible tokens controlled by the same keys are invisible in
   the OS, forcing users to third-party viewers that want seeds.
   Behavior: read-only-first gallery/list (inscription envelopes via
   parent-tx resolution per `resolveOutpoint`, BSV21 balances), send
   flows policy-gated like anchors, never exposing keys. Layer: daemon
-  (index + send engine) + shell (gallery). Size: **M**. Depends: **P2,
-  F4**.
+   (index + send engine) + shell (gallery). Size: **M**. Depends: **P2,
+   F4**.
+   Accept: the gallery resolves inscription envelopes per `resolveOutpoint`
+   without seeds; sends gate on policy like anchors.
 - **F6 — Encrypted messaging (BRC- key exchange + transport).** Problem:
   agents, apps, and contacts have no private channel anchored to wallet
   identity, so coordination leaks to email/chat. Behavior: DM + group
   threads keyed to identity keys (ECDH, store-and-forward via overlay
   or lightweight relay), shell inbox with pay-to-message spam pricing
   optional, daemon holds no plaintext beyond delivery. Layer: daemon
-  (crypto + outbox) + shell (inbox UI) + rails (relay/overlay).
-  Size: **L**. Depends: **F3** (identity keys), **F11** (overlay
-  transport).
+   (crypto + outbox) + shell (inbox UI) + rails (relay/overlay).
+   Size: **L**. Depends: **F3** (identity keys), **F11** (overlay
+   transport).
+   Accept: two identities exchange a DM thread end-to-end; the daemon
+   never holds plaintext beyond delivery; spam pricing enforced when set.
 - **F7 — Share-to-BSV (system share sheet → on-chain).** Problem:
   timestamping today is `sha256sum` + `bsv anchor`, so no GUI app can
   publish in one tap. Behavior: OS share target ("Anchor / Inscribe /
   Post") that hashes or packages the file, routes through policy +
   PayPrompt, returns txid with explorer link, history in the spend
   dashboard. Layer: shell (share sheet) + daemon (anchor/inscribe
-  engine). Size: **S**. Depends: **P3** (anchor flow), **F8**.
+   engine). Size: **S**. Depends: **P3** (anchor flow), **F8**.
+   Accept: one tap from the share sheet returns a txid + explorer link;
+   the spend lands in history under the file's label.
 - **F8 — Spend dashboard (ledger + policy audit).** Problem: spend
   history is scattered across `pending`, `requests`, and `policies`,
   so users cannot answer "what did what spend, and why". Behavior:
   single view merging confirmed/in-flight txs, per-origin approvals,
   caps, and denials with retry/revoke actions; CLI `bsv history` emits
   the same JSON. Layer: daemon (unified history RPC) + shell
-  (dashboard). Size: **S**. Depends: **P2, P3**.
+   (dashboard). Size: **S**. Depends: **P2, P3**.
+   Accept: one view merges confirmed/in-flight txs, approvals, caps, and
+   denials with working retry/revoke; `bsv history` JSON matches the view.
 - **F9 — Agent sub-wallets (allowances with lifetime budgets).** Problem:
   per-agent caps today are single-action ceilings with no budget,
   expiry, or delegation, so long-running agents need repeated human
@@ -101,8 +121,11 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   --budget --daily --expiry` issuing scoped child credentials mirroring
   the agentpay subagent model, enforced in `policy.ts` alongside caps,
   revocable in one command, surfaced in the dashboard. Layer: daemon
-  (policy + engine) + shell (agent cards) + rails (agentpay parity).
-  Size: **M**. Depends: **P3** (policy), **F8**, **F14**.
+   (policy + engine) + shell (agent cards) + rails (agentpay parity).
+   Size: **M**. Depends: **P3** (policy), **F8**, **F14**.
+   Accept: `bsv agent mint --budget/--daily/--expiry` then spends pass
+   without prompts until the budget binds; `revoke` cuts access in one
+   command; panel cards show remaining.
 - **F10 — Social recovery (Shamir guardians + rotation).** Problem: the
   12-word phrase is a single point of failure (lose it = lose
   everything, copy it = expose everything). Behavior: opt-in Shamir
@@ -110,40 +133,50 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   Twetch-identity-bound guardians), recovery ceremony reconstituting
   only on-device, rotation/revocation of shares without moving funds.
   Layer: daemon (custody ceremony) + shell (guided setup) +
-  packaging (recovery docs in installer). Size: **L**. Depends: **P1**
-  (custody), **F3** (guardian identity).
+   packaging (recovery docs in installer). Size: **L**. Depends: **P1**
+   (custody), **F3** (guardian identity).
+   Accept: the N-of-M ceremony reconstitutes on-device only; shares rotate
+   without moving funds; setup completes from the guided shell flow.
 - **F11 — Overlay explorer (lookup + publish).** Problem: overlays are
   invisible from the OS, so users cannot verify or consume overlay-
   hosted data their apps rely on. Behavior: explorer view to resolve
   overlay topics/UTXOs, inspect advertisements, and submit overlay-
   tagged transactions through policy; CLI `bsv overlay lookup/submit`.
-  Layer: daemon (overlay sync + RPC) + shell (explorer). Size: **M**.
-  Depends: **P2** (chain), **F6** reuses its transport.
+   Layer: daemon (overlay sync + RPC) + shell (explorer). Size: **M**.
+   Depends: **P2** (chain), **F6** reuses its transport.
+   Accept: `bsv overlay lookup` resolves a topic/UTXO and `submit` lands an
+   overlay-tagged tx through policy.
 - **F12 — BSVBounties task board in the launcher (GigsFeed citizen).**
   Problem: paid micro-work lives in a browser tab disconnected from
   wallet policy, so earning into the OS wallet takes manual juggling.
   Behavior: launcher board showing open bounties/gigs, claim → submit →
   approve flow with escrow state, earnings landing as labeled basket
-  entries; **GigsFeed** is the reference feed (TikTok-style micro-gigs,
-  one-tap approval). Layer: shell (board) + daemon (bounty intents +
-  basket labels) + rails (BSVBounties/agentpay). Size: **M**. Depends:
-  **F4, F14**.
+   entries; **GigsFeed** is the reference feed (TikTok-style micro-gigs,
+   one-tap approval). Layer: shell (board) + daemon (bounty intents +
+   basket labels) + rails (BSVBounties/agentpay). Size: **M**. Depends:
+   **F4, F14**.
+   Accept: the board lists open bounties; claim → submit → approve lands
+   earnings as labeled basket entries.
 - **F13 — NightShift standing orders (always-on agent ops).** Problem:
   recurring agent work (due cycles, cron-spawned jobs) has no OS home,
   so schedules live in fragile external setups outside policy.
   Behavior: system service for standing orders with per-cycle escrow
   (claim → submit → approve), schedule management in shell, every cycle
   bound to the agent's sub-wallet budget. Layer: daemon (scheduler +
-  escrow intents) + shell (schedules UI) + rails (bounties/cron).
-  Size: **M**. Depends: **F9, F12**.
+   escrow intents) + shell (schedules UI) + rails (bounties/cron).
+   Size: **M**. Depends: **F9, F12**.
+   Accept: a schedule fires per-cycle escrow bound to its sub-wallet
+   budget; the panel shows schedules, runs, and per-cycle outcomes.
 - **F14 — x402 pay-per-call + attestations rail.** Problem: apps and
   agents cannot pay per API call or prove payment history, so metered
   services and reputation pricing stay out of reach. Behavior: daemon-
   mediated x402 settlements (per-call quote → policy check → pay →
   receipt) plus signed spend-history attestations for discount/trust
   tiers; CLI `bsv x402 pay`, MCP tools for agents. Layer: daemon
-  (settlement + receipts) + rails (x402 Gateway/market, attestations).
-  Size: **M**. Depends: **P3** (policy/engine), **F9** (agent budgets).
+   (settlement + receipts) + rails (x402 Gateway/market, attestations).
+   Size: **M**. Depends: **P3** (policy/engine), **F9** (agent budgets).
+   Accept: `bsv x402 pay` runs quote → policy → pay → receipt; the MCP
+   tools do the same for agents; attestations verify.
 - **F15 — ideas.md verdict: which apps are OS citizens.** Problem: seven
   EntangleIT app ideas compete for system status, but most should be
   store apps, not OS surface. Behavior (decision, then thin
@@ -151,10 +184,12 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   (→ F13 service); **onboarding helper** — MemeFaucet trial faucet as
   first-run starter sats (capped, one-per-wallet); **share target** —
   AskAnything (sats-attached Q&A widget as a share-sheet destination);
-  **store-only** — Agent Arena, TinyBets, BitTok (linked from the store
-  per F1, no system surface; TinyBets additionally age-gated out of
-  defaults). Layer: shell + rails. Size: **S** (decision + links; each
-  promotion later becomes its own F-item). Depends: **F1, F12, F13**.
+   **store-only** — Agent Arena, TinyBets, BitTok (linked from the store
+   per F1, no system surface; TinyBets additionally age-gated out of
+   defaults). Layer: shell + rails. Size: **S** (decision + links; each
+   promotion later becomes its own F-item). Depends: **F1, F12, F13**.
+   Accept: this verdict stays recorded in IDEAS.md; any promotion ships
+   with its own F-item and acceptance.
 - **F16 — Twetch companion (feed + notifications + BRC-100 posting).**
   Problem: Twetch reading/posting lives in a browser tab disconnected from
   the OS wallet, and the account key never meets system policy. Behavior:
@@ -176,8 +211,11 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   open-on-Twetch); reuse/mint/crosspost remain out of scope. NFT Market
   viewer shipped alongside (active listings, recent sales, collections
   with floor/listings/owners; buy/list/delist stay in the browser).
-  Profile overlay shipped: click any avatar/name/user number in the feed
-  or notifications for bio, counts, banner, and recent posts.
+   Profile overlay shipped: click any avatar/name/user number in the feed
+   or notifications for bio, counts, banner, and recent posts.
+   Accept: feed/notifications read keyless; a post rebuilds the exact
+   B://+MAP+AIP record and renders on twetch.com; the account key never
+   funds and never joins the OS identity.
 
 ## Dependency sketch
 
