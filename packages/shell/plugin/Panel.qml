@@ -663,6 +663,24 @@ Panel {
     actionProc.running = true;
   }
 
+  // One-tap allowance: mint an F9 sub-wallet for the requesting origin
+  // (budget + a daily tenth, 30d expiry) instead of a blanket allow —
+  // the mint is the approval ceremony, and routine spends then pass
+  // without waking the human again.
+  function mintBudget(origin, budgetSats) {
+    if (actionProc.running) return;
+    const budget = Math.max(1, Math.floor(Number(budgetSats) || 0));
+    actionProc.args = ["agent", "mint", origin, `--budget=${budget}`, `--daily=${Math.max(1, Math.floor(budget / 10))}`, "--expiry=30d"];
+    actionProc.running = true;
+  }
+
+  function fmtSats(n) {
+    const v = Math.max(0, Math.floor(Number(n) || 0));
+    if (v >= 1000000) return `${(v / 1000000).toFixed(v % 1000000 === 0 ? 0 : 2)}M`;
+    if (v >= 1000) return `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k`;
+    return `${v}`;
+  }
+
   function runAppAction(args) {
     if (actionProc.running) return;
     actionProc.args = args;
@@ -901,42 +919,84 @@ Panel {
 
       Repeater {
         model: root.requests
-        RowLayout {
-          spacing: 8
+        ColumnLayout {
+          spacing: 4
           Layout.fillWidth: true
+          property bool showBudget: false
+          property int reqAmount: Math.max(0, Math.floor(Number(modelData.amount_sats ?? 0)))
 
-          ColumnLayout {
-            spacing: 2
+          RowLayout {
+            spacing: 8
             Layout.fillWidth: true
 
+            ColumnLayout {
+              spacing: 2
+              Layout.fillWidth: true
+
+              Text {
+                text: `${modelData.origin ?? "?"} · ${modelData.action ?? "spend"}${modelData.amount_sats ? ` · ${modelData.amount_sats} sats` : ""}`
+                color: Color.foreground
+                font.pixelSize: Style.font.body
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+              }
+
+              Text {
+                visible: !!modelData.jev
+                text: modelData.jev
+                  ? `Jev: ${modelData.jev.verdict} p=${modelData.jev.prob.toFixed(2)} · risk ${modelData.jev.riskLevel} ${modelData.jev.risk.toFixed(2)} · conf ${modelData.jev.confidence.toFixed(2)}`
+                  : ""
+                color: modelData.jev && modelData.jev.verdict === "deny" ? Color.urgent : Color.muted
+                font.pixelSize: Style.font.body
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+              }
+            }
+
+            Button {
+              text: "Approve"
+              onClicked: root.allow(modelData.origin)
+            }
+
+            Button {
+              text: "Budget…"
+              visible: reqAmount > 0
+              onClicked: showBudget = !showBudget
+            }
+
+            Button {
+              text: "Deny"
+              onClicked: root.deny(modelData.origin)
+            }
+          }
+
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            visible: showBudget && reqAmount > 0
+
             Text {
-              text: `${modelData.origin ?? "?"} · ${modelData.action ?? "spend"}${modelData.amount_sats ? ` · ${modelData.amount_sats} sats` : ""}`
-              color: Color.foreground
+              text: `Allowance · 30d, daily = budget ÷ 10:`
+              color: Color.muted
               font.pixelSize: Style.font.body
               wrapMode: Text.Wrap
               Layout.fillWidth: true
             }
 
-            Text {
-              visible: !!modelData.jev
-              text: modelData.jev
-                ? `Jev: ${modelData.jev.verdict} p=${modelData.jev.prob.toFixed(2)} · risk ${modelData.jev.riskLevel} ${modelData.jev.risk.toFixed(2)} · conf ${modelData.jev.confidence.toFixed(2)}`
-                : ""
-              color: modelData.jev && modelData.jev.verdict === "deny" ? Color.urgent : Color.muted
-              font.pixelSize: Style.font.body
-              wrapMode: Text.Wrap
-              Layout.fillWidth: true
+            Button {
+              text: `10× ${root.fmtSats(reqAmount * 10)}`
+              onClicked: root.mintBudget(modelData.origin, reqAmount * 10)
             }
-          }
 
-          Button {
-            text: "Approve"
-            onClicked: root.allow(modelData.origin)
-          }
+            Button {
+              text: `100× ${root.fmtSats(reqAmount * 100)}`
+              onClicked: root.mintBudget(modelData.origin, reqAmount * 100)
+            }
 
-          Button {
-            text: "Deny"
-            onClicked: root.deny(modelData.origin)
+            Button {
+              text: `1000× ${root.fmtSats(reqAmount * 1000)}`
+              onClicked: root.mintBudget(modelData.origin, reqAmount * 1000)
+            }
           }
         }
       }
@@ -1034,7 +1094,7 @@ Panel {
             Layout.fillWidth: true
 
             Text {
-              text: `${modelData.name ?? "?"} · ${modelData.remaining ?? 0}/${modelData.budget_sats ?? 0} sats${(modelData.daily_sats ?? 0) > 0 ? ` · ${modelData.window_remaining ?? 0}/${modelData.daily_sats} today` : ""} · ${modelData.active ? "active" : (modelData.revoked ? "revoked" : "expired")}`
+              text: `${modelData.name ?? "?"} · ${modelData.remaining ?? 0}/${modelData.budget_sats ?? 0} sats${(modelData.daily_sats ?? 0) > 0 ? ` · ${modelData.window_remaining ?? 0}/${modelData.daily_sats} today` : ""}${(modelData.expiry_at ?? 0) > 0 ? ` · expires ${new Date(modelData.expiry_at).toLocaleDateString()}` : ""} · ${modelData.active ? "active" : (modelData.revoked ? "revoked" : "expired")}`
               color: modelData.active ? Color.foreground : Color.muted
               font.pixelSize: Style.font.body
               wrapMode: Text.Wrap
