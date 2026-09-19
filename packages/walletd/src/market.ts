@@ -97,8 +97,14 @@ async function post(path: string, body: Record<string, unknown>, fetchFn: FetchF
   );
 }
 
-export function postListing(body: Record<string, unknown>, fetchFn: FetchFn = fetch): Promise<void> {
-  return post("/v1/market/list", body, fetchFn);
+export function postListing(
+  body: Record<string, unknown>,
+  fetchFn: FetchFn = fetch,
+  retry: RetryOpts = {},
+): Promise<void> {
+  // A fresh lock tx is a fresh parent: the worker's chain check lags until
+  // the indexer sees it, so the ordlock path retries those codes.
+  return postSettlement("/v1/market/list", body, fetchFn, retry, ["TX_UNKNOWN", "PARENT_MISSING"]);
 }
 
 export interface RetryOpts {
@@ -113,7 +119,13 @@ export interface RetryOpts {
  * exactly the window where the market cannot verify yet. Every other
  * error (bad payment, wrong fee) is final and fails fast.
  */
-async function postSettlement(path: string, body: Record<string, unknown>, fetchFn: FetchFn, retry: RetryOpts): Promise<void> {
+async function postSettlement(
+  path: string,
+  body: Record<string, unknown>,
+  fetchFn: FetchFn,
+  retry: RetryOpts,
+  retryCodes: string[] = ["TX_UNKNOWN"],
+): Promise<void> {
   const attempts = Math.max(1, retry.attempts ?? 5);
   const delay = retry.delayMs ?? ((n: number) => 4000 * n);
   for (let i = 1; ; i++) {
@@ -122,7 +134,7 @@ async function postSettlement(path: string, body: Record<string, unknown>, fetch
       return;
     } catch (e) {
       const code = (e as { code?: string }).code;
-      if (code !== "TX_UNKNOWN" || i >= attempts) throw e;
+      if (!retryCodes.includes(code ?? "") || i >= attempts) throw e;
       await new Promise((r) => setTimeout(r, delay(i)));
     }
   }

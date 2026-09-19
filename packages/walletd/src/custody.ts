@@ -24,6 +24,7 @@ import {
   HD,
   KeyDeriver,
   Mnemonic,
+  OP,
   P2PKH,
   PrivateKey,
   Point,
@@ -690,6 +691,20 @@ export function p2pkhUnlockHookSingle(path: string, satoshis: number, lockingScr
   return {
     sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
       return template.sign(tx, inputIndex);
+    },
+  };
+}
+
+/**
+ * OrdLock cancel unlock: a plain P2PKH signature (SIGHASH_ALL|FORKID)
+ * followed by OP_1, which selects the contract's cancel path.
+ */
+export function p2pkhUnlockHookOp1(path: string, satoshis: number, lockingScript: Script): UnlockHook {
+  const priv = childPriv(path);
+  const template = new P2PKH().unlock(priv, "all", false, satoshis, lockingScript);
+  return {
+    sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
+      return (await template.sign(tx, inputIndex)).writeOpCode(OP.OP_1);
     },
   };
 }

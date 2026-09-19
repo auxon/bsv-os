@@ -78,6 +78,12 @@
       invoke("signSwapOffer", { txid, vout, priceSats, kind, tokenId, tokenAmount }),
     /** Buy a listing: payment + asset move in one tx. Optional buyerChecks { expectedSeller, maxPrice } refuse redirected/overpriced offers. Returns { txid, fee }. */
     completeSwap: (offer, fee, memo, buyerChecks) => invoke("completeSwap", { offer, fee, memo, buyerChecks }),
+    /** OrdLock: lock an ordinal for sale on-chain (miner fee). Returns { txid, lockOutpoint, fee }. */
+    ordlockLock: (txid, vout, priceSats) => invoke("ordlockLock", { txid, vout, priceSats }),
+    /** OrdLock: buy a locked listing; the covenant enforces the payout. Returns { txid, fee, priceSats }. */
+    ordlockBuy: (lockOutpoint, fee) => invoke("ordlockBuy", { lockOutpoint, fee }),
+    /** OrdLock: cancel your lock back to the wallet (miner fee). Returns { txid, fee }. */
+    ordlockCancel: (lockOutpoint) => invoke("ordlockCancel", { lockOutpoint }),
   });
 
   // Visible-in-DOM proof of injection (works with --dump-dom and scrapers).

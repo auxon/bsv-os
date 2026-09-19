@@ -538,7 +538,7 @@ bsv doctor                                       # machine-check the gotchas (§
 bsv market browse [--kind=ordinal|bsv21]         # what's for sale, with prices + fees
 bsv market fees                                  # operator fee sellers list with
 bsv market buy <listing> [--origin=agent] [--max=sats]   # atomic buy from a budget
-bsv market list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--origin=agent]
+bsv market list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--origin=agent]  # ordinals: locks on-chain (OrdLock)
 bsv market cancel <listing>                      # seller-only delist
 bsv market sync <listing> <txid>                 # reconcile a buy whose post raced the indexer
 bsv allow sell4sats 500000          # origin, cap (omit cap = UNCAPPED)

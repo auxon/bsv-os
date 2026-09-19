@@ -20,8 +20,11 @@ const it = enrolled ? test.skip : test;
 
 const N1 = "b".repeat(64);
 const N5 = "ab".repeat(32);
+const N6 = "cd".repeat(32);
+const N7 = "ef".repeat(32);
 const F1 = "d".repeat(64);
 const F2 = "c".repeat(64);
+const F3 = "0".repeat(64);
 const X1 = "e".repeat(64);
 const TO = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
 const OUT = `${"a".repeat(64)}.0`;
@@ -44,8 +47,11 @@ function makeNet(selfAddr) {
   const hexes = {
     [N1]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "0102"), sats: 1 }]),
     [N5]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 1 }]), // v4 prefix dust
+    [N6]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "beef"), sats: 1 }]), // second carrier
+    [N7]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "cafe"), sats: 1 }]), // third carrier
     [F1]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 100_000 }]),
     [F2]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 50_000 }]),
+    [F3]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 80_000 }]),
     [X1]: () => parentHex([{ scriptHex: inscriptionScript(TO, "image/png", "0102"), sats: 1 }]),
   };
   const fetchFn = async (url, init) => {
@@ -276,17 +282,19 @@ it("marketList signs and posts with the operator fee", async () => {
     const { fetchFn, calls } = marketStub(net.fetchFn);
     globalThis.fetch = fetchFn;
     await setPolicy(db, "cli", "allow");
-    chain.credit(addr, { txid: N5, vout: 0, value: 1, height: 900 }); // v4 prefix dust
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 }); // ordlock miner fee
     const res = await dispatch({
       method: "marketList",
       params: { outpoint: `${N1}.0`, priceSats: 2500, title: "T" },
       id: 13,
     });
+    assert.equal(res.error, undefined);
     assert.equal(res.result.listed, true);
-    assert.equal(res.result.origin, `${N1}.0`);
+    assert.equal(res.result.origin.startsWith(""), true); // lock outpoint (broadcast txid.0)
     assert.equal(res.result.feeBps, 200);
     assert.equal(res.result.feeAddress, TO);
-    assert.equal(res.result.version, 4);
+    assert.equal(res.result.version, 5);
+    assert.equal(res.result.kind, "ordlock");
     const posted = calls.find((c) => c.path === "/v1/market/list");
     assert.ok(posted, "listing was posted");
     assert.equal(posted.body.priceSats, 2500);
@@ -294,24 +302,28 @@ it("marketList signs and posts with the operator fee", async () => {
     assert.equal(posted.body.seller, addr);
     assert.equal(posted.body.feeBps, 200);
     assert.equal(posted.body.feeAddress, TO);
-    assert.equal(posted.body.offer.kind, "ordinal");
-    assert.equal(posted.body.offer.version, 4);
-    assert.equal(posted.body.offer.inputs.length, 2);
-    assert.match(posted.body.offer.inputs[0].unlockHex, /^[0-9a-f]+$/);
-    assert.match(posted.body.offer.inputs[1].unlockHex, /^[0-9a-f]+$/);
+    assert.equal(posted.body.offer.kind, "ordlock");
+    assert.equal(posted.body.offer.version, 5);
+    assert.equal(posted.body.origin, res.result.origin); // listing = the lock outpoint
+    assert.match(posted.body.origin, /^[0-9a-f]{64}\.0$/);
     assert.equal(posted.body.metadata.source, "cli");
-    // fee override and underscore outpoints
+    // fee override and underscore outpoints (fresh carrier + funding for the second lock)
+    chain.credit(addr, { txid: N6, vout: 0, value: 1, height: 900 });
+    chain.credit(addr, { txid: F2, vout: 0, value: 50_000, height: 900 });
     const zero = await dispatch({
       method: "marketList",
-      params: { outpoint: `${N1}_0`, priceSats: 2500, feeBps: 0 },
+      params: { outpoint: `${N6}_0`, priceSats: 2500, feeBps: 0 },
       id: 14,
     });
+    assert.equal(zero.error, undefined);
     assert.equal(zero.result.feeBps, 0);
     const bad = await dispatch({ method: "marketList", params: { outpoint: "nope", priceSats: 5 }, id: 15 });
     assert.equal(bad.error.code, "BAD_PARAM");
-    // policy-gated under the caller's origin
+    // policy-gated under the caller's origin (fresh carrier + funding so the gate is reached)
+    chain.credit(addr, { txid: N7, vout: 0, value: 1, height: 900 });
+    chain.credit(addr, { txid: F3, vout: 0, value: 80_000, height: 900 });
     await db("policies").where({ origin: "cli" }).delete();
-    const denied = await dispatch({ method: "marketList", params: { outpoint: `${N1}.0`, priceSats: 2500 }, id: 16 });
+    const denied = await dispatch({ method: "marketList", params: { outpoint: `${N7}.0`, priceSats: 2500 }, id: 16 });
     assert.equal(denied.error.code, "POLICY_DENY");
   } finally {
     globalThis.fetch = realFetch;

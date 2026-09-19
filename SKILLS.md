@@ -30,8 +30,8 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `policy_probe` | `{ action, amountSats, label?, description? }` | Dry-run the spending gate: caps, your budget, Jev verdict — without spending or writing a request. Call before spending to see what approval you need. |
 | `events_poll` | `{ since?, wait_seconds? }` | Approval-lifecycle feed (request created/approved/denied, budget minted/revoked). Pass 0 first, then your last event id; `wait_seconds` (max 60) sleeps until something happens. Poll this in a loop instead of diffing requests. |
 | `market_browse` | `{ kind? }` | Active atomic-market listings: ordinals and BSV21 tokens with prices, sellers, and fees. |
-| `market_buy` | `{ listing, maxPrice? }` | Buy a listing end to end: the daemon verifies the seller + price, signs, broadcasts, and posts settlement. Atomic when the seller published an offer. Spends from YOUR budget through policy. |
-| `market_list` | `{ outpoint, priceSats, kind?, tokenId?, tokenAmount?, title? }` | List the wallet's ordinal or BSV21 UTXO for atomic sale (signed offer + operator fee). The asset stays in the wallet until bought. |
+| `market_buy` | `{ listing, maxPrice? }` | Buy a listing end to end: the daemon re-checks the covenant's seller + price, signs, broadcasts, and posts settlement. The OrdLock covenant enforces the payout, so the asset moves in the same tx. Spends from YOUR budget through policy. |
+| `market_list` | `{ outpoint, priceSats, kind?, tokenId?, tokenAmount?, title? }` | List the wallet's ordinal or BSV21 UTXO for sale. Ordinals move into an on-chain OrdLock covenant (miner fee; cancellable); tokens stay in the wallet behind a signed offer. |
 | `market_sync` | `{ listing, txid }` | Reconcile a completed buy when the immediate market post failed (indexers lag fresh broadcasts): posts the buy + settle for a txid that already exists. Idempotent. |
 
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,

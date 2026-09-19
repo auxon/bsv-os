@@ -399,7 +399,7 @@ async function main(): Promise<void> {
       } else if (mSub === "sync" && mPos[0] && mPos[1]) {
         print(await call("marketSync", { listing: mPos[0], txid: mPos[1] }));
       } else {
-        console.error("usage: bsv market <browse [--kind=ordinal|bsv21]|fees|buy <listing> [--origin=name] [--max=sats]|list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--title=] [--fee-bps=] [--origin=name]|cancel <listing>|sync <listing> <txid>>");
+        console.error("usage: bsv market <browse [--kind=ordinal|bsv21]|fees|buy <listing> [--origin=name] [--max=sats]|list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--title=] [--fee-bps=] [--origin=name]  (ordinals lock on-chain, miner fee)|cancel <listing>  (unlocks on-chain)|sync <listing> <txid>>");
         process.exitCode = 2;
       }
       break;

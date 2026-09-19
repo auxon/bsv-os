@@ -28,10 +28,11 @@ test("no remote code, no eval, loopback-only network", () => {
   assert.ok(!/https?:\/\//.test(read("page.js")), "page.js makes no network calls itself");
 });
 
-test("page.js exposes the ten-intent window.bsv", () => {
+test("page.js exposes the thirteen-intent window.bsv", () => {
   const src = read("page.js");
   for (const m of ["getStatus", "getIdentity", "getBalance", "getUtxos", "timestamp",
-    "spend", "inscribe", "transferNft", "signSwapOffer", "completeSwap"]) {
+    "spend", "inscribe", "transferNft", "signSwapOffer", "completeSwap",
+    "ordlockLock", "ordlockBuy", "ordlockCancel"]) {
     assert.ok(src.includes(m), `window.bsv.${m} exists`);
   }
   assert.ok(src.includes("Object.freeze"), "bridge surface is frozen");

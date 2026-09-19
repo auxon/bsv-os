@@ -33,6 +33,7 @@ import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
+import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
 import {
   cancelListing,
   fetchListing,
@@ -186,6 +187,63 @@ async function swapListFor(origin: string, params: unknown): Promise<unknown> {
     ...(kind === "ordinal" || kind === "bsv21" ? { kind } : {}),
     ...(typeof tokenId === "string" ? { tokenId } : {}),
     ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
+  });
+}
+
+/**
+ * OrdLock flows, shared by top-level RPCs (CLI/MCP) and app intents.
+ * `origin` in params overrides the caller's policy principal.
+ */
+async function ordlockLockFor(defaultOrigin: string, params: unknown): Promise<unknown> {
+  const b = needBackend();
+  const { txid, vout, priceSats, origin } = p(params) as {
+    txid?: unknown; vout?: unknown; priceSats?: unknown; origin?: unknown;
+  };
+  if (typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
+    throw Object.assign(new Error("txid must be 64-hex"), { code: "BAD_PARAM" });
+  }
+  return lockOrdinal({
+    db: b.db, chain: b.chain,
+    origin: typeof origin === "string" && origin ? origin : defaultOrigin,
+    txid, vout: Math.floor(Number(vout) || 0), priceSats: Number(priceSats) || 0,
+  });
+}
+
+async function ordlockBuyFor(defaultOrigin: string, params: unknown): Promise<unknown> {
+  const b = needBackend();
+  const { lockOutpoint, fee, memo, label, description, origin, maxPrice, expectedSeller } = p(params) as {
+    lockOutpoint?: unknown; fee?: unknown; memo?: unknown; label?: unknown;
+    description?: unknown; origin?: unknown; maxPrice?: unknown; expectedSeller?: unknown;
+  };
+  if (typeof lockOutpoint !== "string" || !lockOutpoint) {
+    throw Object.assign(new Error("lockOutpoint required"), { code: "BAD_PARAM" });
+  }
+  const checks = {
+    ...(typeof expectedSeller === "string" && expectedSeller ? { expectedSeller } : {}),
+    ...(maxPrice !== undefined ? { maxPrice: Number(maxPrice) } : {}),
+  };
+  return buyOrdLock({
+    db: b.db, chain: b.chain,
+    origin: typeof origin === "string" && origin ? origin : defaultOrigin,
+    lockOutpoint,
+    ...(fee && typeof fee === "object" ? { fee: fee as { to: string; sats: number } } : {}),
+    ...(Array.isArray(memo) ? { memo: memo as string[] } : {}),
+    ...(typeof label === "string" && label ? { label } : {}),
+    ...(typeof description === "string" && description ? { description } : {}),
+    ...(Object.keys(checks).length ? { buyerChecks: checks } : {}),
+  });
+}
+
+async function ordlockCancelFor(defaultOrigin: string, params: unknown): Promise<unknown> {
+  const b = needBackend();
+  const { lockOutpoint, origin } = p(params) as { lockOutpoint?: unknown; origin?: unknown };
+  if (typeof lockOutpoint !== "string" || !lockOutpoint) {
+    throw Object.assign(new Error("lockOutpoint required"), { code: "BAD_PARAM" });
+  }
+  return cancelOrdLock({
+    db: b.db, chain: b.chain,
+    origin: typeof origin === "string" && origin ? origin : defaultOrigin,
+    lockOutpoint,
   });
 }
 
@@ -1028,6 +1086,30 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
           ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
         });
       }
+      case "ordlockLock": {
+        const { txid, vout, priceSats } = args as { txid?: unknown; vout?: unknown; priceSats?: unknown };
+        if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
+        return ordlockLockFor(app.domain, { txid, vout, priceSats });
+      }
+      case "ordlockBuy": {
+        const { lockOutpoint, fee } = args as { lockOutpoint?: unknown; fee?: unknown };
+        if (typeof lockOutpoint !== "string" || !lockOutpoint) {
+          throw Object.assign(new Error("lockOutpoint required"), { code: "BAD_PARAM" });
+        }
+        return ordlockBuyFor(app.domain, {
+          lockOutpoint,
+          ...(fee && typeof fee === "object" ? { fee } : {}),
+          memo: ["MARKET-BUY", lockOutpoint],
+          label: `market buy ${lockOutpoint}`,
+        });
+      }
+      case "ordlockCancel": {
+        const { lockOutpoint } = args as { lockOutpoint?: unknown };
+        if (typeof lockOutpoint !== "string" || !lockOutpoint) {
+          throw Object.assign(new Error("lockOutpoint required"), { code: "BAD_PARAM" });
+        }
+        return ordlockCancelFor(app.domain, { lockOutpoint });
+      }
       case "completeSwap": {
         const { offer, fee, memo, label, buyerChecks } = args as { offer?: unknown; fee?: unknown; memo?: unknown; label?: unknown; buyerChecks?: unknown };
         if (!offer || typeof offer !== "object") throw Object.assign(new Error("offer required"), { code: "BAD_PARAM" });
@@ -1274,6 +1356,12 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * only our inscribed 1-sat UTXOs list.
    */
   twetchList: (params) => swapListFor("twetch", params),
+  /** OrdLock: lock an ordinal on-chain (miner fee) and return the lock outpoint. */
+  ordlockLock: (params) => ordlockLockFor("cli", params),
+  /** OrdLock: spend a lock (covenant enforces the payout). Policy origin defaults to cli. */
+  ordlockBuy: (params) => ordlockBuyFor("cli", params),
+  /** OrdLock: cancel a lock back to the wallet (miner fee). */
+  ordlockCancel: (params) => ordlockCancelFor("cli", params),
   /** Market listings (read-only) from the configured deployment. */
   marketBrowse: async (params) => {
     const { kind } = p(params) as { kind?: unknown };
@@ -1308,7 +1396,17 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const label = `market buy ${l.origin}`;
     let r: { txid: string; fee: number };
     let atomic = false;
-    if (l.offer && typeof l.offer === "object") {
+    const offerKind = l.offer && typeof l.offer === "object" ? (l.offer as { kind?: string }).kind : undefined;
+    if (offerKind === "ordlock") {
+      atomic = true;
+      r = await buyOrdLock({
+        db: b.db, chain: b.chain, origin: policyOrigin,
+        lockOutpoint: l.origin,
+        ...(fee ? { fee } : {}),
+        memo, label,
+        buyerChecks: { expectedSeller: l.seller, maxPrice: cap },
+      });
+    } else if (l.offer && typeof l.offer === "object") {
       atomic = true;
       r = await completeSwap({
         db: b.db, chain: b.chain, origin: policyOrigin,
@@ -1360,21 +1458,37 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const policyOrigin = typeof origin === "string" && origin ? origin : "cli";
     const assetKind = kind === "bsv21" ? ("bsv21" as const) : ("ordinal" as const);
     const price = Math.floor(Number(priceSats) || 0);
-    const offer = await signSwapOffer({
-      db: b.db, chain: b.chain, origin: policyOrigin,
-      txid: m[1]!, vout: Number(m[2]), priceSats: price,
-      ...(assetKind === "bsv21" ? { kind: assetKind } : {}),
-      ...(typeof tokenId === "string" ? { tokenId } : {}),
-      ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
-    });
     const fees = await fetchOperatorFee();
     const bps = feeBps === undefined ? fees.feeBps : Math.max(0, Math.min(10000, Math.floor(Number(feeBps) || 0)));
     const seller = selfAddress();
-    const dot = `${m[1]!.toLowerCase()}.${Number(m[2])}`;
+    let listingOrigin = `${m[1]!.toLowerCase()}.${Number(m[2])}`;
+    let offer: unknown;
+    let lockFee = 0;
+    let freshLock = false;
+    if (assetKind === "bsv21") {
+      // tokens are envelope-tracked: the v3 pre-signed swap stays valid
+      offer = await signSwapOffer({
+        db: b.db, chain: b.chain, origin: policyOrigin,
+        txid: m[1]!, vout: Number(m[2]), priceSats: price,
+        kind: "bsv21",
+        ...(typeof tokenId === "string" ? { tokenId } : {}),
+        ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
+      });
+    } else {
+      // ordinals: OrdLock covenant — the carrier moves into the lock script
+      const locked = await lockOrdinal({
+        db: b.db, chain: b.chain, origin: policyOrigin,
+        txid: m[1]!, vout: Number(m[2]), priceSats: price,
+      });
+      listingOrigin = locked.lockOutpoint;
+      lockFee = locked.fee;
+      freshLock = true;
+      offer = { version: 5, kind: "ordlock", priceSats: price, lockTime: 0 };
+    }
     await postListing({
-      origin: dot,
+      origin: listingOrigin,
       assetKind,
-      title: typeof title === "string" && title ? title : `${assetKind} ${dot.slice(0, 12)}`,
+      title: typeof title === "string" && title ? title : `${assetKind} ${listingOrigin.slice(0, 12)}`,
       ...(typeof image === "string" && image ? { image } : {}),
       priceSats: price,
       seller,
@@ -1382,21 +1496,43 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       feeBps: bps,
       feeAddress: fees.feeAddress,
       metadata: { source: policyOrigin },
-    });
+    }, fetch, freshLock ? { attempts: 6 } : {});
     return {
-      listed: true, origin: dot, priceSats: price, feeBps: bps, feeAddress: fees.feeAddress,
-      atomic: true, version: offer.version, kind: offer.kind,
+      listed: true, origin: listingOrigin, priceSats: price, feeBps: bps, feeAddress: fees.feeAddress,
+      atomic: true, version: (offer as { version: number }).version, kind: (offer as { kind: string }).kind,
+      ...(lockFee ? { lockFee } : {}),
     };
   },
-  /** Cancel our listing on the market (seller must be this wallet). */
+  /**
+   * Cancel our listing on the market (seller must be this wallet). OrdLock
+   * listings also unlock the carrier back on-chain (miner fee), so the
+   * asset returns to the wallet; the market cancel always runs.
+   */
   marketCancel: async (params) => {
+    const b = needBackend();
     const { listing } = p(params) as { listing?: unknown };
     if (typeof listing !== "string" || !listing) {
       throw Object.assign(new Error("listing (asset outpoint) required"), { code: "BAD_PARAM" });
     }
     const dot = listing.replace("_", ".");
+    let unlockTxid: string | undefined;
+    let unlockError: string | undefined;
+    try {
+      const l = await fetchListing(dot);
+      const kind = l?.offer && typeof l.offer === "object" ? (l.offer as { kind?: string }).kind : undefined;
+      if (l && kind === "ordlock" && l.status === "active") {
+        const unlocked = await cancelOrdLock({ db: b.db, chain: b.chain, origin: "cli", lockOutpoint: dot });
+        unlockTxid = unlocked.txid;
+      }
+    } catch (e) {
+      unlockError = e instanceof Error ? e.message : String(e);
+    }
     await cancelListing(dot, selfAddress());
-    return { cancelled: true, origin: dot };
+    return {
+      cancelled: true, origin: dot,
+      ...(unlockTxid ? { unlockTxid } : {}),
+      ...(unlockError ? { unlockError } : {}),
+    };
   },
   /**
    * Reconcile a broadcast buy with the market: post the buy (+settle for

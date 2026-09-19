@@ -227,14 +227,16 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   through OS custody (atomic when the seller published an offer, direct
   pay-first spend otherwise). Layer: worker (new, live market untouched)
   + daemon (swaps, twetchBuy/twetchList) + runner (twetch app).
-  Size: **L**. State: shipped — worker live with verification, v2+v3
-  templates tested, Twetch buy/list flows in the app, and **Atomic
-  Market** as a BRC-100 app (`bsv app install market.entangleit.com`,
-  runner + `window.bsv`, origin-policed; browse / buy / sell, ORDFS
-  holdings). Agent-native too: `bsv market` + `market_browse/buy/list`
-  MCP tools (buys debit agent budgets) and a worker-declared operator
-  fee (`/v1/market/fees`) applied to new listings. Depends: **F2**
-  (runner), **F5** (ordinals), **F9** (budgets), **F14** (fee rails).
+  Size: **L**. State: shipped — **OrdLock covenants** are the ordinal
+  listing path (seller locks on-chain; the buyer's spend enforces the
+  payout, so both indexer directions resolve the buyer's output); BSV21
+  keeps the v3 envelope-tracked offer. Worker verifies lock terms
+  independently, **Atomic Market** is a BRC-100 app
+  (`bsv app install market.entangleit.com`, runner + `window.bsv`),
+  agent-native via `bsv market` + `market_browse/buy/list` MCP tools
+  (buys debit agent budgets), and the worker declares an operator fee
+  (`/v1/market/fees`) applied to new listings. Depends: **F2** (runner),
+  **F5** (ordinals), **F9** (budgets), **F14** (fee rails).
   Accept: list → buy → settle a non-pet ordinal and a BSV21 lot
   end-to-end; a Twetch buy settles atomically with zero browser keys;
   the PocketPets suite passes unmodified.
