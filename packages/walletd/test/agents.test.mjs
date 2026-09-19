@@ -164,3 +164,19 @@ test("recordSpend is a no-op without a wallet and never runs on failure paths", 
     await db.destroy();
   }
 });
+
+test("revoke then re-mint replaces the sub-wallet", async () => {
+  const db = await memdb();
+  try {
+    await mintAgent(db, { name: "worker", budgetSats: 1000 });
+    await rejectsCode(mintAgent(db, { name: "worker", budgetSats: 2000 }), "EXISTS");
+    await revokeAgent(db, "worker");
+    const fresh = await mintAgent(db, { name: "worker", budgetSats: 2000 });
+    assert.equal(fresh.budget_sats, 2000);
+    assert.equal(fresh.revoked, 0);
+    assert.equal(fresh.spent_total, 0);
+    assert.equal((await listAgents(db)).length, 1);
+  } finally {
+    await db.destroy();
+  }
+});

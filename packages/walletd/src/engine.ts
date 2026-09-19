@@ -48,13 +48,22 @@ export async function lockingScriptOf(
   vout: number,
   fetchFn: typeof fetch,
 ): Promise<{ scriptHex: string; value: number }> {
-  let res: Response;
-  try {
-    res = await fetchFn(`${WOC_TX}/${txid}/hex`);
-  } catch (e) {
-    fail("RAILS", `tx fetch unreachable: ${e instanceof Error ? e.message : String(e)}`);
+  // Reads fan out (funding selection fetches a dozen candidates at once),
+  // so back off on the indexer's 429/5xx instead of failing the whole spend.
+  let res: Response | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      res = await fetchFn(`${WOC_TX}/${txid}/hex`);
+    } catch (e) {
+      if (attempt === 3) fail("RAILS", `tx fetch unreachable: ${e instanceof Error ? e.message : String(e)}`);
+      res = null;
+    }
+    if (res?.ok) break;
+    const status = res?.status ?? 0;
+    if (status !== 429 && status < 500) fail("RAILS", `tx fetch failed (${status})`);
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 400 * attempt));
   }
-  if (!res.ok) fail("RAILS", `tx fetch failed (${res.status})`);
+  if (!res?.ok) fail("RAILS", `tx fetch failed (${res?.status ?? "network"})`);
   const hex = (await res.text()).trim();
   let tx: Transaction;
   try {

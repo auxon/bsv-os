@@ -694,6 +694,23 @@ export function p2pkhUnlockHookSingle(path: string, satoshis: number, lockingScr
   };
 }
 
+/**
+ * SIGHASH_NONE | ANYONECANPAY: authorizes spending this input without
+ * committing to any output. Used for the v4 swap's 1-sat prefix input —
+ * the seller donates one plain sat to shift the carrier to input 1 (so
+ * the 1Sat indexer's FIFO assigns the inscription to the NFT output),
+ * and commits nothing else.
+ */
+export function p2pkhUnlockHookNone(path: string, satoshis: number, lockingScript: Script): UnlockHook {
+  const priv = childPriv(path);
+  const template = new P2PKH().unlock(priv, "none", true, satoshis, lockingScript);
+  return {
+    sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
+      return template.sign(tx, inputIndex);
+    },
+  };
+}
+
 /** Factory reset: wipes the enrolled secret. Caller must have a backup. */
 export async function destroyWallet(): Promise<void> {
   lock();

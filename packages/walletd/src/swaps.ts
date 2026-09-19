@@ -24,11 +24,11 @@
  */
 import type { Knex } from "knex";
 import { Script, Transaction } from "@bsv/sdk";
-import { p2pkhUnlockHook, p2pkhUnlockHookSingle, selfAddress } from "./custody.ts";
+import { p2pkhUnlockHook, p2pkhUnlockHookNone, p2pkhUnlockHookSingle, selfAddress } from "./custody.ts";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
-import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
+import { labelOutputs, resolveBasketForOrigin, spentByUs } from "./baskets.ts";
 import type { JevDecide } from "./jev.ts";
 import { fetchBulkMetadata, hasOrdEnvelope, splitOutpoint } from "./tokens.ts";
 import {
@@ -48,6 +48,13 @@ export const SWAP_VERSION = 2;
 export const SWAP_LOCKTIME = 0;
 export const SWAP_SEQ = 0xffffffff;
 
+/**
+ * The on-chain transaction version every swap tx uses (pre-sign and
+ * completion alike): signatures commit to it, and `buildTx` is fixed at 2.
+ * Template versions (v3/v4) are offer metadata, not tx versions.
+ */
+export const SWAP_TX_VERSION = 2;
+
 export interface SwapOfferInput {
   txid: string;
   vout: number;
@@ -55,22 +62,41 @@ export interface SwapOfferInput {
   sequence: number;
 }
 
-export interface SwapOffer {
-  input: SwapOfferInput;
+/** v4 offer input: chain-pinned carrier plus the seller's pre-signed unlock. */
+export interface SwapOfferInputV4 extends SwapOfferInput {
   unlockHex: string;
+}
+
+export interface SwapOffer {
+  version: number;
+  /** Asset template: v4 ordinal (dual input), v3 BSV21 (exact-amount token carrier). */
+  kind: SwapKind;
   payScriptHex: string;
   priceSats: number;
-  version: number;
   lockTime: number;
-  /** Asset template: v2 ordinal (1-sat carrier) or v3 BSV21 (exact-amount token carrier). */
-  kind: SwapKind;
+  /** v3 (bsv21): the single token carrier. */
+  input?: SwapOfferInput;
+  unlockHex?: string;
+  /** v4 (ordinal): [1-sat plain prefix, inscribed carrier]. */
+  inputs?: SwapOfferInputV4[];
   tokenId?: string;
   tokenAmount?: string;
 }
 
 export type SwapKind = "ordinal" | "bsv21";
 
-/** v3 template version for BSV21 swaps (v2 stays the ordinal template). */
+/**
+ * v4 is the indexer-safe ordinal template. The 1Sat indexer assigns the
+ * inscribed sat FIFO: with the carrier at input 0 the first output gets
+ * it, so v2 (payment first) silently gave the NFT back to the seller.
+ * v4 puts a plain 1-sat prefix at input 0 and the carrier at input 1, so
+ * the inscription lands on output 0 — a 1-sat output to the buyer — while
+ * the carrier's SIGHASH_SINGLE|ACP commits byte-exact to the payment at
+ * output 1. The prefix signs SIGHASH_NONE|ACP (no commitments).
+ */
+export const SWAP_VERSION_ORDINAL = 4;
+
+/** v3 template version for BSV21 swaps (token outputs carry envelopes, so FIFO does not apply). */
 export const SWAP_VERSION_BSV21 = 3;
 
 function fail(code: string, message: string): never {
@@ -156,31 +182,117 @@ export async function signSwapOffer(opts: {
   const gate = await check(opts.db, opts.origin, 0, "app-swap-offer");
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const payScript = p2pkhScript(address);
-  const hook = p2pkhUnlockHookSingle("m/0/0", 1, Script.fromHex(carrier.scriptHex));
-  const tx = new Transaction(kind === "bsv21" ? SWAP_VERSION_BSV21 : SWAP_VERSION, [], [], SWAP_LOCKTIME);
+  if (kind === "bsv21") {
+    const hook = p2pkhUnlockHookSingle("m/0/0", 1, Script.fromHex(carrier.scriptHex));
+    const tx = new Transaction(SWAP_TX_VERSION, [], [], SWAP_LOCKTIME);
+    tx.addInput({
+      unlockingScriptTemplate: {
+        sign: (t: Transaction, i: number) => hook.sign(t, i),
+        estimateLength: async () => 108,
+      },
+      sourceTXID: parts.txid,
+      sourceOutputIndex: parts.vout,
+      sequence: SWAP_SEQ,
+    });
+    tx.addOutput({ lockingScript: payScript, satoshis: price });
+    await tx.sign();
+    const unlock = tx.inputs[0]?.unlockingScript;
+    if (!unlock) fail("INTERNAL", "signing produced no script");
+    return {
+      version: SWAP_VERSION_BSV21,
+      kind,
+      input: { txid: parts.txid, vout: parts.vout, scriptHex: carrier.scriptHex, sequence: SWAP_SEQ },
+      unlockHex: unlock.toHex(),
+      payScriptHex: payScript.toHex(),
+      priceSats: price,
+      lockTime: SWAP_LOCKTIME,
+      tokenId,
+      tokenAmount,
+    };
+  }
+  // v4 ordinal: a plain 1-sat prefix input shifts the carrier to input 1
+  // (see SWAP_VERSION_ORDINAL). The prefix must not itself be inscribed.
+  const dust = await findPlainDust(opts.db, opts.chain, address, `${parts.txid}:${parts.vout}`, fetchFn);
+  const dustHook = p2pkhUnlockHookNone("m/0/0", 1, Script.fromHex(dust.scriptHex));
+  const carrierHook = p2pkhUnlockHookSingle("m/0/0", 1, Script.fromHex(carrier.scriptHex));
+  const tx = new Transaction(SWAP_TX_VERSION, [], [], SWAP_LOCKTIME);
   tx.addInput({
     unlockingScriptTemplate: {
-      sign: (t: Transaction, i: number) => hook.sign(t, i),
+      sign: (t: Transaction, i: number) => dustHook.sign(t, i),
+      estimateLength: async () => 108,
+    },
+    sourceTXID: dust.txid,
+    sourceOutputIndex: dust.vout,
+    sequence: SWAP_SEQ,
+  });
+  tx.addInput({
+    unlockingScriptTemplate: {
+      sign: (t: Transaction, i: number) => carrierHook.sign(t, i),
       estimateLength: async () => 108,
     },
     sourceTXID: parts.txid,
     sourceOutputIndex: parts.vout,
     sequence: SWAP_SEQ,
   });
+  // Placeholder output so the carrier's SINGLE signature (input index 1)
+  // has an output index 1 to commit to. The buyer replaces output 0 with
+  // the 1-sat NFT and keeps output 1 byte-exact as the payment.
+  tx.addOutput({ lockingScript: new Script([{ op: 0x00 }, { op: 0x6a }]), satoshis: 0 });
   tx.addOutput({ lockingScript: payScript, satoshis: price });
   await tx.sign();
-  const unlock = tx.inputs[0]?.unlockingScript;
-  if (!unlock) fail("INTERNAL", "signing produced no script");
+  const dustUnlock = tx.inputs[0]?.unlockingScript?.toHex() ?? "";
+  const carrierUnlock = tx.inputs[1]?.unlockingScript?.toHex() ?? "";
+  if (!dustUnlock || !carrierUnlock) fail("INTERNAL", "signing produced no script");
   return {
-    input: { txid: parts.txid, vout: parts.vout, scriptHex: carrier.scriptHex, sequence: SWAP_SEQ },
-    unlockHex: unlock.toHex(),
+    version: SWAP_VERSION_ORDINAL,
+    kind: "ordinal",
+    inputs: [
+      { txid: dust.txid, vout: dust.vout, scriptHex: dust.scriptHex, sequence: SWAP_SEQ, unlockHex: dustUnlock },
+      { txid: parts.txid, vout: parts.vout, scriptHex: carrier.scriptHex, sequence: SWAP_SEQ, unlockHex: carrierUnlock },
+    ],
     payScriptHex: payScript.toHex(),
     priceSats: price,
-    version: kind === "bsv21" ? SWAP_VERSION_BSV21 : SWAP_VERSION,
     lockTime: SWAP_LOCKTIME,
-    kind,
-    ...(kind === "bsv21" ? { tokenId, tokenAmount } : {}),
   };
+}
+
+/**
+ * A plain 1-sat UTXO of ours for the v4 prefix: 1 sat, not spent, not the
+ * carrier, and ORDFS-clean (no inscription). Fails closed when the indexer
+ * cannot confirm plainness — an inscribed prefix would burn its origin.
+ */
+async function findPlainDust(
+  db: Knex,
+  chain: ChainProvider,
+  address: string,
+  exclude: string,
+  fetchFn: typeof fetch,
+): Promise<{ txid: string; vout: number; scriptHex: string }> {
+  const ours = p2pkhScript(address).toHex().slice(0, 50).toLowerCase();
+  const u = await chain.utxos(address);
+  const spent = await spentByUs(db);
+  const candidates = u.utxos
+    .filter((x) => x.value === 1 && `${x.txid}:${x.vout}` !== exclude && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
+    .slice(0, 10);
+  if (!candidates.length) {
+    fail("BAD_PARAM", "need a plain 1-sat UTXO as the offer prefix (swap change provides one)");
+  }
+  for (const c of candidates) {
+    const key = `${c.txid}_${c.vout}`;
+    let meta: Record<string, { contentType?: string } | null>;
+    try {
+      meta = (await fetchBulkMetadata([key], { fetchFn })) as Record<string, { contentType?: string } | null>;
+    } catch {
+      fail("RAILS", "inscription lookup unreachable — cannot pick a safe prefix input");
+    }
+    const m = meta![key] ?? meta![key.replace("_", ".")] ?? null;
+    if (m && m.contentType) continue; // inscribed: hands off
+    const s = await lockingScriptOf(c.txid, c.vout, fetchFn);
+    if (s.value !== 1) continue;
+    if (!s.scriptHex.toLowerCase().startsWith(ours)) continue;
+    return { txid: c.txid, vout: c.vout, scriptHex: s.scriptHex };
+  }
+  fail("BAD_PARAM", "need a plain 1-sat UTXO as the offer prefix (swap change provides one)");
 }
 
 /**
@@ -213,20 +325,16 @@ export async function completeSwap(opts: {
   jev?: JevDecide;
 }): Promise<{ txid: string; fee: number }> {
   const o = (opts.offer ?? {}) as Record<string, unknown>;
-  const input = (o.input ?? {}) as Record<string, unknown>;
-  const parts = splitOutpoint(`${String(input.txid ?? "")}_${String(input.vout ?? "")}`);
-  if (!parts) fail("BAD_OFFER", "offer input must be 64-hex txid + vout");
   const price = Math.floor(Number(o.priceSats) || 0);
   if (!(price >= 1)) fail("BAD_OFFER", "offer priceSats must be a positive sat number");
   const kind = (o.kind ?? "ordinal") as SwapKind;
   if (kind !== "ordinal" && kind !== "bsv21") fail("BAD_OFFER", "offer kind must be ordinal or bsv21");
-  const wantVersion = kind === "bsv21" ? SWAP_VERSION_BSV21 : SWAP_VERSION;
-  if (o.version !== wantVersion || o.lockTime !== SWAP_LOCKTIME) fail("BAD_OFFER", "offer version/locktime mismatch");
-  if (input.sequence !== SWAP_SEQ) fail("BAD_OFFER", "offer sequence mismatch");
-  const scriptHex = hexBlob(input.scriptHex);
+  const version = Number(o.version);
+  if (o.lockTime !== SWAP_LOCKTIME) fail("BAD_OFFER", "offer version/locktime mismatch");
+  if (kind === "ordinal" && version === SWAP_VERSION) {
+    fail("BAD_OFFER", "v2 offers are not indexer-safe (the inscribed sat lands on the payment output) — re-list to upgrade");
+  }
   const payScriptHex = hexBlob(o.payScriptHex);
-  const unlockHex = hexBlob(o.unlockHex);
-  if (!scriptHex || !payScriptHex || !unlockHex) fail("BAD_OFFER", "offer scripts must be hex");
   if (!isP2PKH(payScriptHex)) fail("BAD_OFFER", "offer payment must be a plain P2PKH script");
   // Buyer-side verification: the market serves the offer, so confirm it
   // pays who we think and costs what we saw before touching funding.
@@ -248,17 +356,78 @@ export async function completeSwap(opts: {
     if (price > max) fail("BAD_OFFER", `offer price ${price} exceeds buyer max ${max}`);
   }
   const fetchFn = opts.fetchFn ?? fetch;
-  // Carrier truth comes from chain, never from the offer.
-  const carrier = await lockingScriptOf(parts.txid, parts.vout, fetchFn);
-  if (carrier.scriptHex.toLowerCase() !== scriptHex) fail("BAD_OFFER", "offer script disagrees with chain");
-  if (carrier.value !== 1) fail("BAD_OFFER", "offer carrier is not 1 sat");
-  // BSV21: the indexer is the arbiter of token spend-state (bulk-validated
-  // holdings, unspent only), and the envelope is re-checked locally —
-  // same two-layer rule as sendBsv21. Exact-UTXO only: the listed amount
-  // must equal the carrier amount (partial fills can't be atomic-safe).
+  const address = selfAddress();
+  const lock = p2pkhScript(address);
+  const u = await opts.chain.utxos(address);
+  const spent = await spentByUs(opts.db);
+  const candidates = u.utxos
+    .filter((x) => x.value > 1 && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12);
+  const scripts = await Promise.all(
+    candidates.map((x) => lockingScriptOf(x.txid, x.vout, fetchFn).catch(() => null)),
+  );
+  const funding: SpendableUtxo[] = [];
+  for (let i = 0; i < candidates.length && funding.length < 6; i++) {
+    const s = scripts[i];
+    if (!s || hasOrdEnvelope(s.scriptHex)) continue; // inscription carrier — hands off
+    const c = candidates[i]!;
+    funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: s.scriptHex });
+  }
+
+  const sellerUnlocks = new Map<string, Script>();
+  const parseUnlock = (hex: string): Script => {
+    try {
+      return Script.fromHex(hex);
+    } catch {
+      fail("BAD_OFFER", "offer unlock must be a script");
+    }
+  };
+  const spendInputs: SpendableUtxo[] = [];
+  const payments: Array<{ address?: string; sats: number; scriptHex?: string }> = [];
+  let carrierShort = "";
   let tokenId = "";
   let tokenAmount = "";
-  if (kind === "bsv21") {
+
+  if (kind === "ordinal") {
+    if (version !== SWAP_VERSION_ORDINAL) fail("BAD_OFFER", "offer version/locktime mismatch");
+    const inputs = Array.isArray(o.inputs) ? (o.inputs as Array<Record<string, unknown>>) : [];
+    if (inputs.length !== 2) fail("BAD_OFFER", "v4 offer must carry exactly two inputs (1-sat prefix + carrier)");
+    for (let i = 0; i < 2; i++) {
+      const it = inputs[i]!;
+      const parts = splitOutpoint(`${String(it.txid ?? "")}_${String(it.vout ?? "")}`);
+      if (!parts) fail("BAD_OFFER", "offer input must be 64-hex txid + vout");
+      if (it.sequence !== SWAP_SEQ) fail("BAD_OFFER", "offer sequence mismatch");
+      const scriptHex = hexBlob(it.scriptHex);
+      const unlockHex = hexBlob(it.unlockHex);
+      if (!scriptHex || !unlockHex) fail("BAD_OFFER", "offer scripts must be hex");
+      const carrier = await lockingScriptOf(parts.txid, parts.vout, fetchFn);
+      if (carrier.scriptHex.toLowerCase() !== scriptHex) fail("BAD_OFFER", "offer script disagrees with chain");
+      if (carrier.value !== 1) fail("BAD_OFFER", "offer inputs must be exactly 1 sat");
+      spendInputs.push({ txid: parts.txid, vout: parts.vout, value: 1, scriptHex: carrier.scriptHex });
+      sellerUnlocks.set(`${parts.txid}:${parts.vout}`, parseUnlock(unlockHex));
+    }
+    carrierShort = spendInputs[1]!.txid.slice(0, 8);
+    // NFT output FIRST: FIFO assigns the inscribed sat here (input 1's
+    // offset is the prefix's 1 sat, which lands exactly on output 0).
+    payments.push({ address, sats: 1 }, { sats: price, scriptHex: payScriptHex });
+  } else {
+    if (version !== SWAP_VERSION_BSV21) fail("BAD_OFFER", "offer version/locktime mismatch");
+    const input = (o.input ?? {}) as Record<string, unknown>;
+    const parts = splitOutpoint(`${String(input.txid ?? "")}_${String(input.vout ?? "")}`);
+    if (!parts) fail("BAD_OFFER", "offer input must be 64-hex txid + vout");
+    if (input.sequence !== SWAP_SEQ) fail("BAD_OFFER", "offer sequence mismatch");
+    const scriptHex = hexBlob(input.scriptHex);
+    const unlockHex = hexBlob(o.unlockHex);
+    if (!scriptHex || !unlockHex) fail("BAD_OFFER", "offer scripts must be hex");
+    // Carrier truth comes from chain, never from the offer.
+    const carrier = await lockingScriptOf(parts.txid, parts.vout, fetchFn);
+    if (carrier.scriptHex.toLowerCase() !== scriptHex) fail("BAD_OFFER", "offer script disagrees with chain");
+    if (carrier.value !== 1) fail("BAD_OFFER", "offer carrier is not 1 sat");
+    // BSV21: the indexer is the arbiter of token spend-state (bulk-validated
+    // holdings, unspent only), and the envelope is re-checked locally —
+    // same two-layer rule as sendBsv21. Exact-UTXO only: the listed amount
+    // must equal the carrier amount (partial fills can't be atomic-safe).
     const id = normalizeTokenId(o.tokenId);
     if (!id) fail("BAD_OFFER", "offer tokenId must be <64-hex-txid>_<vout>");
     const amt = parseTokenAmount(o.tokenAmount);
@@ -274,37 +443,15 @@ export async function completeSwap(opts: {
     if (!env || env.protocol !== BSV20_PROTOCOL || env.contentType !== BSV20_CONTENT_TYPE || env.id !== tokenId || env.amt !== tokenAmount) {
       fail("BAD_OFFER", "offer script is not the listed token output");
     }
+    spendInputs.push({ txid: parts.txid, vout: parts.vout, value: 1, scriptHex: carrier.scriptHex });
+    sellerUnlocks.set(`${parts.txid}:${parts.vout}`, parseUnlock(unlockHex));
+    carrierShort = parts.txid.slice(0, 8);
+    payments.push(
+      { sats: price, scriptHex: payScriptHex },
+      { sats: 1, scriptHex: bsv21TransferScript(address, tokenId, tokenAmount) },
+    );
   }
-  const address = selfAddress();
-  const lock = p2pkhScript(address);
-  const u = await opts.chain.utxos(address);
-  const candidates = u.utxos
-    .filter((x) => x.value > 1)
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 12);
-  const scripts = await Promise.all(
-    candidates.map((x) => lockingScriptOf(x.txid, x.vout, fetchFn).catch(() => null)),
-  );
-  const funding: SpendableUtxo[] = [];
-  for (let i = 0; i < candidates.length && funding.length < 6; i++) {
-    const s = scripts[i];
-    if (!s || hasOrdEnvelope(s.scriptHex)) continue; // inscription carrier — hands off
-    const c = candidates[i]!;
-    funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: s.scriptHex });
-  }
-  const sellerKey = `${parts.txid}:${parts.vout}`;
-  let unlockScript: Script;
-  try {
-    unlockScript = Script.fromHex(unlockHex);
-  } catch {
-    fail("BAD_OFFER", "offer unlock must be a script");
-  }
-  const payments: Array<{ address?: string; sats: number; scriptHex?: string }> = [
-    { sats: price, scriptHex: payScriptHex }, // byte-exact seller terms
-    kind === "bsv21"
-      ? { sats: 1, scriptHex: bsv21TransferScript(address, tokenId, tokenAmount) }
-      : { address, sats: 1 }, // NFT sat to buyer (plain P2PKH moves the inscription)
-  ];
+  spendInputs.push(...funding);
   let feeSats = 0;
   if (opts.fee !== undefined) {
     try {
@@ -318,11 +465,11 @@ export async function completeSwap(opts: {
   }
   const memo = checkMemo(opts.memo);
   const built = buildTx({
-    utxos: [{ txid: parts.txid, vout: parts.vout, value: 1, scriptHex: carrier.scriptHex }, ...funding],
-    unlockFor: (x) =>
-      `${x.txid}:${x.vout}` === sellerKey
-        ? { sign: async () => unlockScript }
-        : p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
+    utxos: spendInputs,
+    unlockFor: (x) => {
+      const pre = sellerUnlocks.get(`${x.txid}:${x.vout}`);
+      return pre ? { sign: async () => pre } : p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!));
+    },
     payments,
     opReturn: memo.length ? memo : undefined,
     changeScriptHex: lock.toHex(),
@@ -331,7 +478,7 @@ export async function completeSwap(opts: {
   const gate = await check(opts.db, opts.origin, price + feeSats + built.fee, "app-swap", {
     context: {
       label: opts.label,
-      to: `${parts.txid.slice(0, 8)} listing`,
+      to: `${carrierShort} listing`,
       ...(opts.description ? { description: opts.description } : {}),
     },
     ...(opts.jev ? { jev: opts.jev } : {}),
@@ -341,7 +488,7 @@ export async function completeSwap(opts: {
   const res = await opts.chain.broadcast(hex);
   await track(opts.db, res.txid, opts.label ?? (kind === "bsv21"
     ? `swap buy ${tokenAmount} ${tokenId.slice(0, 8)} for ${price} sats`
-    : `swap buy ${price} sats from ${parts.txid.slice(0, 8)}`), hex);
+    : `swap buy ${price} sats from ${carrierShort}`), hex);
   await recordSpend(opts.db, opts.origin, price + built.fee);
   const basket = await resolveBasketForOrigin(opts.db, opts.origin);
   const ours = new Set([lock.toHex()]); // NFT output + sat change (payment output is the seller's)

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // partitioned keyring namespace (see custody.ts svc())
 process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-swaps";
 import knex from "knex";
-import { Script, Transaction, UnlockingScript } from "@bsv/sdk";
+import { Script, Spend, Transaction, UnlockingScript } from "@bsv/sdk";
 import { MockChainProvider } from "../src/chain.ts";
 import { migrate } from "../src/storage.ts";
 import { createWallet, destroyWallet, hasWallet, __resetCache, selfAddress } from "../src/custody.ts";
@@ -12,7 +12,9 @@ import { inscribeMint, spendTo } from "../src/engine.ts";
 import { installApp } from "../src/apps.ts";
 import { seedRequest, setPolicy } from "../src/policy.ts";
 import { dispatch, setBackend } from "../src/rpc.ts";
-import { completeSwap, signSwapOffer, SWAP_LOCKTIME, SWAP_SEQ, SWAP_VERSION } from "../src/swaps.ts";
+import {
+  completeSwap, signSwapOffer, SWAP_LOCKTIME, SWAP_SEQ, SWAP_VERSION, SWAP_VERSION_ORDINAL,
+} from "../src/swaps.ts";
 import { inscriptionScript } from "../src/tokens.ts";
 import { bsv21TransferScript, parseBsv21Envelope } from "../src/tokens.ts";
 import { p2pkhScript } from "../src/tx.ts";
@@ -20,6 +22,7 @@ import { p2pkhScript } from "../src/tx.ts";
 const TO = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
 const N1 = "b".repeat(64);
 const N3 = "aa".repeat(32);
+const N4 = "ab".repeat(32);
 const F1 = "d".repeat(64);
 const F3 = "1".repeat(64);
 const X1 = "e".repeat(64);
@@ -56,6 +59,7 @@ function makeNet(selfAddr, opts = {}) {
   const hexes = {
     [N1]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "0102"), sats: 1 }]),
     [N3]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 1 }]), // transferred carrier: plain P2PKH
+    [N4]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 1 }]), // plain 1-sat prefix (v4 dust)
     [F1]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 100_000 }]),
     [F3]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "abcd"), sats: 200_000 }]),
     [X1]: () => parentHex([{ scriptHex: inscriptionScript(TO, "image/png", "0102"), sats: 1 }]),
@@ -104,23 +108,32 @@ it("swap offer is template-exact and always pays self", async () => {
     const addr = selfAddress();
     const { fetchFn } = makeNet(addr);
     const chain = new MockChainProvider();
+    chain.credit(addr, { txid: N4, vout: 0, value: 1, height: 900 });
     await setPolicy(db, "game.example", "allow");
     const offer = await signSwapOffer({
       db, chain, origin: "game.example", txid: N1, vout: 0, priceSats: 5000, fetchFn,
     });
-    assert.equal(offer.version, SWAP_VERSION);
+    assert.equal(offer.version, SWAP_VERSION_ORDINAL);
+    assert.equal(offer.kind, "ordinal");
     assert.equal(offer.lockTime, SWAP_LOCKTIME);
-    assert.deepEqual(offer.input, {
-      txid: N1, vout: 0,
-      scriptHex: inscriptionScript(addr, "image/png", "0102"),
-      sequence: SWAP_SEQ,
-    });
+    assert.equal(offer.inputs.length, 2);
+    // input 0: the seller's plain 1-sat prefix; input 1: the inscribed carrier
+    assert.equal(offer.inputs[0].txid, N4);
+    assert.equal(offer.inputs[0].scriptHex, p2pkhScript(addr).toHex());
+    assert.equal(offer.inputs[1].txid, N1);
+    assert.equal(offer.inputs[1].scriptHex, inscriptionScript(addr, "image/png", "0102"));
     assert.equal(offer.payScriptHex, p2pkhScript(addr).toHex());
     assert.equal(offer.priceSats, 5000);
-    assert.match(offer.unlockHex, /^[0-9a-f]+$/);
-    // unlock is a real P2PKH unlock (sig + pubkey), not a stub
-    const unlock = Script.fromHex(offer.unlockHex);
-    assert.ok(unlock.chunks.length >= 2);
+    // real P2PKH unlocks, with the exact sighash flags the template needs
+    // (FORKID is always set on BSV): prefix NONE|ACP|FORKID (0xc2),
+    // carrier SINGLE|ACP|FORKID (0xc3)
+    const sigType = (hex) => {
+      const chunk = Script.fromHex(hex).chunks[0];
+      const data = Array.from(chunk.data ?? []);
+      return data[data.length - 1];
+    };
+    assert.equal(sigType(offer.inputs[0].unlockHex), 0xc2);
+    assert.equal(sigType(offer.inputs[1].unlockHex), 0xc3);
   } finally {
     await db.destroy();
     await destroyWallet();
@@ -158,11 +171,12 @@ it("offer lists transferred inscriptions via ORDFS metadata", async () => {
     const ordfs = { [`${N3}_0`]: { contentType: "image/png", contentLength: 684, sequence: 3 } };
     const { fetchFn } = makeNet(addr, { ordfs });
     const chain = new MockChainProvider();
+    chain.credit(addr, { txid: N4, vout: 0, value: 1, height: 900 });
     await setPolicy(db, "game.example", "allow");
     const base = { db, chain, origin: "game.example", txid: N3, vout: 0, priceSats: 5000, fetchFn };
     // plain carrier + metadata = transferred inscription: signs
     const offer = await signSwapOffer(base);
-    assert.equal(offer.version, 2);
+    assert.equal(offer.version, SWAP_VERSION_ORDINAL);
     assert.equal(offer.kind, "ordinal");
     assert.equal(offer.priceSats, 5000);
     assert.equal(offer.payScriptHex, p2pkhScript(addr).toHex());
@@ -214,6 +228,7 @@ it("completion settles payment plus NFT atomically", async () => {
       seen = hex;
       return origBroadcast(hex);
     };
+    chain.credit(addr, { txid: N4, vout: 0, value: 1, height: 900 });
     await setPolicy(db, "game.example", "allow");
     const offer = await signSwapOffer({
       db, chain, origin: "game.example", txid: N1, vout: 0, priceSats: 5000, fetchFn,
@@ -227,13 +242,16 @@ it("completion settles payment plus NFT atomically", async () => {
     assert.ok(r.fee >= 100);
     const tx = Transaction.fromHex(seen);
     const ins = tx.inputs.map((i) => `${i.sourceTXID}:${i.sourceOutputIndex}`);
-    assert.deepEqual(ins[0], `${N1}:0`);
+    // v4: prefix first, then the carrier, so FIFO lands the inscription on
+    // output 0 (the buyer's 1-sat NFT output)
+    assert.deepEqual(ins[0], `${N4}:0`);
+    assert.deepEqual(ins[1], `${N1}:0`);
     assert.ok(ins.some((s) => s.startsWith(F1)));
-    // output 0: byte-exact seller terms; output 1: NFT sat to buyer
-    assert.equal(tx.outputs[0].lockingScript.toHex(), offer.payScriptHex);
-    assert.equal(tx.outputs[0].satoshis, 5000);
-    assert.equal(tx.outputs[1].lockingScript.toHex(), p2pkhScript(addr).toHex());
-    assert.equal(tx.outputs[1].satoshis, 1);
+    assert.equal(tx.outputs[0].lockingScript.toHex(), p2pkhScript(addr).toHex());
+    assert.equal(tx.outputs[0].satoshis, 1);
+    // output 1: byte-exact seller terms (the carrier's SINGLE commits here)
+    assert.equal(tx.outputs[1].lockingScript.toHex(), offer.payScriptHex);
+    assert.equal(tx.outputs[1].satoshis, 5000);
     // output 2: market fee; output 3: memo
     assert.equal(tx.outputs[2].lockingScript.toHex(), p2pkhScript(TO).toHex());
     assert.equal(tx.outputs[2].satoshis, 100);
@@ -251,6 +269,56 @@ it("completion settles payment plus NFT atomically", async () => {
   }
 });
 
+it("v4 signatures validate under the interpreter", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNet(addr);
+    const chain = new MockChainProvider();
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    chain.credit(addr, { txid: N4, vout: 0, value: 1, height: 900 });
+    let seen = "";
+    const origBroadcast = chain.broadcast.bind(chain);
+    chain.broadcast = async (hex) => {
+      seen = hex;
+      return origBroadcast(hex);
+    };
+    await setPolicy(db, "game.example", "allow");
+    const offer = await signSwapOffer({
+      db, chain, origin: "game.example", txid: N1, vout: 0, priceSats: 5000, fetchFn,
+    });
+    await completeSwap({ db, chain, origin: "game.example", offer, fetchFn });
+    const tx = Transaction.fromHex(seen);
+    const sources = [
+      { txid: N4, vout: 0, satoshis: 1, script: Script.fromHex(p2pkhScript(addr).toHex()) },
+      { txid: N1, vout: 0, satoshis: 1, script: Script.fromHex(inscriptionScript(addr, "image/png", "0102")) },
+    ];
+    for (let i = 0; i < 2; i++) {
+      const s = sources[i];
+      const spend = new Spend({
+        sourceTXID: s.txid,
+        sourceOutputIndex: s.vout,
+        sourceSatoshis: s.satoshis,
+        lockingScript: s.script,
+        unlockingScript: tx.inputs[i].unlockingScript,
+        transactionVersion: tx.version,
+        lockTime: tx.lockTime,
+        inputIndex: i,
+        inputSequence: tx.inputs[i].sequence ?? 0xffffffff,
+        outputs: tx.outputs,
+        otherInputs: tx.inputs.filter((_, j) => j !== i),
+      });
+      assert.equal(await spend.validate(), true, `input ${i} signature must validate`);
+    }
+    assert.equal(tx.version, 2, "completion uses the template tx version");
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
 it("completion rejects tampered offers before signing", async () => {
   const db = await memdb();
   try {
@@ -259,24 +327,33 @@ it("completion rejects tampered offers before signing", async () => {
     const { fetchFn } = makeNet(addr);
     const chain = new MockChainProvider();
     chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    chain.credit(addr, { txid: N4, vout: 0, value: 1, height: 900 });
     await setPolicy(db, "game.example", "allow");
     const good = await signSwapOffer({
       db, chain, origin: "game.example", txid: N1, vout: 0, priceSats: 5000, fetchFn,
     });
     const base = { db, chain, origin: "game.example", fetchFn };
     await rejectsCode(completeSwap({ ...base, offer: {} }), "BAD_OFFER");
-    await rejectsCode(completeSwap({ ...base, offer: { ...good, version: 3 } }), "BAD_OFFER");
+    // v2 is rejected outright (not indexer-safe)
+    await rejectsCode(completeSwap({ ...base, offer: { ...good, version: SWAP_VERSION } }), "BAD_OFFER");
     await rejectsCode(completeSwap({ ...base, offer: { ...good, lockTime: 1 } }), "BAD_OFFER");
+    await rejectsCode(completeSwap({ ...base, offer: { ...good, inputs: [good.inputs[0]] } }), "BAD_OFFER");
     await rejectsCode(
-      completeSwap({ ...base, offer: { ...good, input: { ...good.input, sequence: 0 } } }),
+      completeSwap({ ...base, offer: { ...good, inputs: [{ ...good.inputs[0], sequence: 0 }, good.inputs[1]] } }),
       "BAD_OFFER",
     );
     await rejectsCode(completeSwap({ ...base, offer: { ...good, payScriptHex: "00" } }), "BAD_OFFER");
     await rejectsCode(
-      completeSwap({ ...base, offer: { ...good, input: { ...good.input, scriptHex: inscriptionScript(TO, "image/png", "0102") } } }),
+      completeSwap({
+        ...base,
+        offer: { ...good, inputs: [good.inputs[0], { ...good.inputs[1], scriptHex: inscriptionScript(TO, "image/png", "0102") }] },
+      }),
       "BAD_OFFER",
     );
-    await rejectsCode(completeSwap({ ...base, offer: { ...good, unlockHex: "zz" } }), "BAD_OFFER");
+    await rejectsCode(
+      completeSwap({ ...base, offer: { ...good, inputs: [good.inputs[0], { ...good.inputs[1], unlockHex: "zz" }] } }),
+      "BAD_OFFER",
+    );
   } finally {
     await db.destroy();
     await destroyWallet();
@@ -292,6 +369,7 @@ it("completion verifies buyer checks before funding", async () => {
     const { fetchFn } = makeNet(addr);
     const chain = new MockChainProvider();
     chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    chain.credit(addr, { txid: N4, vout: 0, value: 1, height: 900 });
     await setPolicy(db, "game.example", "allow");
     const offer = await signSwapOffer({
       db, chain, origin: "game.example", txid: N1, vout: 0, priceSats: 5000, fetchFn,

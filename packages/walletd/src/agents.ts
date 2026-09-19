@@ -88,8 +88,15 @@ export async function mintAgent(
   if (expiryAt !== 0 && expiryAt <= Date.now()) {
     throw Object.assign(new Error("expiry must be in the future"), { code: "BAD_PARAM" });
   }
-  const dupe = await db("agent_wallets").where({ name }).first();
-  if (dupe) throw Object.assign(new Error(`agent wallet exists: ${name} (revoke first to re-mint)`), { code: "EXISTS" });
+  const dupe = (await db("agent_wallets").where({ name }).first()) as AgentRow | undefined;
+  if (dupe) {
+    // The error message promises "revoke first to re-mint": a revoked row is
+    // replaced (fresh budget/window/expiry), a live one refuses.
+    if (!dupe.revoked) {
+      throw Object.assign(new Error(`agent wallet exists: ${name} (revoke first to re-mint)`), { code: "EXISTS" });
+    }
+    await db("agent_wallets").where({ name }).delete();
+  }
   const now = Date.now();
   const row: AgentRow = {
     name, budget_sats: budgetSats, daily_sats: dailySats,

@@ -380,7 +380,12 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       name?: unknown; budgetSats?: unknown; dailySats?: unknown; expiryAt?: unknown;
     };
     if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
-    return mintAgent(b.db, { name, budgetSats: Number(budgetSats), dailySats: Number(dailySats ?? 0), expiryAt: Number(expiryAt ?? 0) });
+    const view = await mintAgent(b.db, { name, budgetSats: Number(budgetSats), dailySats: Number(dailySats ?? 0), expiryAt: Number(expiryAt ?? 0) });
+    // Revoke pairs the flag with a policy deny; minting is the approval
+    // ceremony, so a re-mint clears that deny back to the default ask mode.
+    const row = (await b.db("policies").where({ origin: view.name }).first()) as { mode?: string } | undefined;
+    if (row?.mode === "deny") await setPolicy(b.db, view.name, "ask");
+    return view;
   },
   agentRevoke: async (params) => {
     // One command fully cuts access: flag the sub-wallet AND deny the origin.
@@ -1303,21 +1308,11 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const label = `market buy ${l.origin}`;
     let r: { txid: string; fee: number };
     let atomic = false;
-    if (l.sellerUnlock && l.payScript && l.inputScript) {
-      const parts = splitOutpoint(l.origin);
-      if (!parts) throw Object.assign(new Error("listing origin malformed"), { code: "RAILS" });
+    if (l.offer && typeof l.offer === "object") {
       atomic = true;
       r = await completeSwap({
         db: b.db, chain: b.chain, origin: policyOrigin,
-        offer: {
-          input: { txid: parts.txid, vout: parts.vout, scriptHex: l.inputScript, sequence: 0xffffffff },
-          unlockHex: l.sellerUnlock,
-          payScriptHex: l.payScript,
-          priceSats: l.priceSats,
-          version: l.assetKind === "bsv21" ? SWAP_VERSION_BSV21 : SWAP_VERSION,
-          lockTime: 0,
-          ...(l.assetKind === "bsv21" ? { kind: "bsv21" as const, tokenId: l.tokenId, tokenAmount: l.tokenAmount } : {}),
-        },
+        offer: l.offer,
         ...(fee ? { fee } : {}),
         memo, label,
         buyerChecks: { expectedSeller: l.seller, maxPrice: cap },
@@ -1383,14 +1378,15 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       ...(typeof image === "string" && image ? { image } : {}),
       priceSats: price,
       seller,
-      sellerUnlock: offer.unlockHex,
-      payScript: offer.payScriptHex,
-      ...(assetKind === "bsv21" ? { tokenId, tokenAmount } : {}),
+      offer,
       feeBps: bps,
       feeAddress: fees.feeAddress,
       metadata: { source: policyOrigin },
     });
-    return { listed: true, origin: dot, priceSats: price, feeBps: bps, feeAddress: fees.feeAddress };
+    return {
+      listed: true, origin: dot, priceSats: price, feeBps: bps, feeAddress: fees.feeAddress,
+      atomic: true, version: offer.version, kind: offer.kind,
+    };
   },
   /** Cancel our listing on the market (seller must be this wallet). */
   marketCancel: async (params) => {
@@ -1434,7 +1430,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       postError = e instanceof Error ? e.message : String(e);
     }
     let settled = false;
-    if (posted && l.sellerUnlock) {
+    if (posted && l.offer && typeof l.offer === "object") {
       try {
         await markSettled(l.origin, clean);
         settled = true;

@@ -51,3 +51,22 @@ test("policyProbe dry-runs the gate over dispatch", async () => {
     await db.destroy();
   }
 });
+
+test("re-mint after revoke clears the paired policy deny", async () => {
+  const db = knex({ client: "better-sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
+  try {
+    await migrate(db);
+    setBackend({ db, chain: new MockChainProvider() });
+    const minted = await dispatch({ method: "agentMint", id: 7, params: { name: "agent-x", budgetSats: 5000 } });
+    assert.equal(minted.result.active, true);
+    await dispatch({ method: "agentRevoke", id: 8, params: { name: "agent-x" } });
+    assert.equal((await dispatch({ method: "policyList", id: 9 })).result.policies.find((p) => p.origin === "agent-x").mode, "deny");
+    const again = await dispatch({ method: "agentMint", id: 10, params: { name: "agent-x", budgetSats: 9000 } });
+    assert.equal(again.result.remaining, 9000);
+    const row = (await dispatch({ method: "policyList", id: 11 })).result.policies.find((p) => p.origin === "agent-x");
+    assert.equal(row.mode, "ask");
+  } finally {
+    setBackend(null);
+    await db.destroy();
+  }
+});

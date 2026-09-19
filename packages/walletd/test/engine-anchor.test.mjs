@@ -53,3 +53,29 @@ it("anchor flow: policy gate, then spend, broadcast, track", async () => {
     __resetCache();
   }
 });
+
+test("lockingScriptOf backs off on 429 and succeeds", async () => {
+  const { lockingScriptOf } = await import("../src/engine.ts");
+  const { Transaction, UnlockingScript } = await import("@bsv/sdk");
+  const tx = new Transaction();
+  tx.addInput({ sourceTXID: "f".repeat(64), sourceOutputIndex: 0, sequence: 0xffffffff, unlockingScript: new UnlockingScript([]) });
+  tx.addOutput({ lockingScript: new (await import("@bsv/sdk")).P2PKH().lock("1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm"), satoshis: 42 });
+  const hex = tx.toHex();
+  let n = 0;
+  const flaky = async () => {
+    n += 1;
+    if (n < 3) return new Response("slow down", { status: 429 });
+    return new Response(hex, { status: 200 });
+  };
+  const out = await lockingScriptOf("a".repeat(64), 0, flaky);
+  assert.equal(n, 3);
+  assert.equal(out.value, 42);
+  // a hard 404 fails fast (no retry)
+  let m = 0;
+  const notFound = async () => {
+    m += 1;
+    return new Response("nope", { status: 404 });
+  };
+  await assert.rejects(lockingScriptOf("a".repeat(64), 0, notFound), /404/);
+  assert.equal(m, 1);
+});

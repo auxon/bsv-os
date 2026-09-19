@@ -21,6 +21,8 @@ export interface MarketListing {
   image: string | null;
   priceSats: number;
   seller: string;
+  /** Atomic offer (v4 ordinal dual-input or v3 bsv21), opaque to callers. */
+  offer: unknown | null;
   sellerUnlock: string | null;
   payScript: string | null;
   inputScript: string | null;

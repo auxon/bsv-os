@@ -19,6 +19,7 @@ const enrolled = await hasWallet();
 const it = enrolled ? test.skip : test;
 
 const N1 = "b".repeat(64);
+const N5 = "ab".repeat(32);
 const F1 = "d".repeat(64);
 const F2 = "c".repeat(64);
 const X1 = "e".repeat(64);
@@ -42,12 +43,18 @@ function parentHex(outputs) {
 function makeNet(selfAddr) {
   const hexes = {
     [N1]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "0102"), sats: 1 }]),
+    [N5]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 1 }]), // v4 prefix dust
     [F1]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 100_000 }]),
     [F2]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 50_000 }]),
     [X1]: () => parentHex([{ scriptHex: inscriptionScript(TO, "image/png", "0102"), sats: 1 }]),
   };
-  const fetchFn = async (url) => {
-    const m = /\/tx\/([0-9a-f]{64})\/hex$/.exec(String(url));
+  const fetchFn = async (url, init) => {
+    const u = String(url);
+    if (u.includes("/1sat/ordfs/metadata")) {
+      // no inscriptions among the fixtures: every candidate is plain dust
+      return new Response("{}", { status: 200 });
+    }
+    const m = /\/tx\/([0-9a-f]{64})\/hex$/.exec(u);
     if (m && hexes[m[1]]) return new Response(hexes[m[1]](), { status: 200 });
     return new Response("nope", { status: 404 });
   };
@@ -144,6 +151,7 @@ it("twetchBuy atomic completes swap offers", async () => {
     globalThis.fetch = fetchFn;
     try {
       chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+      chain.credit(addr, { txid: N5, vout: 0, value: 1, height: 900 });
       await setPolicy(db, "twetch", "allow");
       const listed = await dispatch({
         method: "twetchList",
@@ -151,7 +159,8 @@ it("twetchBuy atomic completes swap offers", async () => {
         id: 6,
       });
       assert.equal(listed.result.kind, "ordinal");
-      assert.equal(listed.result.version, 2);
+      assert.equal(listed.result.version, 4);
+      assert.equal(listed.result.inputs.length, 2);
       const res = await dispatch({
         method: "twetchBuy",
         params: {
@@ -228,7 +237,7 @@ function marketStub(baseFetch, { listing = null, fee = { feeBps: 200, feeAddress
 function marketListing(over = {}) {
   return {
     origin: `${N1}.0`, assetKind: "ordinal", title: "Test ordinal", image: null,
-    priceSats: 5000, seller: TO, sellerUnlock: null, payScript: null, inputScript: null,
+    priceSats: 5000, seller: TO, offer: null, sellerUnlock: null, payScript: null, inputScript: null,
     tokenId: null, tokenAmount: null, feeBps: 200, feeAddress: TO, status: "active",
     buyTxid: null, transferTxid: null,
     ...over,
@@ -258,7 +267,7 @@ it("marketBrowse and marketFees read the configured deployment", async () => {
 });
 
 it("marketList signs and posts with the operator fee", async () => {
-  const { db } = await backend();
+  const { db, chain } = await backend();
   const realFetch = globalThis.fetch;
   try {
     await createWallet();
@@ -267,6 +276,7 @@ it("marketList signs and posts with the operator fee", async () => {
     const { fetchFn, calls } = marketStub(net.fetchFn);
     globalThis.fetch = fetchFn;
     await setPolicy(db, "cli", "allow");
+    chain.credit(addr, { txid: N5, vout: 0, value: 1, height: 900 }); // v4 prefix dust
     const res = await dispatch({
       method: "marketList",
       params: { outpoint: `${N1}.0`, priceSats: 2500, title: "T" },
@@ -276,6 +286,7 @@ it("marketList signs and posts with the operator fee", async () => {
     assert.equal(res.result.origin, `${N1}.0`);
     assert.equal(res.result.feeBps, 200);
     assert.equal(res.result.feeAddress, TO);
+    assert.equal(res.result.version, 4);
     const posted = calls.find((c) => c.path === "/v1/market/list");
     assert.ok(posted, "listing was posted");
     assert.equal(posted.body.priceSats, 2500);
@@ -283,7 +294,11 @@ it("marketList signs and posts with the operator fee", async () => {
     assert.equal(posted.body.seller, addr);
     assert.equal(posted.body.feeBps, 200);
     assert.equal(posted.body.feeAddress, TO);
-    assert.match(posted.body.sellerUnlock, /^[0-9a-f]+$/);
+    assert.equal(posted.body.offer.kind, "ordinal");
+    assert.equal(posted.body.offer.version, 4);
+    assert.equal(posted.body.offer.inputs.length, 2);
+    assert.match(posted.body.offer.inputs[0].unlockHex, /^[0-9a-f]+$/);
+    assert.match(posted.body.offer.inputs[1].unlockHex, /^[0-9a-f]+$/);
     assert.equal(posted.body.metadata.source, "cli");
     // fee override and underscore outpoints
     const zero = await dispatch({
@@ -314,14 +329,12 @@ it("marketBuy atomic: fetches terms, verifies, buys, posts buy + settle", async 
     await createWallet();
     const addr = selfAddress();
     const net = makeNet(addr);
+    chain.credit(addr, { txid: N5, vout: 0, value: 1, height: 900 });
     await setPolicy(db, "cli", "allow");
     const offer = await signSwapOffer({
       db, chain, origin: "cli", txid: N1, vout: 0, priceSats: 5000, fetchFn: net.fetchFn,
     });
-    const listing = marketListing({
-      seller: addr, sellerUnlock: offer.unlockHex, payScript: offer.payScriptHex,
-      inputScript: offer.input.scriptHex,
-    });
+    const listing = marketListing({ seller: addr, offer });
     const { fetchFn, calls } = marketStub(net.fetchFn, { listing });
     globalThis.fetch = fetchFn;
     chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
@@ -452,11 +465,7 @@ it("marketSync reconciles a lagging buy post", async () => {
   try {
     await createWallet();
     const net = makeNet(selfAddress());
-    const atomic = marketListing({
-      sellerUnlock: "ab".repeat(50),
-      payScript: `76a914${"11".repeat(20)}88ac`,
-      inputScript: `76a914${"11".repeat(20)}88ac`,
-    });
+    const atomic = marketListing({ offer: { version: 4, kind: "ordinal" } });
     const { fetchFn, calls } = marketStub(net.fetchFn, { listing: atomic });
     globalThis.fetch = fetchFn;
     const res = await dispatch({ method: "marketSync", params: { listing: `${N1}.0`, txid: "AB".repeat(32) }, id: 30 });
@@ -466,7 +475,7 @@ it("marketSync reconciles a lagging buy post", async () => {
     assert.ok(calls.some((c) => c.path === "/v1/market/settle"));
     // idempotent when the same txid is already recorded
     const again = marketStub(net.fetchFn, {
-      listing: marketListing({ status: "paid", buyTxid: "ab".repeat(32), sellerUnlock: "ab".repeat(50) }),
+      listing: marketListing({ status: "paid", buyTxid: "ab".repeat(32), offer: { version: 4, kind: "ordinal" } }),
     });
     globalThis.fetch = again.fetchFn;
     const idem = await dispatch({ method: "marketSync", params: { listing: `${N1}.0`, txid: "AB".repeat(32) }, id: 31 });
