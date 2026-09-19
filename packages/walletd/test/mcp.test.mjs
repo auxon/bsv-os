@@ -13,12 +13,12 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the eight wallet tools", async () => {
+test("lists the ten wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, [
-    "anchor_tip", "get_version", "jev_decide", "jev_status",
-    "list_pending", "wallet_balance", "wallet_status", "x402_pay",
+    "anchor_tip", "events_poll", "get_version", "jev_decide", "jev_status",
+    "list_pending", "policy_probe", "wallet_balance", "wallet_status", "x402_pay",
   ]);
   await client.close();
   await server.close();
@@ -61,6 +61,40 @@ test("x402_pay stamps the agent origin and requires a url", async () => {
   assert.equal(seen.params.origin, "test-agent");
   assert.equal(seen.params.url, "https://example.com/paid");
   await assert.rejects(client.callTool({ name: "x402_pay", arguments: {} }), /url is required/);
+  await client.close();
+  await server.close();
+});
+
+test("policy_probe stamps the agent origin and validates input", async () => {
+  let seen = null;
+  const { client, server } = await pair(async (method, params) => {
+    seen = { method, params };
+    return { verdict: "allow", pending: false, mode: "allow", capSats: 0, budgetCovered: false };
+  });
+  await client.callTool({
+    name: "policy_probe",
+    arguments: { action: "app-spend", amountSats: 264, label: "PULL" },
+  });
+  assert.equal(seen.method, "policyProbe");
+  assert.equal(seen.params.origin, "test-agent");
+  assert.equal(seen.params.action, "app-spend");
+  assert.equal(seen.params.amountSats, 264);
+  assert.equal(seen.params.label, "PULL");
+  await assert.rejects(client.callTool({ name: "policy_probe", arguments: {} }), /action is required/);
+  await client.close();
+  await server.close();
+});
+test("events_poll stamps the agent origin and forwards the cursor", async () => {
+  let seen = null;
+  const { client, server } = await pair(async (method, params) => {
+    seen = { method, params };
+    return { events: [] };
+  });
+  await client.callTool({ name: "events_poll", arguments: { since: 4, wait_seconds: 5 } });
+  assert.equal(seen.method, "eventsPoll");
+  assert.equal(seen.params.origin, "test-agent");
+  assert.equal(seen.params.since, 4);
+  assert.equal(seen.params.waitMs, 5000);
   await client.close();
   await server.close();
 });

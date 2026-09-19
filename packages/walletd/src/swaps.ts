@@ -29,6 +29,7 @@ import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
 import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
+import type { JevDecide } from "./jev.ts";
 import { hasOrdEnvelope, splitOutpoint } from "./tokens.ts";
 import { checkMemo, lockingScriptOf } from "./engine.ts";
 import { track } from "./monitor.ts";
@@ -134,7 +135,12 @@ export async function completeSwap(opts: {
   offer: unknown;
   fee?: { to: string; sats: number };
   memo?: string[];
+  label?: string;
+  /** Human meaning of the spend for the Jev decision state (from the app memo). */
+  description?: string;
   fetchFn?: typeof fetch;
+  /** Test/embedding Jev override, passed to the policy gate. */
+  jev?: JevDecide;
 }): Promise<{ txid: string; fee: number }> {
   const o = (opts.offer ?? {}) as Record<string, unknown>;
   const input = (o.input ?? {}) as Record<string, unknown>;
@@ -205,7 +211,14 @@ export async function completeSwap(opts: {
     changeScriptHex: lock.toHex(),
     keepOrder: true,
   });
-  const gate = await check(opts.db, opts.origin, price + feeSats + built.fee, "app-swap");
+  const gate = await check(opts.db, opts.origin, price + feeSats + built.fee, "app-swap", {
+    context: {
+      label: opts.label,
+      to: `${parts.txid.slice(0, 8)} listing`,
+      ...(opts.description ? { description: opts.description } : {}),
+    },
+    ...(opts.jev ? { jev: opts.jev } : {}),
+  });
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);

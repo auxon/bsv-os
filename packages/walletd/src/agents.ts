@@ -15,6 +15,7 @@
  * Read-only over keys: this module touches the DB, never custody.
  */
 import type { Knex } from "knex";
+import { logEvent } from "./events.ts";
 
 export const DAY_MS = 86_400_000;
 
@@ -96,6 +97,10 @@ export async function mintAgent(
     expiry_at: expiryAt, revoked: 0, created_at: now,
   };
   await db("agent_wallets").insert(row);
+  await logEvent(db, "budget.minted", {
+    origin: name, amountSats: budgetSats,
+    detail: `budget ${budgetSats}${dailySats > 0 ? ` daily ${dailySats}` : ""}${expiryAt > 0 ? ` expiry ${new Date(expiryAt).toISOString()}` : ""}`,
+  });
   return view(row, now);
 }
 
@@ -103,6 +108,7 @@ export async function revokeAgent(db: Knex, name: string): Promise<{ name: strin
   const clean = validateAgentName(name);
   const n = await db("agent_wallets").where({ name: clean }).update({ revoked: 1 });
   if (n === 0) throw Object.assign(new Error(`no agent wallet: ${clean}`), { code: "NOT_FOUND" });
+  await logEvent(db, "budget.revoked", { origin: clean });
   return { name: clean, revoked: true };
 }
 

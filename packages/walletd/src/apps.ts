@@ -28,6 +28,8 @@ export interface AppManifest {
   icons?: Array<{ src: string; sizes?: string; type?: string }>;
   metanet?: {
     schemaVersion?: string;
+    /** Declared spend vocabulary: what the app will ask the wallet to do. */
+    intents?: unknown;
     groupPermissions?: {
       description?: string;
       spendingAuthorization?: { amount?: number; description?: string };
@@ -39,6 +41,19 @@ export interface AppManifest {
   };
 }
 
+/**
+ * One declared spend intent: the action tag the app puts in its memos
+ * (e.g. POCKETPETS-PULL), what it means, and what it usually costs.
+ * Declared intents feed the store listing, the Jev decision state, and
+ * update widening (a newly declared action needs re-approval).
+ */
+export interface AppIntent {
+  action: string;
+  label?: string;
+  typicalSats?: number;
+  description?: string;
+}
+
 export interface AppRecord {
   domain: string;
   name: string;
@@ -48,6 +63,8 @@ export interface AppRecord {
   installedAt: number;
   manifestSha256: string | null;
   updatedAt: number;
+  /** Declared spend intents from the pinned manifest (empty when undeclared). */
+  intents: AppIntent[];
 }
 
 export interface AppAsked {
@@ -55,6 +72,25 @@ export interface AppAsked {
   protocols: number;
   baskets: number;
   certs: number;
+  /** Declared spend-intent action names. */
+  intents: string[];
+}
+
+/**
+ * What the page meant: the first memo entry is the action tag (the label
+ * the policy gate and the ledger see), the rest is the description Jev
+ * reads. Explicit labels always win; nothing is invented when the page
+ * says nothing (Jev then judges amount + origin alone).
+ */
+export function intentFromMemo(memo: unknown, label: unknown): { label?: string; description?: string } {
+  const parts = Array.isArray(memo) ? memo.filter((m): m is string => typeof m === "string" && m.length > 0) : [];
+  const out: { label?: string; description?: string } = {};
+  if (typeof label === "string" && label) out.label = label.slice(0, 80);
+  else if (parts.length > 0) out.label = parts[0]!.slice(0, 80);
+  const rest = typeof label === "string" && label ? parts : parts.slice(1);
+  const desc = rest.join(" ").trim();
+  if (desc) out.description = desc.slice(0, 200);
+  return out;
 }
 
 /** Canonical JSON for manifest pinning (key order must not affect the hash). */
@@ -100,6 +136,7 @@ export function validateManifest(domain: string, manifest: unknown): {
   protocols: number;
   baskets: number;
   certs: number;
+  intents: AppIntent[];
 } {
   if (!manifest || typeof manifest !== "object") throw new Error("manifest is not an object");
   const m = manifest as Record<string, unknown>;
@@ -133,6 +170,7 @@ export function validateManifest(domain: string, manifest: unknown): {
   const metanet = (m.metanet ?? {}) as NonNullable<AppManifest["metanet"]>;
   const gp = metanet.groupPermissions ?? {};
   const spendCapSats = Math.max(0, Math.floor(Number(gp.spendingAuthorization?.amount) || 0));
+  const intents = validateIntents(metanet.intents);
   return {
     name: name.slice(0, 80),
     startUrl,
@@ -141,7 +179,41 @@ export function validateManifest(domain: string, manifest: unknown): {
     protocols: Array.isArray(gp.protocolPermissions) ? gp.protocolPermissions.length : 0,
     baskets: Array.isArray(gp.basketAccess) ? gp.basketAccess.length : 0,
     certs: Array.isArray(gp.certificateAccess) ? gp.certificateAccess.length : 0,
+    intents,
   };
+}
+
+/** Declared spend vocabulary. Strict: a malformed intents block rejects the manifest. */
+export function validateIntents(raw: unknown): AppIntent[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 32) {
+    throw new Error("metanet.intents must be an array of at most 32 intents");
+  }
+  return raw.map((entry, i) => {
+    if (!entry || typeof entry !== "object") throw new Error(`metanet.intents[${i}] must be an object`);
+    const o = entry as Record<string, unknown>;
+    const action = String(o.action ?? "").trim();
+    if (!action || action.length > 64) throw new Error(`metanet.intents[${i}].action is required (at most 64 chars)`);
+    const intent: AppIntent = { action };
+    if (o.label !== undefined) {
+      const label = String(o.label).trim();
+      if (!label || label.length > 80) throw new Error(`metanet.intents[${i}].label must be 1-80 chars`);
+      intent.label = label;
+    }
+    if (o.description !== undefined) {
+      const description = String(o.description).trim();
+      if (!description || description.length > 200) throw new Error(`metanet.intents[${i}].description must be 1-200 chars`);
+      intent.description = description;
+    }
+    if (o.typical_sats !== undefined) {
+      const typicalSats = Math.floor(Number(o.typical_sats));
+      if (!Number.isFinite(typicalSats) || typicalSats < 0) {
+        throw new Error(`metanet.intents[${i}].typical_sats must be a non-negative sat number`);
+      }
+      intent.typicalSats = typicalSats;
+    }
+    return intent;
+  });
 }
 
 export async function fetchManifestFrom(url: string): Promise<unknown> {
@@ -257,7 +329,18 @@ function toRecord(r: AppRow): AppRecord {
     domain: r.domain, name: r.name, startUrl: r.start_url, icon: r.icon,
     spendCapSats: r.spend_cap_sats, installedAt: r.installed_at,
     manifestSha256: r.manifest_sha256 ?? null, updatedAt: r.updated_at ?? 0,
+    intents: intentsFromPin(r),
   };
+}
+
+/** Declared intents from the pinned manifest (pre-intent pins read as undeclared). */
+function intentsFromPin(row: Pick<AppRow, "domain" | "manifest_json">): AppIntent[] {
+  if (!row.manifest_json) return [];
+  try {
+    return validateManifest(row.domain, JSON.parse(row.manifest_json)).intents;
+  } catch {
+    return [];
+  }
 }
 
 export async function listApps(db: Knex): Promise<AppRecord[]> {
@@ -271,7 +354,7 @@ export async function getApp(db: Knex, domain: string): Promise<AppRecord | null
   return toRecord(r);
 }
 
-export async function saveApp(db: Knex, domain: string, v: Omit<AppRecord, "domain" | "installedAt" | "updatedAt"> & { manifestJson?: string | null }): Promise<void> {
+export async function saveApp(db: Knex, domain: string, v: Omit<AppRecord, "domain" | "installedAt" | "updatedAt" | "intents"> & { manifestJson?: string | null }): Promise<void> {
   const now = Date.now();
   await db("apps")
     .insert({
@@ -345,7 +428,7 @@ export async function installApp(
   });
   await hooks.seedPolicyRequest(clean, v.spendCapSats, "app-install");
   const app = (await getApp(db, clean))!;
-  return { app, asked: { spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs } };
+  return { app, asked: { spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs, intents: v.intents.map((i) => i.action) } };
 }
 
 /** Compare live permissions against the pin. Any increase is a widening. */
@@ -359,12 +442,21 @@ export function diffPermissions(pinned: AppAsked, live: AppAsked): { widened: bo
   bump("protocols", pinned.protocols, live.protocols, "grants");
   bump("baskets", pinned.baskets, live.baskets, "grants");
   bump("certs", pinned.certs, live.certs, "grants");
+  const before = new Set(pinned.intents ?? []);
+  const after = new Set(live.intents ?? []);
+  for (const action of after) {
+    if (!before.has(action)) changes.push(`new spend intent: ${action}`);
+  }
+  for (const action of before) {
+    if (!after.has(action)) changes.push(`removed spend intent: ${action}`);
+  }
   return {
     widened:
       live.spendCapSats > pinned.spendCapSats ||
       live.protocols > pinned.protocols ||
       live.baskets > pinned.baskets ||
-      live.certs > pinned.certs,
+      live.certs > pinned.certs ||
+      [...after].some((action) => !before.has(action)),
     changes,
   };
 }
@@ -413,7 +505,7 @@ async function fetchValidated(
     const v = validateManifest(domain, manifest);
     return {
       ok: true, manifest,
-      asked: { spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs },
+      asked: { spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs, intents: v.intents.map((i) => i.action) },
     };
   } catch {
     return { ok: false, status: "invalid" };
@@ -444,9 +536,9 @@ export async function checkAppUpdates(
 function askedFromManifest(manifest: unknown, fallback: AppRecord): AppAsked {
   try {
     const v = validateManifest(fallback.domain, manifest);
-    return { spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs };
+    return { spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs, intents: v.intents.map((i) => i.action) };
   } catch {
-    return { spendCapSats: fallback.spendCapSats, protocols: 0, baskets: 0, certs: 0 };
+    return { spendCapSats: fallback.spendCapSats, protocols: 0, baskets: 0, certs: 0, intents: fallback.intents.map((i) => i.action) };
   }
 }
 
@@ -601,6 +693,7 @@ export async function applyAppUpdate(
   }
   const diff = diffPermissions(askedFromManifest(JSON.parse(pinnedJson), app), {
     spendCapSats: v.spendCapSats, protocols: v.protocols, baskets: v.baskets, certs: v.certs,
+    intents: v.intents.map((i) => i.action),
   });
   if (diff.changes.length === 0) return { domain: clean, applied: false, status: "current", changes: [] };
   if (diff.widened && !opts.approveWidening) {

@@ -314,6 +314,40 @@ async function main(): Promise<void> {
     case "requests":
       print(await call("policyPending"));
       break;
+    case "doctor": {
+      const res = (await call("doctor")) as { result?: { ok?: boolean } };
+      print(res);
+      if (res && typeof res === "object" && res.result && typeof res.result === "object" && res.result.ok === false) {
+        process.exitCode = 1;
+      }
+      break;
+    }
+    case "events": {
+      print(await call("eventsPoll", {
+        ...(flag(rest, "since") !== undefined ? { since: Number(flag(rest, "since")) } : {}),
+        ...(flag(rest, "limit") !== undefined ? { limit: Number(flag(rest, "limit")) } : {}),
+        ...(flag(rest, "origin") !== undefined ? { origin: flag(rest, "origin") } : {}),
+        ...(flag(rest, "wait") !== undefined ? { waitMs: Math.floor(Number(flag(rest, "wait")) * 1000) } : {}),
+      }));
+      break;
+    }
+    case "probe": {
+      const [pOrigin, pAction, pAmount] = rest.filter((a) => !a.startsWith("--"));
+      if (!pOrigin || !pAction || !pAmount || !(Number(pAmount) > 0)) {
+        console.error("usage: bsv probe <origin> <action> <amountSats> [--label=..] [--to=..] [--desc=..]");
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("policyProbe", {
+        origin: pOrigin,
+        action: pAction,
+        amountSats: Number(pAmount),
+        ...(flag(rest, "label") !== undefined ? { label: flag(rest, "label") } : {}),
+        ...(flag(rest, "to") !== undefined ? { to: flag(rest, "to") } : {}),
+        ...(flag(rest, "desc") !== undefined ? { description: flag(rest, "desc") } : {}),
+      }));
+      break;
+    }
     case "jev": {
       const [jSub, ...jRest] = rest;
       if (jSub === "status" || jSub === undefined) {
@@ -1050,7 +1084,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|history|anchor|share|allow|deny|requests|jev|policies|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|history|anchor|share|allow|deny|requests|probe|events|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

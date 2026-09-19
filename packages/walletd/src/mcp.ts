@@ -85,6 +85,31 @@ const TOOLS = [
     description: "Whether Jev is configured in the daemon, which model is used, and the auto-approval thresholds.",
     inputSchema: { type: "object" as const, properties: {} },
   },
+  {
+    name: "policy_probe",
+    description: "Dry-run the spending gate for a hypothetical spend: runs caps, your sub-wallet budget, and Jev, and reports the verdict (allow/deny), reason, and Jev score — without writing a request or moving money. Use before spending to see whether an action would pass and what approval it needs.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        action: { type: "string", description: "spend action, e.g. app-spend, app-inscribe, send" },
+        amountSats: { type: "number", description: "total sats that would leave the wallet (payments + fee)" },
+        label: { type: "string", description: "optional human label, e.g. POCKETPETS-PULL" },
+        description: { type: "string", description: "optional one-line description of what the spend buys" },
+      },
+      required: ["action", "amountSats"],
+    },
+  },
+  {
+    name: "events_poll",
+    description: "Wait for approval-lifecycle events for this agent: request created/approved/denied, budget minted/revoked. Returns new events since `since` (an event id; 0 first, then track the last id seen), or holds up to `wait_seconds` (max 60) until something happens. Poll this in a loop instead of diffing requests or balance.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        since: { type: "number", description: "only events with id greater than this" },
+        wait_seconds: { type: "number", description: "long-poll up to this many seconds (default 0 = return immediately, max 60)" },
+      },
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -172,6 +197,27 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
         }
         case "jev_status":
           return text(await callDaemon("jevStatus"));
+        case "events_poll":
+          return text(await callDaemon("eventsPoll", {
+            origin: agent,
+            ...(Number.isFinite(Number(args.since)) ? { since: Number(args.since) } : {}),
+            ...(Number.isFinite(Number(args.wait_seconds)) ? { waitMs: Math.floor(Number(args.wait_seconds) * 1000) } : {}),
+          }));
+        case "policy_probe": {
+          if (typeof args.action !== "string" || !args.action) {
+            throw new McpError(ErrorCode.InvalidParams, "action is required");
+          }
+          if (!(Number(args.amountSats) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "amountSats must be a positive sat number");
+          }
+          return text(await callDaemon("policyProbe", {
+            origin: agent,
+            action: args.action,
+            amountSats: Number(args.amountSats),
+            ...(typeof args.label === "string" && args.label ? { label: args.label } : {}),
+            ...(typeof args.description === "string" && args.description ? { description: args.description } : {}),
+          }));
+        }
         default:
           throw new McpError(ErrorCode.MethodNotFound, `unknown tool: ${name}`);
       }

@@ -8,12 +8,14 @@ import {
 } from "./custody.ts";
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
-import { listPolicies, pendingRequests, seedRequest, setPolicy } from "./policy.ts";
+import { listPolicies, pendingRequests, probe, seedRequest, setPolicy } from "./policy.ts";
+import { readEvents } from "./events.ts";
+import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
-import { getApp, installApp, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
+import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
 import { bsv21For, galleryFor } from "./tokens.ts";
@@ -204,6 +206,59 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   policyPending: async () => {
     const b = needBackend();
     return { requests: await pendingRequests(b.db) };
+  },
+  /** `bsv doctor`: machine-check the gotcha table (wallet, caps, requests, broadcasts, Jev, panel sync). */
+  doctor: async () => {
+    const b = needBackend();
+    return runDoctor(b.db);
+  },
+  /**
+   * Approval-lifecycle feed: request created/approved/denied, budget
+   * minted/revoked, newest last, monotonic ids. `waitMs` long-polls
+   * (capped at 60s) so agents sleep until something happens instead of
+   * diffing state. Powers `bsv events` and the `events_poll` MCP tool.
+   */
+  eventsPoll: async (params) => {
+    const b = needBackend();
+    const { since, limit, origin, waitMs } = p(params) as {
+      since?: unknown; limit?: unknown; origin?: unknown; waitMs?: unknown;
+    };
+    const wait = Math.min(60_000, Math.max(0, Math.floor(Number(waitMs) || 0)));
+    const opts = {
+      since: Math.max(0, Math.floor(Number(since) || 0)),
+      limit: Math.min(200, Math.max(1, Math.floor(Number(limit) || 50))),
+      ...(typeof origin === "string" && origin ? { origin } : {}),
+    };
+    let events = await readEvents(b.db, opts);
+    const deadline = Date.now() + wait;
+    while (events.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+      events = await readEvents(b.db, opts);
+    }
+    return { events };
+  },
+  /**
+   * Dry-run gate: judge a hypothetical spend through caps, budgets, and
+   * Jev without writing policy_requests or moving money. Powers
+   * `bsv probe` and the `policy_probe` MCP tool.
+   */
+  policyProbe: async (params) => {
+    const b = needBackend();
+    const { origin, action, amountSats, label, to, description } = p(params) as {
+      origin?: unknown; action?: unknown; amountSats?: unknown;
+      label?: unknown; to?: unknown; description?: unknown;
+    };
+    if (typeof origin !== "string" || !origin) throw Object.assign(new Error("origin required"), { code: "BAD_PARAM" });
+    if (typeof action !== "string" || !action) throw Object.assign(new Error("action required"), { code: "BAD_PARAM" });
+    const amount = Math.floor(Number(amountSats) || 0);
+    if (!(amount > 0)) throw Object.assign(new Error("amountSats must be a positive sat number"), { code: "BAD_PARAM" });
+    return probe(b.db, origin, amount, action, {
+      context: {
+        ...(typeof label === "string" && label ? { label } : {}),
+        ...(typeof to === "string" && to ? { to } : {}),
+        ...(typeof description === "string" && description ? { description } : {}),
+      },
+    });
   },
   /** Jev advisor status: enabled, model, auto-approval thresholds (never the key). */
   jevStatus: () => ({
@@ -813,11 +868,15 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         if (!Array.isArray(payments) || !payments.length) {
           throw Object.assign(new Error("payments required"), { code: "BAD_PARAM" });
         }
+        // The page's memo is the action tag: first entry becomes the label
+        // the policy gate and ledger see, the rest is Jev's description.
+        const intent = intentFromMemo(memo, label);
         return spendTo({
           db: b.db, chain: b.chain, origin: app.domain,
           payments: payments as Array<{ to: string; sats: number }>,
           memo: Array.isArray(memo) ? (memo as string[]) : undefined,
-          label: typeof label === "string" ? label : undefined,
+          ...(intent.label ? { label: intent.label } : {}),
+          ...(intent.description ? { description: intent.description } : {}),
         });
       }
       case "inscribe": {
@@ -831,12 +890,14 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         if (typeof contentType !== "string" || !contentType) {
           throw Object.assign(new Error("contentType required"), { code: "BAD_PARAM" });
         }
+        const intent = intentFromMemo(memo, label);
         return inscribeMint({
           db: b.db, chain: b.chain, origin: app.domain, dataHex, contentType,
           to: typeof to === "string" ? to : undefined,
           fee: fee && typeof fee === "object" ? (fee as { to: string; sats: number }) : undefined,
           memo: Array.isArray(memo) ? (memo as string[]) : undefined,
-          label: typeof label === "string" ? label : undefined,
+          ...(intent.label ? { label: intent.label } : {}),
+          ...(intent.description ? { description: intent.description } : {}),
         });
       }
       case "transferNft": {
@@ -860,12 +921,15 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         });
       }
       case "completeSwap": {
-        const { offer, fee, memo } = args as { offer?: unknown; fee?: unknown; memo?: unknown };
+        const { offer, fee, memo, label } = args as { offer?: unknown; fee?: unknown; memo?: unknown; label?: unknown };
         if (!offer || typeof offer !== "object") throw Object.assign(new Error("offer required"), { code: "BAD_PARAM" });
+        const intent = intentFromMemo(memo, label);
         return completeSwap({
           db: b.db, chain: b.chain, origin: app.domain, offer,
           fee: fee && typeof fee === "object" ? (fee as { to: string; sats: number }) : undefined,
           memo: Array.isArray(memo) ? (memo as string[]) : undefined,
+          ...(intent.label ? { label: intent.label } : {}),
+          ...(intent.description ? { description: intent.description } : {}),
         });
       }
       default:

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import knex from "knex";
 import {
   appIdFor, applyAppUpdate, checkAppUpdates, diffPermissions, getApp, installApp,
-  isLoopbackHost, listApps, manifestSha256, manifestUrlFor, readCatalog, removeApp,
-  stableStringify, storeList, validateManifest,
+  intentFromMemo, isLoopbackHost, listApps, manifestSha256, manifestUrlFor, readCatalog, removeApp,
+  stableStringify, storeList, validateIntents, validateManifest,
 } from "../src/apps.ts";
 import { migrate } from "../src/storage.ts";
 import { desktopFile } from "../src/desktop.ts";
@@ -154,7 +154,7 @@ test("install from manifestJson skips the network but keeps validation", async (
 test("desktop file is a valid launcher", () => {
   const text = desktopFile({
     domain: "demo.example", name: "Demo App", startUrl: "https://demo.example/app",
-    icon: null, spendCapSats: 0, installedAt: 0,
+    icon: null, spendCapSats: 0, installedAt: 0, intents: [],
   });
   assert.ok(text.includes("Exec=bsv app open demo.example"));
   assert.ok(text.startsWith("[Desktop Entry]"));
@@ -177,16 +177,22 @@ test("install pins a key-order-stable manifest hash", async () => {
 });
 
 test("diffPermissions spots widening and narrowing", () => {
-  const base = { spendCapSats: 1000, protocols: 1, baskets: 1, certs: 0 };
+  const base = { spendCapSats: 1000, protocols: 1, baskets: 1, certs: 0, intents: ["pull"] };
   assert.deepEqual(diffPermissions(base, { ...base }).widened, false);
   assert.deepEqual(diffPermissions(base, { ...base }).changes, []);
-  const wide = diffPermissions(base, { spendCapSats: 2000, protocols: 1, baskets: 2, certs: 0 });
+  const wide = diffPermissions(base, { spendCapSats: 2000, protocols: 1, baskets: 2, certs: 0, intents: ["pull"] });
   assert.equal(wide.widened, true);
   assert.ok(wide.changes.some((c) => c.includes("spend cap") && c.includes("1000 → 2000")));
   assert.ok(wide.changes.some((c) => c.includes("baskets")));
-  const narrow = diffPermissions(base, { spendCapSats: 500, protocols: 1, baskets: 1, certs: 0 });
+  const narrow = diffPermissions(base, { spendCapSats: 500, protocols: 1, baskets: 1, certs: 0, intents: ["pull"] });
   assert.equal(narrow.widened, false);
   assert.ok(narrow.changes.some((c) => c.includes("narrowed")));
+  const intentWide = diffPermissions(base, { ...base, intents: ["pull", "stake"] });
+  assert.equal(intentWide.widened, true);
+  assert.ok(intentWide.changes.some((c) => c === "new spend intent: stake"));
+  const intentNarrow = diffPermissions(base, { ...base, intents: [] });
+  assert.equal(intentNarrow.widened, false);
+  assert.ok(intentNarrow.changes.some((c) => c === "removed spend intent: pull"));
 });
 
 const V1 = { name: "Updatable", start_url: "/app", metanet: { groupPermissions: { spendingAuthorization: { amount: 1000 } } } };
@@ -293,4 +299,72 @@ test("storeList merges catalog, installed extras, and live caps", async () => {
   } finally {
     await db.destroy();
   }
+});
+
+test("validateManifest parses declared spend intents", () => {
+  const v = validateManifest("game.example", {
+    name: "Game",
+    start_url: "/play",
+    metanet: {
+      groupPermissions: { spendingAuthorization: { amount: 1000 } },
+      intents: [
+        { action: "app-spend", label: "POCKETPETS-PULL", typical_sats: 264, description: "gacha pull" },
+        { action: "app-inscribe" },
+      ],
+    },
+  });
+  assert.deepEqual(v.intents, [
+    { action: "app-spend", label: "POCKETPETS-PULL", typicalSats: 264, description: "gacha pull" },
+    { action: "app-inscribe" },
+  ]);
+  assert.deepEqual(validateManifest("game.example", { name: "Game", start_url: "/play" }).intents, []);
+});
+
+test("validateManifest rejects malformed intents", () => {
+  const bad = (intents) => validateManifest("game.example", { name: "Game", start_url: "/play", metanet: { intents } });
+  assert.throws(() => bad("pull"), /array/);
+  assert.throws(() => bad([{}]), /action/);
+  assert.throws(() => bad([{ action: "" }]), /action/);
+  assert.throws(() => bad([{ action: "x", typical_sats: -1 }]), /typical_sats/);
+  assert.throws(() => bad([{ action: "x", label: "y".repeat(81) }]), /label/);
+  assert.throws(() => bad(new Array(33).fill({ action: "x" })), /at most 32/);
+  assert.deepEqual(validateIntents(undefined), []);
+});
+
+test("installApp stores declared intents on the record and asked", async () => {
+  const db = await memdb();
+  try {
+    const hooks = { seedPolicyRequest: async () => {} };
+    const manifest = {
+      name: "Intent Game", start_url: "/play",
+      metanet: {
+        groupPermissions: { spendingAuthorization: { amount: 1000 } },
+        intents: [{ action: "app-spend", label: "PULL", typical_sats: 264 }],
+      },
+    };
+    const { app, asked } = await installApp(db, "intent.example", hooks, { manifestJson: manifest });
+    assert.deepEqual(asked.intents, ["app-spend"]);
+    assert.deepEqual(app.intents, [{ action: "app-spend", label: "PULL", typicalSats: 264 }]);
+    assert.deepEqual((await getApp(db, "intent.example")).intents, app.intents);
+    // live manifest intents surface through the store listing
+    const store = await storeList(db, { fetchManifest: async () => manifest });
+    const entry = store.find((e) => e.domain === "intent.example");
+    assert.deepEqual(entry.live.intents, ["app-spend"]);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("intentFromMemo maps the action tag to label + description", () => {
+  assert.deepEqual(intentFromMemo(["POCKETPETS-PULL", "pet-1", "torto"], undefined), {
+    label: "POCKETPETS-PULL", description: "pet-1 torto",
+  });
+  // explicit labels win; the whole memo becomes the description
+  assert.deepEqual(intentFromMemo(["POCKETPETS-PULL", "pet-1"], "custom"), {
+    label: "custom", description: "POCKETPETS-PULL pet-1",
+  });
+  // silence stays silent: nothing invented
+  assert.deepEqual(intentFromMemo(undefined, undefined), {});
+  assert.deepEqual(intentFromMemo([], undefined), {});
+  assert.deepEqual(intentFromMemo("not-an-array", undefined), {});
 });

@@ -17,6 +17,7 @@
  */
 import type { Knex } from "knex";
 import { checkBudget } from "./agents.ts";
+import { logEvent } from "./events.ts";
 import {
   autoApprove,
   describeScore,
@@ -35,6 +36,12 @@ export interface PolicyCheck {
   reason: string;
   pending: boolean;
   jev?: SpendScore | null;
+  /** The policy row that decided (default ask when no row exists). */
+  mode: PolicyMode;
+  /** The row's spend cap in sats (0 = uncapped). */
+  capSats: number;
+  /** True when an agent sub-wallet budget covered the spend (F9). */
+  budgetCovered: boolean;
 }
 
 export interface CheckOpts {
@@ -42,6 +49,8 @@ export interface CheckOpts {
   context?: Partial<Omit<SpendContext, "origin" | "action" | "amountSats">>;
   /** Test/embedding override; default is the Jev client in jev.ts. */
   jev?: JevDecide;
+  /** Probe mode: judge exactly like a real spend but never write policy_requests. */
+  dryRun?: boolean;
 }
 
 interface RequestRow {
@@ -168,6 +177,7 @@ async function upsertRequest(
       created_at: Date.now(),
       ...(score ? scoreFields(score) : {}),
     });
+    await logEvent(db, "request.created", { origin, amountSats, action });
   } else if (score) {
     await db("policy_requests").where({ id: seen.id }).update(scoreFields(score));
   }
@@ -184,20 +194,21 @@ export async function check(
     | { mode: string; spend_cap_sats: number }
     | undefined;
   const mode = (row?.mode ?? "ask") as PolicyMode;
+  const capSats = row?.spend_cap_sats ?? 0;
   if (mode === "allow" || mode === "auto") {
-    if ((row?.spend_cap_sats ?? 0) > 0 && amountSats > (row?.spend_cap_sats ?? 0)) {
-      return { verdict: "deny", reason: `over spend cap (${row?.spend_cap_sats} sats)`, pending: false };
+    if (capSats > 0 && amountSats > capSats) {
+      return { verdict: "deny", reason: `over spend cap (${capSats} sats)`, pending: false, mode, capSats, budgetCovered: false };
     }
   } else if (mode === "deny") {
-    return { verdict: "deny", reason: "denied by policy", pending: false };
+    return { verdict: "deny", reason: "denied by policy", pending: false, mode, capSats, budgetCovered: false };
   }
   // F9: sub-wallet budgets bind allow-mode survivors and ask-mode origins
   // alike. A spend covered by a live budget is approved even in ask mode —
   // minting was the approval ceremony.
   const purse = await checkBudget(db, origin, amountSats);
-  if (!purse.ok) return { verdict: "deny", reason: purse.reason, pending: false };
+  if (!purse.ok) return { verdict: "deny", reason: purse.reason, pending: false, mode, capSats, budgetCovered: false };
   if (mode === "allow" || purse.covered) {
-    return { verdict: "allow", reason: purse.covered ? "allowed by agent budget" : "allowed by policy", pending: false };
+    return { verdict: "allow", reason: purse.covered ? "allowed by agent budget" : "allowed by policy", pending: false, mode, capSats, budgetCovered: purse.covered };
   }
   // ask / auto (and unknown): the advisor scores a spend once per request;
   // auto mode always re-scores because the score is the decision.
@@ -208,23 +219,43 @@ export async function check(
       : scoreFromRow(seen);
   if (mode === "auto") {
     if (score && autoApprove(score)) {
-      return { verdict: "allow", reason: `allowed by Jev: ${describeScore(score)}`, pending: false, jev: score };
+      return { verdict: "allow", reason: `allowed by Jev: ${describeScore(score)}`, pending: false, jev: score, mode, capSats, budgetCovered: false };
     }
-    await upsertRequest(db, origin, amountSats, action, score, seen);
+    if (!opts.dryRun) await upsertRequest(db, origin, amountSats, action, score, seen);
     const why = score ? describeScore(score) : "Jev unavailable (no answer)";
     return {
       verdict: "deny",
       reason: `${why} — human approval required: bsv allow ${origin}`,
       pending: true,
       jev: score,
+      mode,
+      capSats,
+      budgetCovered: false,
     };
   }
   // ask (and unknown): record once per origin+action, deny this attempt
-  await upsertRequest(db, origin, amountSats, action, score, seen);
+  if (!opts.dryRun) await upsertRequest(db, origin, amountSats, action, score, seen);
   const reason = score
     ? `first-run approval required — ${describeScore(score)}; approve with: bsv allow ${origin}`
     : `first-run approval required — approve with: bsv allow ${origin}`;
-  return { verdict: "deny", reason, pending: true, jev: score };
+  return { verdict: "deny", reason, pending: true, jev: score, mode, capSats, budgetCovered: false };
+}
+
+/**
+ * Dry-run gate: judge a hypothetical spend through the full pipeline
+ * (caps, budgets, Jev) without writing policy_requests. Powers
+ * `bsv probe` and the `policy_probe` MCP tool so apps and agents can
+ * test their spends without moving money. Jev is still consulted when
+ * the origin's mode would consult it — a probe costs one decision.
+ */
+export async function probe(
+  db: Knex,
+  origin: string,
+  amountSats: number,
+  action: string,
+  opts: CheckOpts = {},
+): Promise<PolicyCheck> {
+  return check(db, origin, amountSats, action, { ...opts, dryRun: true });
 }
 
 export async function setPolicy(db: Knex, origin: string, mode: PolicyMode, capSats = 0): Promise<void> {
@@ -235,12 +266,18 @@ export async function setPolicy(db: Knex, origin: string, mode: PolicyMode, capS
   if (mode !== "ask") {
     await db("policy_requests").where({ origin }).delete();
   }
+  if (mode === "allow" || mode === "auto") {
+    await logEvent(db, "request.approved", { origin, amountSats: capSats, detail: `mode ${mode} cap ${capSats}` });
+  } else if (mode === "deny") {
+    await logEvent(db, "request.denied", { origin, detail: "denied by policy" });
+  }
 }
 
 export async function seedRequest(db: Knex, origin: string, amountSats: number, action: string): Promise<void> {
   const seen = await db("policy_requests").where({ origin, action }).first();
   if (!seen) {
     await db("policy_requests").insert({ origin, amount_sats: amountSats, action, created_at: Date.now() });
+    await logEvent(db, "request.created", { origin, amountSats, action });
   }
 }
 

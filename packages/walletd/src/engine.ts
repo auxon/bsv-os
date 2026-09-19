@@ -153,7 +153,11 @@ export async function spendTo(opts: {
   payments: Array<{ to: string; sats: number }>;
   memo?: string[];
   label?: string;
+  /** Human meaning of the spend for the Jev decision state (from the app memo). */
+  description?: string;
   fetchFn?: typeof fetch;
+  /** Test/embedding Jev override, passed to the policy gate. */
+  jev?: JevDecide;
 }): Promise<{ txid: string; fee: number; hex: string }> {
   if (!Array.isArray(opts.payments) || !opts.payments.length) fail("BAD_PARAM", "payments required");
   const pays = opts.payments.map((p) => {
@@ -196,7 +200,12 @@ export async function spendTo(opts: {
   });
   const total = pays.reduce((a, p) => a + p.sats, 0) + built.fee;
   const gate = await check(opts.db, opts.origin, total, "app-spend", {
-    context: { label: opts.label, to: pays.length === 1 ? pays[0]!.address : `${pays.length} recipients` },
+    context: {
+      label: opts.label,
+      to: pays.length === 1 ? pays[0]!.address : `${pays.length} recipients`,
+      ...(opts.description ? { description: opts.description } : {}),
+    },
+    ...(opts.jev ? { jev: opts.jev } : {}),
   });
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
@@ -502,7 +511,11 @@ export async function inscribeMint(opts: {
   fee?: { to: string; sats: number };
   memo?: string[];
   label?: string;
+  /** Human meaning of the spend for the Jev decision state (from the app memo). */
+  description?: string;
   fetchFn?: typeof fetch;
+  /** Test/embedding Jev override, passed to the policy gate. */
+  jev?: JevDecide;
 }): Promise<{ txid: string; fee: number; hex: string }> {
   const data = String(opts.dataHex ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(data) || data.length < 2 || data.length > MAX_INSCRIPTION_BYTES * 2) {
@@ -562,7 +575,11 @@ export async function inscribeMint(opts: {
     changeScriptHex: lock.toHex(),
   });
   const gate = await check(opts.db, opts.origin, 1 + feeSats + built.fee, "app-inscribe", {
-    context: { label: opts.label, to },
+    context: {
+      label: opts.label, to,
+      ...(opts.description ? { description: opts.description } : {}),
+    },
+    ...(opts.jev ? { jev: opts.jev } : {}),
   });
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
