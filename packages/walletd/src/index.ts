@@ -122,7 +122,7 @@ function originHost(origin: string | undefined): string | null {
 }
 
 /** Bundled runner apps served from the daemon's own origin. */
-const RUNNER_APPS = new Set(["twetch", "explorer", "market"]);
+const RUNNER_APPS = new Set(["twetch", "explorer"]);
 
 const RUNNER_APP_ASSETS: Record<string, string> = {
   "/": "index.html",

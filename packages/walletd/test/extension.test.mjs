@@ -40,6 +40,12 @@ test("page.js exposes the ten-intent window.bsv", () => {
   assert.ok(src.includes("bsv app open"), "outside-runner error points at the runner");
 });
 
+test("swap intents carry the full listing/buy parameters", () => {
+  const src = read("page.js");
+  assert.ok(src.includes("kind, tokenId, tokenAmount"), "signSwapOffer forwards bsv21 listing params");
+  assert.ok(src.includes("buyerChecks"), "completeSwap forwards buyer verification");
+});
+
 test("content script only relays namespaced messages with a numeric id", () => {
   const src = read("content.js");
   assert.ok(src.includes("bsv-os-page") && src.includes("bsv-os-content"));

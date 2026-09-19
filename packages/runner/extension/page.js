@@ -73,10 +73,11 @@
     inscribe: (dataHex, contentType, to, fee, memo, label) => invoke("inscribe", { dataHex, contentType, to, fee, memo, label }),
     /** Move one inscribed sat to an address. Returns { txid, fee }. */
     transferNft: (txid, vout, to, memo) => invoke("transferNft", { txid, vout, to, memo }),
-    /** Pre-sign an atomic-swap listing on our carrier. Returns the market offer. */
-    signSwapOffer: (txid, vout, priceSats) => invoke("signSwapOffer", { txid, vout, priceSats }),
-    /** Buy a listing: payment + NFT move in one tx. Returns { txid, fee }. */
-    completeSwap: (offer, fee, memo) => invoke("completeSwap", { offer, fee, memo }),
+    /** Pre-sign an atomic-swap listing on our carrier (ordinal or bsv21 exact amount). Returns the market offer. */
+    signSwapOffer: (txid, vout, priceSats, kind, tokenId, tokenAmount) =>
+      invoke("signSwapOffer", { txid, vout, priceSats, kind, tokenId, tokenAmount }),
+    /** Buy a listing: payment + asset move in one tx. Optional buyerChecks { expectedSeller, maxPrice } refuse redirected/overpriced offers. Returns { txid, fee }. */
+    completeSwap: (offer, fee, memo, buyerChecks) => invoke("completeSwap", { offer, fee, memo, buyerChecks }),
   });
 
   // Visible-in-DOM proof of injection (works with --dump-dom and scrapers).

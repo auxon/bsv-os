@@ -16,6 +16,11 @@
       "domain": "localhost",
       "name": "Twetch",
       "blurb": "Feed and notifications companion: read the public Twetch feed, post text on-chain through the OS wallet (network fee only). Bundled with the daemon at https://localhost:2121/twetch/."
+    },
+    {
+      "domain": "market.entangleit.com",
+      "name": "Atomic Market",
+      "blurb": "BRC-100 atomic-swap market: browse listings, buy ordinals and BSV21 tokens (payment + asset in one tx), list your own. Installs with window.bsv under this origin's policy."
     }
   ]
 }

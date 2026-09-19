@@ -1361,7 +1361,7 @@ Panel {
       Layout.fillWidth: true
 
       Text {
-        text: "Atomic Market — browse listings, buy ordinals and tokens (payment + asset in one tx), list your own."
+        text: "Atomic Market — browse listings, buy ordinals and tokens (payment + asset in one tx), list your own. Installed BRC-100 app."
         color: Color.muted
         font.pixelSize: Style.font.body
         wrapMode: Text.Wrap
@@ -1370,10 +1370,7 @@ Panel {
 
       Button {
         text: "Open"
-        onClicked: {
-          openExplorerProc.url = "https://localhost:2121/market/";
-          openExplorerProc.running = true;
-        }
+        onClicked: root.openApp("market.entangleit.com")
       }
     }
 

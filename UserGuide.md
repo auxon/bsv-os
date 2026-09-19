@@ -108,7 +108,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Split money into pots | `bsv basket create savings` → `bsv basket list` (per-basket balances) |
 | See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
 | Send NFTs and tokens | `bsv ord send <txid:vout> --to <addr>`, `bsv bsv21 send --id <id> --to <addr> --amt <base-units>` (amounts are base units; token change returns automatically) |
-| Trade on the atomic market | open `https://localhost:2121/market/` (bundled): browse listings, buy atomically, list your ordinals/tokens — approve once with `bsv allow market` |
+| Trade on the atomic market | `bsv app install market.entangleit.com` → `bsv app open market.entangleit.com` (BRC-100 app; browse, buy atomically, list your ordinals/tokens — approve once with `bsv allow market.entangleit.com [cap]`) |
 | Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery verified peer-to-peer) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
