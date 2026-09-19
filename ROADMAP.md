@@ -228,8 +228,10 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   pay-first spend otherwise). Layer: worker (new, live market untouched)
   + daemon (swaps, twetchBuy/twetchList) + runner (twetch app).
   Size: **L**. State: shipped — worker live with verification, v2+v3
-  templates tested, Twetch buy/list flows in the app. Depends: **F2**
-  (runner), **F5** (ordinals), **F14** (fee rails).
+  templates tested, Twetch buy/list flows in the app, and a bundled
+  Atomic Market app (`https://localhost:2121/market/`) with browse /
+  buy / sell over `marketBuy` / `marketList` / `bsv21Utxos`.
+  Depends: **F2** (runner), **F5** (ordinals), **F14** (fee rails).
   Accept: list → buy → settle a non-pet ordinal and a BSV21 lot
   end-to-end; a Twetch buy settles atomically with zero browser keys;
   the PocketPets suite passes unmodified.

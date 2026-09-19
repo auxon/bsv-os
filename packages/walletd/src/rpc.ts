@@ -19,7 +19,7 @@ import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
-import { bsv21For, galleryFor } from "./tokens.ts";
+import { bsv21For, galleryFor, normalizeTokenId, tokenHoldings } from "./tokens.ts";
 import {
   boardGet, boardList, claimGig, listGigs, paidGig, submitGig, trackGig, untrackGig,
 } from "./gigs.ts";
@@ -117,6 +117,66 @@ interface RpcResponse {
 
 type Params = Record<string, unknown>;
 const p = (params: unknown): Params => (params && typeof params === "object" ? (params as Params) : {});
+
+/**
+ * Shared swap buy/list for market origins (twetch app, bundled market app).
+ * The origin is the policy principal; the memo tag is namespaced per
+ * market so the ledger reads `TWETCH-BUY …` / `MARKET-BUY …`.
+ */
+async function swapBuyFor(origin: string, params: unknown): Promise<unknown> {
+  const b = needBackend();
+  const { outpoint, priceSats, sellerAddress, offer, fee } = p(params) as {
+    outpoint?: unknown; priceSats?: unknown; sellerAddress?: unknown; offer?: unknown; fee?: unknown;
+  };
+  if (typeof outpoint !== "string" || !/^([0-9a-fA-F]{64})[._](\d+)$/.test(outpoint)) {
+    throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
+  }
+  const price = Math.floor(Number(priceSats) || 0);
+  if (!(price >= 1)) throw Object.assign(new Error("priceSats must be a positive sat number"), { code: "BAD_PARAM" });
+  if (typeof sellerAddress !== "string" || !sellerAddress) {
+    throw Object.assign(new Error("sellerAddress required"), { code: "BAD_PARAM" });
+  }
+  const feeOpt = fee && typeof fee === "object" ? (fee as { to?: unknown; sats?: unknown }) : null;
+  const feeSats = feeOpt ? Math.floor(Number(feeOpt.sats) || 0) : 0;
+  const feePayment = feeOpt && feeSats > 0 && typeof feeOpt.to === "string"
+    ? { to: feeOpt.to, sats: feeSats }
+    : null;
+  const memo = [`${origin.toUpperCase()}-BUY`, outpoint];
+  const label = `${origin} buy ${outpoint}`;
+  if (offer && typeof offer === "object") {
+    const r = await completeSwap({
+      db: b.db, chain: b.chain, origin, offer,
+      ...(feePayment ? { fee: feePayment } : {}),
+      memo, label,
+      buyerChecks: { expectedSeller: sellerAddress, maxPrice: price },
+    });
+    return { txid: r.txid, fee: r.fee, atomic: true };
+  }
+  const r = await spendTo({
+    db: b.db, chain: b.chain, origin,
+    payments: [{ to: sellerAddress, sats: price }, ...(feePayment ? [feePayment] : [])],
+    memo, label,
+    description: `${origin} market direct buy ${outpoint} for ${price} sats (pay first, delivery by the seller)`,
+  });
+  return { txid: r.txid, fee: r.fee, atomic: false };
+}
+
+async function swapListFor(origin: string, params: unknown): Promise<unknown> {
+  const b = needBackend();
+  const { outpoint, priceSats, kind, tokenId, tokenAmount } = p(params) as {
+    outpoint?: unknown; priceSats?: unknown; kind?: unknown; tokenId?: unknown; tokenAmount?: unknown;
+  };
+  const m = typeof outpoint === "string" ? /^([0-9a-fA-F]{64})[._](\d+)$/.exec(outpoint) : null;
+  if (!m) throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
+  return signSwapOffer({
+    db: b.db, chain: b.chain, origin,
+    txid: m[1]!, vout: Number(m[2]),
+    priceSats: Number(priceSats) || 0,
+    ...(kind === "ordinal" || kind === "bsv21" ? { kind } : {}),
+    ...(typeof tokenId === "string" ? { tokenId } : {}),
+    ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
+  });
+}
 
 const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
   getVersion: () => ({ version: VERSION, brc100: true }),
@@ -1190,57 +1250,35 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * direct-buy spend to the seller — pay first, delivery via Twetch,
    * stated plainly in the confirm. Policy origin "twetch" either way.
    */
-  twetchBuy: async (params) => {
-    const b = needBackend();
-    const { outpoint, priceSats, sellerAddress, offer } = p(params) as {
-      outpoint?: unknown; priceSats?: unknown; sellerAddress?: unknown; offer?: unknown;
-    };
-    if (typeof outpoint !== "string" || !/^([0-9a-fA-F]{64})\.(\d+)$/.test(outpoint)) {
-      throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
-    }
-    const price = Math.floor(Number(priceSats) || 0);
-    if (!(price >= 1)) throw Object.assign(new Error("priceSats must be a positive sat number"), { code: "BAD_PARAM" });
-    if (typeof sellerAddress !== "string" || !sellerAddress) {
-      throw Object.assign(new Error("sellerAddress required"), { code: "BAD_PARAM" });
-    }
-    const memo = ["TWETCH-BUY", outpoint];
-    if (offer && typeof offer === "object") {
-      const r = await completeSwap({
-        db: b.db, chain: b.chain, origin: "twetch", offer,
-        memo, label: `twetch buy ${outpoint}`,
-        buyerChecks: { expectedSeller: sellerAddress, maxPrice: price },
-      });
-      return { txid: r.txid, fee: r.fee, atomic: true };
-    }
-    const r = await spendTo({
-      db: b.db, chain: b.chain, origin: "twetch",
-      payments: [{ to: sellerAddress, sats: price }],
-      memo, label: `twetch buy ${outpoint}`,
-      description: `Twetch market direct buy ${outpoint} for ${price} sats (pay first, delivery via Twetch)`,
-    });
-    return { txid: r.txid, fee: r.fee, atomic: false };
-  },
+  twetchBuy: (params) => swapBuyFor("twetch", params),
   /**
    * List an OS-custodied NFT for atomic sale: pre-signs the swap offer
    * (proceeds to self, SINGLE|ANYONECANPAY). The app posts the returned
    * offer to the atomic market worker itself. Rejects foreign carriers —
    * only our inscribed 1-sat UTXOs list.
    */
-  twetchList: async (params) => {
+  twetchList: (params) => swapListFor("twetch", params),
+  /** Atomic-market app: buy any listing (atomic with an offer, direct otherwise). Origin "market". */
+  marketBuy: (params) => swapBuyFor("market", params),
+  /** Atomic-market app: pre-sign an offer for one of our carriers (ordinal or bsv21). Origin "market". */
+  marketList: (params) => swapListFor("market", params),
+  /**
+   * Token UTXOs for one tokenId: which of our wallet UTXOs carry the
+   * token and how much. Listing is exact-UTXO (partial fills can't be
+   * atomic-safe), so the sell UI needs these, not just balances.
+   */
+  bsv21Utxos: async (params) => {
     const b = needBackend();
-    const { outpoint, priceSats, kind, tokenId, tokenAmount } = p(params) as {
-      outpoint?: unknown; priceSats?: unknown; kind?: unknown; tokenId?: unknown; tokenAmount?: unknown;
+    const { tokenId } = p(params) as { tokenId?: unknown };
+    const id = normalizeTokenId(tokenId);
+    if (!id) throw Object.assign(new Error("tokenId must be <64-hex-txid>_<vout>"), { code: "BAD_PARAM" });
+    const address = selfAddress();
+    const u = await b.chain.utxos(address);
+    const holdings = await tokenHoldings(id, u.utxos.map((x) => `${x.txid}_${x.vout}`));
+    return {
+      tokenId: id,
+      utxos: holdings.map((h) => ({ outpoint: `${h.txid}_${h.vout}`, amount: h.amt })),
     };
-    const m = typeof outpoint === "string" ? /^([0-9a-fA-F]{64})\.(\d+)$/.exec(outpoint) : null;
-    if (!m) throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
-    return signSwapOffer({
-      db: b.db, chain: b.chain, origin: "twetch",
-      txid: m[1]!, vout: Number(m[2]),
-      priceSats: Number(priceSats) || 0,
-      ...(kind === "ordinal" || kind === "bsv21" ? { kind } : {}),
-      ...(typeof tokenId === "string" ? { tokenId } : {}),
-      ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
-    });
   },
 };
 

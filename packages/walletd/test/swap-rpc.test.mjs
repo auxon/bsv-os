@@ -19,6 +19,7 @@ const it = enrolled ? test.skip : test;
 
 const N1 = "b".repeat(64);
 const F1 = "d".repeat(64);
+const F2 = "c".repeat(64);
 const X1 = "e".repeat(64);
 const TO = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
 const OUT = `${"a".repeat(64)}.0`;
@@ -41,6 +42,7 @@ function makeNet(selfAddr) {
   const hexes = {
     [N1]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "0102"), sats: 1 }]),
     [F1]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 100_000 }]),
+    [F2]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 50_000 }]),
     [X1]: () => parentHex([{ scriptHex: inscriptionScript(TO, "image/png", "0102"), sats: 1 }]),
   };
   const fetchFn = async (url) => {
@@ -189,6 +191,125 @@ it("twetchList signs only our carriers", async () => {
         method: "twetchList", params: { outpoint: "nope", priceSats: 5 }, id: 9,
       });
       assert.equal(bad.error.code, "BAD_PARAM");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  } finally {
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("marketList signs our carriers under the market origin", async () => {
+  const { db } = await backend();
+  try {
+    await createWallet();
+    const { fetchFn } = makeNet(selfAddress());
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn;
+    try {
+      await setPolicy(db, "market", "allow");
+      const res = await dispatch({
+        method: "marketList",
+        params: { outpoint: `${N1}.0`, priceSats: 2500 },
+        id: 10,
+      });
+      assert.equal(res.result.kind, "ordinal");
+      assert.equal(res.result.version, 2);
+      assert.equal(res.result.priceSats, 2500);
+      assert.match(res.result.unlockHex, /^[0-9a-f]+$/);
+      const bad = await dispatch({ method: "marketList", params: { outpoint: "nope", priceSats: 5 }, id: 11 });
+      assert.equal(bad.error.code, "BAD_PARAM");
+      // underscore outpoints (indexer format) are accepted too
+      const underscored = await dispatch({
+        method: "marketList",
+        params: { outpoint: `${N1}_0`, priceSats: 2500 },
+        id: 12,
+      });
+      assert.equal(underscored.error, undefined);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  } finally {
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("marketBuy direct pays seller + market fee through policy", async () => {
+  const { db, chain } = await backend();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNet(addr);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn;
+    try {
+      chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+      await setPolicy(db, "market", "allow");
+      const res = await dispatch({
+        method: "marketBuy",
+        params: {
+          outpoint: OUT, priceSats: 5000, sellerAddress: TO,
+          fee: { to: TO, sats: 100 },
+        },
+        id: 13,
+      });
+      assert.match(res.result.txid, /^[0-9a-f]{64}$/);
+      assert.equal(res.result.atomic, false);
+      const rows = await db("pending_txs").where({ txid: res.result.txid });
+      assert.match(rows[0].label, /^market buy /);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  } finally {
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("marketBuy atomic completes offers and denies without approval", async () => {
+  const { db, chain } = await backend();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNet(addr);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn;
+    try {
+      chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+      await setPolicy(db, "market", "allow");
+      const listed = await dispatch({
+        method: "marketList",
+        params: { outpoint: `${N1}.0`, priceSats: 5000 },
+        id: 14,
+      });
+      const res = await dispatch({
+        method: "marketBuy",
+        params: {
+          outpoint: `${N1}.0`, priceSats: 5000, sellerAddress: addr,
+          offer: listed.result,
+        },
+        id: 15,
+      });
+      assert.equal(res.result.atomic, true);
+      assert.match(res.result.txid, /^[0-9a-f]{64}$/);
+      // fresh origin without approval: denied (F2 keeps funding available
+      // after the swap consumed F1)
+      chain.credit(addr, { txid: F2, vout: 0, value: 50_000, height: 900 });
+      await db("policies").where({ origin: "market" }).delete();
+      const denied = await dispatch({
+        method: "marketBuy",
+        params: { outpoint: OUT, priceSats: 5000, sellerAddress: TO },
+        id: 16,
+      });
+      assert.equal(denied.error.code, "POLICY_DENY");
     } finally {
       globalThis.fetch = realFetch;
     }

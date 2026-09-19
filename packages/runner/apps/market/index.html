@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atomic Market — bsvOS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand">Atomic Market</span>
+      <nav class="tabs">
+        <button class="tab active" data-tab="browse" type="button">Browse</button>
+        <button class="tab" data-tab="sell" type="button">Sell</button>
+      </nav>
+      <span id="wallet-line" class="dim"></span>
+    </header>
+
+    <main>
+      <section id="browse-view">
+        <div class="filters">
+          <button class="chip active" data-kind="" type="button">All</button>
+          <button class="chip" data-kind="ordinal" type="button">Ordinals</button>
+          <button class="chip" data-kind="bsv21" type="button">Tokens</button>
+          <button id="refresh" class="chip" type="button">Refresh</button>
+        </div>
+        <div id="market-meta" class="status"></div>
+        <div id="grid" class="grid"></div>
+      </section>
+
+      <section id="sell-view" class="hidden">
+        <p class="dim">
+          List an OS-custodied asset. Atomic: it stays in your wallet, pre-signed —
+          payment and transfer settle in one tx or nothing moves.
+        </p>
+        <h2>Ordinals</h2>
+        <div id="ord-list" class="grid"></div>
+        <div id="ord-empty" class="empty hidden">No inscriptions held.</div>
+        <h2>Tokens (BSV21)</h2>
+        <div id="tok-list" class="grid"></div>
+        <div id="tok-empty" class="empty hidden">No tokens held.</div>
+        <div id="sell-status" class="status"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

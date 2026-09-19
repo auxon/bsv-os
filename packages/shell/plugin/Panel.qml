@@ -1354,6 +1354,29 @@ Panel {
       visible: root.ftokens.length === 0
     }
 
+    PanelSectionHeader { text: "Market" }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      Text {
+        text: "Atomic Market — browse listings, buy ordinals and tokens (payment + asset in one tx), list your own."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Open"
+        onClicked: {
+          openExplorerProc.url = "https://localhost:2121/market/";
+          openExplorerProc.running = true;
+        }
+      }
+    }
+
     PanelSectionHeader { text: `Store (${root.store.length})` }
 
     ColumnLayout {

@@ -565,6 +565,8 @@ curl -s -X POST "$MARKET/v1/market/list" -H 'content-type: application/json' -d 
 # sellers sign offers with window.bsv signSwapOffer (ordinal) or kind bsv21
 # + tokenId/tokenAmount; buyers complete with completeSwap + buyerChecks
 # { expectedSeller, maxPrice }. Twetch app: per-card Buy, twetchBuy RPC.
+# Bundled UI: https://localhost:2121/market/ (origin "market", approve
+# once with `bsv allow market`) — browse, buy atomically, list holdings.
 ```
 
 ---
