@@ -9,6 +9,7 @@ import {
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, probe, seedRequest, setPolicy } from "./policy.ts";
+import { qrDataUrl } from "./qr.ts";
 import { readEvents } from "./events.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
@@ -156,6 +157,31 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const address = selfAddress();
     const u = await b.chain.utxos(address);
     return { address, confirmed: u.confirmed, unconfirmed: u.unconfirmed, utxos: u.utxos };
+  },
+  /**
+   * Receive address + PNG QR data URL for the panel. Needs no backend —
+   * the address is public. Powers `bsv address --png`.
+   */
+  addressQr: async () => {
+    const address = selfAddress();
+    return { address, dataUrl: await qrDataUrl(address) };
+  },
+  /**
+   * Human send: move sats to a P2PKH address through the full policy
+   * gate (origin cli). Panel + CLI only — deliberately no MCP tool:
+   * agents get scoped tools (anchor_tip, x402_pay), never open sends.
+   */
+  send: async (params) => {
+    const b = needBackend();
+    const { to, sats, label } = p(params) as { to?: unknown; sats?: unknown; label?: unknown };
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient address required"), { code: "BAD_PARAM" });
+    const amount = Math.floor(Number(sats) || 0);
+    if (!(amount > 0)) throw Object.assign(new Error("sats must be a positive sat number"), { code: "BAD_PARAM" });
+    const r = await sendSats({
+      db: b.db, chain: b.chain, origin: "cli", to, sats: amount,
+      ...(typeof label === "string" && label ? { label } : {}),
+    });
+    return { txid: r.txid, fee: r.fee };
   },
   anchor: async (params) => {
     const b = needBackend();

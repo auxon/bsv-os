@@ -206,3 +206,49 @@ it("app spend label + description reach the Jev decision state", async () => {
     __resetCache();
   }
 });
+
+it("send RPC moves sats to an address through policy", async () => {
+  const { db, chain } = await backend();
+  try {
+    await createWallet();
+    await installed(db);
+    const addr = selfAddress();
+    chain.credit(addr, { txid: "f".repeat(64), vout: 0, value: 5_000_000, height: 900 });
+    await setPolicy(db, "cli", "allow");
+    const res = await dispatch({
+      method: "send", params: { to: addr, sats: 1000, label: "test send" }, id: 10,
+    });
+    assert.match(res.result.txid, /^[0-9a-f]{64}$/);
+    assert.ok(res.result.fee > 0);
+    const rows = await db("pending_txs").where({ txid: res.result.txid });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].label, "test send");
+  } finally {
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("send RPC denies without approval and validates input", async () => {
+  const { db, chain } = await backend();
+  try {
+    await createWallet();
+    await installed(db);
+    const addr = selfAddress();
+    chain.credit(addr, { txid: "f".repeat(64), vout: 0, value: 5_000_000, height: 900 });
+    const denied = await dispatch({ method: "send", params: { to: addr, sats: 1000 }, id: 11 });
+    assert.equal(denied.error.code, "POLICY_DENY");
+    const badAddr = await dispatch({ method: "send", params: { to: "nope", sats: 1000 }, id: 12 });
+    assert.equal(badAddr.error.code, "BAD_PARAM");
+    const badAmt = await dispatch({ method: "send", params: { to: addr, sats: 0 }, id: 13 });
+    assert.equal(badAmt.error.code, "BAD_PARAM");
+    void chain;
+  } finally {
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});

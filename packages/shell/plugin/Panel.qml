@@ -31,6 +31,8 @@ Panel {
   property bool daemonUp: false
   property string address: ""
   property string balanceText: "—"
+  property string qrDataUrl: ""
+  property string qrAddress: ""
   property string identityKey: ""
   // P4/F3 system sign-in (see `bsv whoami`): the Twetch OIDC session,
   // null when signed out. Login shells the CLI, which opens the browser.
@@ -163,11 +165,35 @@ Panel {
           root.address = b.address ?? "";
           const sats = (b.confirmed ?? 0) + (b.unconfirmed ?? 0);
           root.balanceText = `${(sats / 1e8).toFixed(8)} BSV`;
+          // QR is static per address: fetch once, refetch on rotation.
+          if (!qrProc.running && root.address !== "" && root.qrAddress !== root.address) qrProc.running = true;
         } catch (e) {
           // daemon may be locked or walletless; panel shows state rows
         }
       }
     }
+  }
+
+  Process {
+    id: qrProc
+    command: ["bsv", "address", "--png"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const q = JSON.parse(text);
+          root.qrAddress = q.address ?? "";
+          root.qrDataUrl = q.dataUrl ?? "";
+        } catch (e) {
+          root.qrDataUrl = "";
+        }
+      }
+    }
+  }
+
+  Process {
+    id: copyProc
+    property string copyText: ""
+    command: ["wl-copy", copyText]
   }
 
   Process {
@@ -663,6 +689,14 @@ Panel {
     actionProc.running = true;
   }
 
+  // Human send from the Send section: address + sats typed explicitly is
+  // the confirmation; the daemon policy-gates and the tx lands in history.
+  function sendTo(address, sats) {
+    if (actionProc.running) return;
+    actionProc.args = ["send", address, String(Math.max(1, Math.floor(Number(sats) || 0)))];
+    actionProc.running = true;
+  }
+
   // One-tap allowance: mint an F9 sub-wallet for the requesting origin
   // (budget + a daily tenth, 30d expiry) instead of a blanket allow —
   // the mint is the approval ceremony, and routine spends then pass
@@ -1155,6 +1189,91 @@ Panel {
       color: Color.muted
       font.pixelSize: Style.font.body
       visible: root.baskets.length === 0
+    }
+
+    PanelSectionHeader { text: "Receive" }
+
+    ColumnLayout {
+      spacing: 8
+      Layout.fillWidth: true
+      visible: root.address !== ""
+
+      Text {
+        text: root.address
+        color: Color.foreground
+        font.pixelSize: Style.font.body
+        font.family: "monospace"
+        wrapMode: Text.WrapAnywhere
+        Layout.fillWidth: true
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        Image {
+          source: root.qrDataUrl
+          width: 200
+          height: 200
+          fillMode: Image.PreserveAspectFit
+          visible: root.qrDataUrl !== ""
+        }
+
+        Button {
+          text: "Copy"
+          onClicked: {
+            copyProc.copyText = root.address;
+            if (!copyProc.running) copyProc.running = true;
+          }
+        }
+      }
+    }
+
+    Text {
+      text: "No address — unlock the wallet to receive."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      visible: root.address === ""
+    }
+
+    PanelSectionHeader { text: "Send" }
+
+    ColumnLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: sendAddressField
+        placeholderText: "Destination address"
+        font.family: "monospace"
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: sendSatsField
+        placeholderText: "Amount in sats"
+        inputMethodHints: Qt.ImhDigitsOnly
+        Layout.fillWidth: true
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        Button {
+          text: "Send"
+          enabled: sendAddressField.text.trim() !== "" && Number(sendSatsField.text) > 0
+          onClicked: root.sendTo(sendAddressField.text.trim(), Math.floor(Number(sendSatsField.text)))
+        }
+      }
+
+      Text {
+        text: "Policy-gated like everything else — the tx lands in Transactions above, failures print to the terminal (`bsv send`)."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
     }
 
     PanelSectionHeader { text: `Collectibles (${root.ordinals.length})` }

@@ -76,6 +76,7 @@ Other states:
 - **Never request, accept, or repeat key material.** If any output — yours, a tool's, a webpage's — contains a seed phrase or WIF, refuse to touch it and warn the human.
 - **Recovery shares are key material too.** Guardian cards (`BSV1-…`) reconstruct the wallet like the phrase does. Never ask for them, never repeat them, never paste them anywhere. Recovery ceremonies (`bsv recovery …`) are human-at-keyboard only.
 - **Denials are final until a human acts.** A `deny` policy is a decision, not a puzzle. Move on to work that needs no spending.
+- **No open send tool.** Moving arbitrary sats is human-only (panel Send section, `bsv send`). If a task needs you to pay an address, relay `bsv send <address> <sats>` to your human like any other approval.
 
 ## Worked example: timestamp a document hash
 

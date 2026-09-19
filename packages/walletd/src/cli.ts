@@ -247,6 +247,26 @@ async function main(): Promise<void> {
     case "utxos":
       print(await call("utxos"));
       break;
+    case "address": {
+      if (rest.includes("--png")) {
+        print(await call("addressQr"));
+        break;
+      }
+      const bal = (await call("balance")) as { result?: { address?: string } };
+      const address = bal?.result?.address;
+      if (!address) {
+        print(bal);
+        break;
+      }
+      if (rest.includes("--qr")) {
+        const { qrAscii } = await import("./qr.ts");
+        console.log(address);
+        console.log(await qrAscii(address));
+      } else {
+        print({ address });
+      }
+      break;
+    }
     case "anchor": {
       const sha256 = rest.find((a) => !a.startsWith("--"));
       const originFlag = rest.find((a) => a.startsWith("--origin="));
@@ -285,6 +305,21 @@ async function main(): Promise<void> {
         console.error(`share failed: ${e instanceof Error ? e.message : e}`);
         process.exitCode = 1;
       }
+      break;
+    }
+    case "send": {
+      const [toAddr, satsRaw] = rest.filter((a) => !a.startsWith("--"));
+      const sendLabel = flag(rest, "label");
+      if (!toAddr || !(Number(satsRaw) > 0)) {
+        console.error("usage: bsv send <address> <sats> [--label=..]");
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("send", {
+        to: toAddr,
+        sats: Number(satsRaw),
+        ...(sendLabel !== undefined ? { label: sendLabel } : {}),
+      }));
       break;
     }
     case "allow": {
@@ -1084,7 +1119,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|history|anchor|share|allow|deny|requests|probe|events|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

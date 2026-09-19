@@ -89,6 +89,8 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | I want to… | Do this |
 | --- | --- |
 | Check the wallet | `bsv status`, `bsv balance` |
+| Show the receive address | `bsv address` (JSON) · `bsv address --qr` (terminal QR) · panel Receive section (QR + Copy button) |
+| Send satoshis | `bsv send <address> <sats> [--label=..]` or the panel Send section — policy-gated like everything else |
 | Sign in with Twetch | `bsv login` — one browser round-trip; `bsv whoami` shows the session, `bsv logout` revokes it |
 | Timestamp a file | `sha256sum file` → `bsv anchor <hash>` |
 | Share a file on-chain | `bsv share <file>` — or right-click → Scripts → Anchor on BSV in Files, or the wallet panel's Share section (txid + explorer link included) |
