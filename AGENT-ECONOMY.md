@@ -556,7 +556,7 @@ curl -sk https://127.0.0.2:8790/api/listings -X POST \
        "notes":"solid oak","priceHintSats":25000,"channels":["twetch"]}'
 
 # atomic market (generic worker; sellers list OS-custodied assets, buyers settle atomically)
-export MARKET=https://atomic-market.richard-hein.workers.dev
+export MARKET=https://entangleit.com/atomic-market
 curl -s "$MARKET/v1/market?kind=ordinal"            # active listings
 curl -s -X POST "$MARKET/v1/market/list" -H 'content-type: application/json' -d '{
   "origin": "<txid>.<vout>", "assetKind": "ordinal", "title": "Show ticket",

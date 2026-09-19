@@ -24,7 +24,7 @@ test("twetch app: manifest validates for the localhost domain", () => {
 test("twetch app: page has no key material and calls same-origin rpc only", () => {
   const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
   assert.ok(js.includes("twetchFeed") && js.includes("twetchPost") && js.includes("twetchStatus"));
-  assert.ok(!/https?:\/\/(?!(?:api\.)?twetch\.com|media\.ordinalswallet\.com|atomic-market\.richard-hein\.workers\.dev|localhost|127\.0\.0\.1)/.test(js));
+  assert.ok(!/https?:\/\/(?!(?:api\.)?twetch\.com|media\.ordinalswallet\.com|entangleit\.com|localhost|127\.0\.0\.1)/.test(js));
   assert.ok(!/WIF|privateKey|accessToken|idToken/i.test(js));
 });
 

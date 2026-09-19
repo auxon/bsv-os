@@ -537,7 +537,7 @@ function marketCard(view, item) {
 }
 
 // ── Market buys + sells (OS custody) ───────────────────────────────
-const MARKET_WORKER = "https://atomic-market.richard-hein.workers.dev";
+const MARKET_WORKER = "https://entangleit.com/atomic-market";
 
 async function marketFetch(path, body) {
   const res = await fetch(`${MARKET_WORKER}${path}`, {
