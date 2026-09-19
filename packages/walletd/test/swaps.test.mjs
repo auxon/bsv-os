@@ -19,9 +19,10 @@ import { p2pkhScript } from "../src/tx.ts";
 
 const TO = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
 const N1 = "b".repeat(64);
+const N3 = "aa".repeat(32);
 const F1 = "d".repeat(64);
-const X1 = "e".repeat(64);
 const F3 = "1".repeat(64);
+const X1 = "e".repeat(64);
 
 async function memdb() {
   const db = knex({ client: "better-sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
@@ -50,15 +51,26 @@ function parentHex(outputs) {
   return tx.toHex();
 }
 
-function makeNet(selfAddr) {
+function makeNet(selfAddr, opts = {}) {
+  const ordfs = opts.ordfs ?? {};
   const hexes = {
     [N1]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "0102"), sats: 1 }]),
+    [N3]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 1 }]), // transferred carrier: plain P2PKH
     [F1]: () => parentHex([{ scriptHex: p2pkhScript(selfAddr).toHex(), sats: 100_000 }]),
     [F3]: () => parentHex([{ scriptHex: inscriptionScript(selfAddr, "image/png", "abcd"), sats: 200_000 }]),
     [X1]: () => parentHex([{ scriptHex: inscriptionScript(TO, "image/png", "0102"), sats: 1 }]),
   };
-  const fetchFn = async (url) => {
-    const m = /\/tx\/([0-9a-f]{64})\/hex$/.exec(String(url));
+  const fetchFn = async (url, init) => {
+    const u = String(url);
+    if (u.includes("/1sat/ordfs/metadata")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const out = {};
+      for (const op of body.outpoints ?? []) {
+        if (ordfs[op]) out[op] = ordfs[op];
+      }
+      return new Response(JSON.stringify(out), { status: 200 });
+    }
+    const m = /\/tx\/([0-9a-f]{64})\/hex$/.exec(u);
     if (m && hexes[m[1]]) return new Response(hexes[m[1]](), { status: 200 });
     return new Response("nope", { status: 404 });
   };
@@ -131,6 +143,38 @@ it("offer refuses foreign, non-dust, plain carriers and bad params", async () =>
     await rejectsCode(signSwapOffer({ ...base, priceSats: -5 }), "BAD_PARAM");
     await rejectsCode(signSwapOffer({ ...base, txid: "zzz" }), "BAD_PARAM");
     await rejectsCode(signSwapOffer({ ...base, txid: F1, vout: 0, priceSats: 10 }), "BAD_PARAM");
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("offer lists transferred inscriptions via ORDFS metadata", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const ordfs = { [`${N3}_0`]: { contentType: "image/png", contentLength: 684, sequence: 3 } };
+    const { fetchFn } = makeNet(addr, { ordfs });
+    const chain = new MockChainProvider();
+    await setPolicy(db, "game.example", "allow");
+    const base = { db, chain, origin: "game.example", txid: N3, vout: 0, priceSats: 5000, fetchFn };
+    // plain carrier + metadata = transferred inscription: signs
+    const offer = await signSwapOffer(base);
+    assert.equal(offer.version, 2);
+    assert.equal(offer.kind, "ordinal");
+    assert.equal(offer.priceSats, 5000);
+    assert.equal(offer.payScriptHex, p2pkhScript(addr).toHex());
+    // metadata present but empty contentType = plain dust: refuses
+    const dust = makeNet(addr, { ordfs: { [`${N3}_0`]: { contentType: "", contentLength: 0 } } });
+    await rejectsCode(signSwapOffer({ ...base, fetchFn: dust.fetchFn }), "BAD_PARAM");
+    // indexer unreachable while verifying = fail closed
+    const deadMeta = async (url, init) => {
+      if (String(url).includes("/1sat/ordfs/metadata")) return new Response("boom", { status: 500 });
+      return fetchFn(url, init);
+    };
+    await rejectsCode(signSwapOffer({ ...base, fetchFn: deadMeta }), "RAILS");
   } finally {
     await db.destroy();
     await destroyWallet();

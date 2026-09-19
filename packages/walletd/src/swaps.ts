@@ -30,7 +30,7 @@ import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
 import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
 import type { JevDecide } from "./jev.ts";
-import { hasOrdEnvelope, splitOutpoint } from "./tokens.ts";
+import { fetchBulkMetadata, hasOrdEnvelope, splitOutpoint } from "./tokens.ts";
 import {
   BSV20_CONTENT_TYPE,
   BSV20_PROTOCOL,
@@ -132,7 +132,21 @@ export async function signSwapOffer(opts: {
   }
   if (carrier.value !== 1) fail("BAD_PARAM", `swap carrier must be exactly 1 sat (found ${carrier.value})`);
   if (kind === "ordinal") {
-    if (!hasOrdEnvelope(carrier.scriptHex)) fail("BAD_PARAM", "carrier is not inscribed — refusing to list plain dust");
+    if (!hasOrdEnvelope(carrier.scriptHex)) {
+      // Transferred inscriptions move the 1-sat carrier to a plain P2PKH
+      // output; the envelope stays at the origin. Ask ORDFS whether this
+      // outpoint is the current location of an inscription — absent or
+      // empty metadata means plain dust, which must not list.
+      const key = `${parts.txid}_${parts.vout}`;
+      let meta: Record<string, { contentType?: string } | null>;
+      try {
+        meta = (await fetchBulkMetadata([key], { fetchFn })) as Record<string, { contentType?: string } | null>;
+      } catch {
+        fail("RAILS", "inscription lookup unreachable — cannot verify the carrier");
+      }
+      const m = meta![key] ?? meta![key.replace("_", ".")] ?? null;
+      if (!m || !m.contentType) fail("BAD_PARAM", "carrier is not inscribed — refusing to list plain dust");
+    }
   } else {
     const env = parseBsv21Envelope(carrier.scriptHex);
     if (!env || env.protocol !== BSV20_PROTOCOL || env.contentType !== BSV20_CONTENT_TYPE || env.id !== tokenId || env.amt !== tokenAmount) {
