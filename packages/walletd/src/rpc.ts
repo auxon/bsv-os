@@ -19,7 +19,7 @@ import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
-import { bsv21For, galleryFor, normalizeTokenId, tokenHoldings } from "./tokens.ts";
+import { bsv21For, galleryFor, normalizeTokenId, splitOutpoint, tokenHoldings } from "./tokens.ts";
 import {
   boardGet, boardList, claimGig, listGigs, paidGig, submitGig, trackGig, untrackGig,
 } from "./gigs.ts";
@@ -32,7 +32,18 @@ import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./re
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
-import { completeSwap, signSwapOffer } from "./swaps.ts";
+import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
+import {
+  cancelListing,
+  fetchListing,
+  fetchListings,
+  fetchOperatorFee,
+  listingFeeSats,
+  markBought,
+  markSettled,
+  marketUrl,
+  postListing,
+} from "./market.ts";
 import {
   feedLatest,
   indexPost,
@@ -1258,10 +1269,139 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * only our inscribed 1-sat UTXOs list.
    */
   twetchList: (params) => swapListFor("twetch", params),
-  /** Atomic-market app: buy any listing (atomic with an offer, direct otherwise). Origin "market". */
-  marketBuy: (params) => swapBuyFor("market", params),
-  /** Atomic-market app: pre-sign an offer for one of our carriers (ordinal or bsv21). Origin "market". */
-  marketList: (params) => swapListFor("market", params),
+  /** Market listings (read-only) from the configured deployment. */
+  marketBrowse: async (params) => {
+    const { kind } = p(params) as { kind?: unknown };
+    const listings = await fetchListings(kind === "ordinal" || kind === "bsv21" ? kind : undefined);
+    return { market: marketUrl(), listings };
+  },
+  /** The market operator's declared fee for new listings. */
+  marketFees: async () => ({ market: marketUrl(), ...(await fetchOperatorFee()) }),
+  /**
+   * Buy a listing end to end: fetch terms, verify seller + price
+   * (buyerChecks), sign, broadcast, and post the buy (plus settle for
+   * atomic swaps) to the market. Policy origin defaults to "cli";
+   * agents pass their name so budgets and caps apply.
+   */
+  marketBuy: async (params) => {
+    const b = needBackend();
+    const { listing, origin, maxPrice } = p(params) as { listing?: unknown; origin?: unknown; maxPrice?: unknown };
+    if (typeof listing !== "string" || !listing) {
+      throw Object.assign(new Error("listing (asset outpoint) required"), { code: "BAD_PARAM" });
+    }
+    const l = await fetchListing(listing.replace("_", "."));
+    if (!l) throw Object.assign(new Error(`unknown listing ${listing}`), { code: "NOT_FOUND" });
+    if (l.status !== "active") throw Object.assign(new Error(`listing is ${l.status}`), { code: "ALREADY_SOLD" });
+    const policyOrigin = typeof origin === "string" && origin ? origin : "cli";
+    const cap = maxPrice === undefined ? l.priceSats : Math.floor(Number(maxPrice));
+    if (!Number.isFinite(cap) || cap < l.priceSats) {
+      throw Object.assign(new Error(`price ${l.priceSats} exceeds max ${cap}`), { code: "BAD_PARAM" });
+    }
+    const marketFee = listingFeeSats(l);
+    const fee = marketFee > 0 ? { to: l.feeAddress, sats: marketFee } : undefined;
+    const memo = ["MARKET-BUY", l.origin];
+    const label = `market buy ${l.origin}`;
+    let r: { txid: string; fee: number };
+    let atomic = false;
+    if (l.sellerUnlock && l.payScript && l.inputScript) {
+      const parts = splitOutpoint(l.origin);
+      if (!parts) throw Object.assign(new Error("listing origin malformed"), { code: "RAILS" });
+      atomic = true;
+      r = await completeSwap({
+        db: b.db, chain: b.chain, origin: policyOrigin,
+        offer: {
+          input: { txid: parts.txid, vout: parts.vout, scriptHex: l.inputScript, sequence: 0xffffffff },
+          unlockHex: l.sellerUnlock,
+          payScriptHex: l.payScript,
+          priceSats: l.priceSats,
+          version: l.assetKind === "bsv21" ? SWAP_VERSION_BSV21 : SWAP_VERSION,
+          lockTime: 0,
+          ...(l.assetKind === "bsv21" ? { kind: "bsv21" as const, tokenId: l.tokenId, tokenAmount: l.tokenAmount } : {}),
+        },
+        ...(fee ? { fee } : {}),
+        memo, label,
+        buyerChecks: { expectedSeller: l.seller, maxPrice: cap },
+      });
+    } else {
+      r = await spendTo({
+        db: b.db, chain: b.chain, origin: policyOrigin,
+        payments: [{ to: l.seller, sats: l.priceSats }, ...(fee ? [fee] : [])],
+        memo, label,
+        description: `market direct buy ${l.origin} for ${l.priceSats} sats (pay first, delivery by the seller)`,
+      });
+    }
+    let posted = false;
+    let postError: string | undefined;
+    try {
+      await markBought(l.origin, r.txid, policyOrigin);
+      posted = true;
+    } catch (e) {
+      postError = e instanceof Error ? e.message : String(e);
+    }
+    let settled = false;
+    if (atomic) {
+      try {
+        await markSettled(l.origin, r.txid);
+        settled = true;
+      } catch {
+        /* settle is bookkeeping; the swap already moved the asset */
+      }
+    }
+    return { txid: r.txid, fee: r.fee, atomic, priceSats: l.priceSats, marketFee, posted, settled, ...(postError ? { postError } : {}) };
+  },
+  /**
+   * List one of our carriers: sign the offer, then post it to the market
+   * with the operator's declared fee (override with feeBps). Policy
+   * origin defaults to "cli"; agents pass their name.
+   */
+  marketList: async (params) => {
+    const b = needBackend();
+    const { outpoint, priceSats, kind, tokenId, tokenAmount, origin, title, image, feeBps } = p(params) as {
+      outpoint?: unknown; priceSats?: unknown; kind?: unknown; tokenId?: unknown; tokenAmount?: unknown;
+      origin?: unknown; title?: unknown; image?: unknown; feeBps?: unknown;
+    };
+    const m = typeof outpoint === "string" ? /^([0-9a-fA-F]{64})[._](\d+)$/.exec(outpoint) : null;
+    if (!m) throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
+    const policyOrigin = typeof origin === "string" && origin ? origin : "cli";
+    const assetKind = kind === "bsv21" ? ("bsv21" as const) : ("ordinal" as const);
+    const price = Math.floor(Number(priceSats) || 0);
+    const offer = await signSwapOffer({
+      db: b.db, chain: b.chain, origin: policyOrigin,
+      txid: m[1]!, vout: Number(m[2]), priceSats: price,
+      ...(assetKind === "bsv21" ? { kind: assetKind } : {}),
+      ...(typeof tokenId === "string" ? { tokenId } : {}),
+      ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
+    });
+    const fees = await fetchOperatorFee();
+    const bps = feeBps === undefined ? fees.feeBps : Math.max(0, Math.min(10000, Math.floor(Number(feeBps) || 0)));
+    const seller = selfAddress();
+    const dot = `${m[1]!.toLowerCase()}.${Number(m[2])}`;
+    await postListing({
+      origin: dot,
+      assetKind,
+      title: typeof title === "string" && title ? title : `${assetKind} ${dot.slice(0, 12)}`,
+      ...(typeof image === "string" && image ? { image } : {}),
+      priceSats: price,
+      seller,
+      sellerUnlock: offer.unlockHex,
+      payScript: offer.payScriptHex,
+      ...(assetKind === "bsv21" ? { tokenId, tokenAmount } : {}),
+      feeBps: bps,
+      feeAddress: fees.feeAddress,
+      metadata: { source: policyOrigin },
+    });
+    return { listed: true, origin: dot, priceSats: price, feeBps: bps, feeAddress: fees.feeAddress };
+  },
+  /** Cancel our listing on the market (seller must be this wallet). */
+  marketCancel: async (params) => {
+    const { listing } = p(params) as { listing?: unknown };
+    if (typeof listing !== "string" || !listing) {
+      throw Object.assign(new Error("listing (asset outpoint) required"), { code: "BAD_PARAM" });
+    }
+    const dot = listing.replace("_", ".");
+    await cancelListing(dot, selfAddress());
+    return { cancelled: true, origin: dot };
+  },
   /**
    * Token UTXOs for one tokenId: which of our wallet UTXOs carry the
    * token and how much. Listing is exact-UTXO (partial fills can't be

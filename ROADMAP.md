@@ -231,8 +231,10 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
   templates tested, Twetch buy/list flows in the app, and **Atomic
   Market** as a BRC-100 app (`bsv app install market.entangleit.com`,
   runner + `window.bsv`, origin-policed; browse / buy / sell, ORDFS
-  holdings). Depends: **F2** (runner), **F5** (ordinals), **F14**
-  (fee rails).
+  holdings). Agent-native too: `bsv market` + `market_browse/buy/list`
+  MCP tools (buys debit agent budgets) and a worker-declared operator
+  fee (`/v1/market/fees`) applied to new listings. Depends: **F2**
+  (runner), **F5** (ordinals), **F9** (budgets), **F14** (fee rails).
   Accept: list → buy → settle a non-pet ordinal and a BSV21 lot
   end-to-end; a Twetch buy settles atomically with zero browser keys;
   the PocketPets suite passes unmodified.

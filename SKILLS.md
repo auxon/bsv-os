@@ -29,6 +29,9 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `jev_status` | — | Whether Jev is configured in the daemon, the model, and the auto-approval thresholds. |
 | `policy_probe` | `{ action, amountSats, label?, description? }` | Dry-run the spending gate: caps, your budget, Jev verdict — without spending or writing a request. Call before spending to see what approval you need. |
 | `events_poll` | `{ since?, wait_seconds? }` | Approval-lifecycle feed (request created/approved/denied, budget minted/revoked). Pass 0 first, then your last event id; `wait_seconds` (max 60) sleeps until something happens. Poll this in a loop instead of diffing requests. |
+| `market_browse` | `{ kind? }` | Active atomic-market listings: ordinals and BSV21 tokens with prices, sellers, and fees. |
+| `market_buy` | `{ listing, maxPrice? }` | Buy a listing end to end: the daemon verifies the seller + price, signs, broadcasts, and posts settlement. Atomic when the seller published an offer. Spends from YOUR budget through policy. |
+| `market_list` | `{ outpoint, priceSats, kind?, tokenId?, tokenAmount?, title? }` | List the wallet's ordinal or BSV21 UTXO for atomic sale (signed offer + operator fee). The asset stays in the wallet until bought. |
 
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
@@ -61,6 +64,13 @@ optional daily allowance and expiry) with no per-spend approvals; budget
 denials (`over lifetime budget`, `over daily allowance`, `expired`,
 `revoked`) are final until the human re-mints — same handling: relay, stop,
 wait.
+
+**Earn and buy, not just spend.** The atomic market is agent-native:
+`market_browse` to see what's for sale, `market_buy` to buy a listing
+atomically from your budget (payment + asset settle in one tx, or nothing
+moves), and `market_list` to sell the wallet's ordinals or BSV21 tokens.
+Buying is a policy spend like any other; listing signs an offer the asset
+stays behind.
 
 Other states:
 

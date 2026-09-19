@@ -110,6 +110,44 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "market_browse",
+    description: "Browse the atomic market: active listings of ordinals and BSV21 tokens with prices, sellers, and fees. Read-only.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        kind: { type: "string", description: "optional filter: ordinal or bsv21" },
+      },
+    },
+  },
+  {
+    name: "market_buy",
+    description: "Buy a market listing end to end: the daemon fetches the terms, verifies the seller and price, signs, broadcasts, and posts the settlement. Payment + asset move in one atomic tx when the seller published an offer. Spends from YOUR budget through policy; denials work like anchor_tip.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        listing: { type: "string", description: "asset outpoint from market_browse, e.g. <txid>.<vout>" },
+        maxPrice: { type: "number", description: "optional ceiling in sats (defaults to the listing price)" },
+      },
+      required: ["listing"],
+    },
+  },
+  {
+    name: "market_list",
+    description: "List one of the wallet's ordinals or BSV21 token UTXOs for atomic sale: signs the offer and posts it with the market's operator fee. The asset stays in the wallet until bought.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        outpoint: { type: "string", description: "asset outpoint to list, e.g. <txid>_<vout>" },
+        priceSats: { type: "number", description: "asking price in sats" },
+        kind: { type: "string", description: "ordinal (default) or bsv21" },
+        tokenId: { type: "string", description: "bsv21 token id (<txid>_<vout>), required for bsv21" },
+        tokenAmount: { type: "string", description: "bsv21 base units (exact UTXO amount), required for bsv21" },
+        title: { type: "string", description: "optional listing title" },
+      },
+      required: ["outpoint", "priceSats"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -203,6 +241,37 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             ...(Number.isFinite(Number(args.since)) ? { since: Number(args.since) } : {}),
             ...(Number.isFinite(Number(args.wait_seconds)) ? { waitMs: Math.floor(Number(args.wait_seconds) * 1000) } : {}),
           }));
+        case "market_browse":
+          return text(await callDaemon("marketBrowse", {
+            ...(typeof args.kind === "string" && args.kind ? { kind: args.kind } : {}),
+          }));
+        case "market_buy": {
+          if (typeof args.listing !== "string" || !args.listing) {
+            throw new McpError(ErrorCode.InvalidParams, "listing (asset outpoint) is required");
+          }
+          return text(await callDaemon("marketBuy", {
+            listing: args.listing,
+            origin: agent,
+            ...(Number.isFinite(Number(args.maxPrice)) ? { maxPrice: Number(args.maxPrice) } : {}),
+          }));
+        }
+        case "market_list": {
+          if (typeof args.outpoint !== "string" || !args.outpoint) {
+            throw new McpError(ErrorCode.InvalidParams, "outpoint is required");
+          }
+          if (!(Number(args.priceSats) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "priceSats must be a positive sat number");
+          }
+          return text(await callDaemon("marketList", {
+            outpoint: args.outpoint,
+            priceSats: Number(args.priceSats),
+            origin: agent,
+            ...(typeof args.kind === "string" && args.kind ? { kind: args.kind } : {}),
+            ...(typeof args.tokenId === "string" ? { tokenId: args.tokenId } : {}),
+            ...(typeof args.tokenAmount === "string" ? { tokenAmount: args.tokenAmount } : {}),
+            ...(typeof args.title === "string" && args.title ? { title: args.title } : {}),
+          }));
+        }
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {
             throw new McpError(ErrorCode.InvalidParams, "action is required");

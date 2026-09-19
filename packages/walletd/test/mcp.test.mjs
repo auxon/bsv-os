@@ -13,13 +13,44 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the ten wallet tools", async () => {
+test("lists the thirteen wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, [
     "anchor_tip", "events_poll", "get_version", "jev_decide", "jev_status",
-    "list_pending", "policy_probe", "wallet_balance", "wallet_status", "x402_pay",
+    "list_pending", "market_browse", "market_buy", "market_list",
+    "policy_probe", "wallet_balance", "wallet_status", "x402_pay",
   ]);
+  await client.close();
+  await server.close();
+});
+
+test("market tools stamp the agent origin and validate input", async () => {
+  const seen = [];
+  const { client, server } = await pair(async (method, params) => {
+    seen.push({ method, params });
+    return { listings: [] };
+  });
+  await client.callTool({ name: "market_browse", arguments: { kind: "ordinal" } });
+  assert.deepEqual(seen[0], { method: "marketBrowse", params: { kind: "ordinal" } });
+  await client.callTool({ name: "market_buy", arguments: { listing: "a.b", maxPrice: 5000 } });
+  assert.deepEqual(seen[1], {
+    method: "marketBuy",
+    params: { listing: "a.b", origin: "test-agent", maxPrice: 5000 },
+  });
+  await client.callTool({
+    name: "market_list",
+    arguments: { outpoint: "a_0", priceSats: 2500, title: "T" },
+  });
+  assert.deepEqual(seen[2], {
+    method: "marketList",
+    params: { outpoint: "a_0", priceSats: 2500, origin: "test-agent", title: "T" },
+  });
+  await assert.rejects(client.callTool({ name: "market_buy", arguments: {} }), /listing/);
+  await assert.rejects(
+    client.callTool({ name: "market_list", arguments: { outpoint: "a_0", priceSats: 0 } }),
+    /priceSats/,
+  );
   await client.close();
   await server.close();
 });

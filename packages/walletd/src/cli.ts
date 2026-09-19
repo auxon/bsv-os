@@ -366,6 +366,42 @@ async function main(): Promise<void> {
       }));
       break;
     }
+    case "market": {
+      const [mSub, ...mRest] = rest;
+      const mPos = mRest.filter((a) => !a.startsWith("--"));
+      const mOrigin = flag(mRest, "origin");
+      if (mSub === "browse" || mSub === undefined) {
+        print(await call("marketBrowse", {
+          ...(flag(mRest, "kind") !== undefined ? { kind: flag(mRest, "kind") } : {}),
+        }));
+      } else if (mSub === "fees") {
+        print(await call("marketFees"));
+      } else if (mSub === "buy" && mPos[0]) {
+        print(await call("marketBuy", {
+          listing: mPos[0],
+          ...(mOrigin !== undefined ? { origin: mOrigin } : {}),
+          ...(flag(mRest, "max") !== undefined ? { maxPrice: Number(flag(mRest, "max")) } : {}),
+        }));
+      } else if (mSub === "list" && mPos[0] && Number(mPos[1]) > 0) {
+        print(await call("marketList", {
+          outpoint: mPos[0],
+          priceSats: Number(mPos[1]),
+          ...(flag(mRest, "kind") !== undefined ? { kind: flag(mRest, "kind") } : {}),
+          ...(flag(mRest, "token-id") !== undefined ? { tokenId: flag(mRest, "token-id") } : {}),
+          ...(flag(mRest, "amount") !== undefined ? { tokenAmount: flag(mRest, "amount") } : {}),
+          ...(flag(mRest, "title") !== undefined ? { title: flag(mRest, "title") } : {}),
+          ...(flag(mRest, "image") !== undefined ? { image: flag(mRest, "image") } : {}),
+          ...(flag(mRest, "fee-bps") !== undefined ? { feeBps: Number(flag(mRest, "fee-bps")) } : {}),
+          ...(mOrigin !== undefined ? { origin: mOrigin } : {}),
+        }));
+      } else if (mSub === "cancel" && mPos[0]) {
+        print(await call("marketCancel", { listing: mPos[0] }));
+      } else {
+        console.error("usage: bsv market <browse [--kind=ordinal|bsv21]|fees|buy <listing> [--origin=name] [--max=sats]|list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--title=] [--fee-bps=] [--origin=name]|cancel <listing>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "probe": {
       const [pOrigin, pAction, pAmount] = rest.filter((a) => !a.startsWith("--"));
       if (!pOrigin || !pAction || !pAmount || !(Number(pAmount) > 0)) {
@@ -1119,7 +1155,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

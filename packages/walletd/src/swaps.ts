@@ -339,9 +339,9 @@ export async function completeSwap(opts: {
   if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
   const { hex } = await signTx(built.tx);
   const res = await opts.chain.broadcast(hex);
-  await track(opts.db, res.txid, kind === "bsv21"
+  await track(opts.db, res.txid, opts.label ?? (kind === "bsv21"
     ? `swap buy ${tokenAmount} ${tokenId.slice(0, 8)} for ${price} sats`
-    : `swap buy ${price} sats from ${parts.txid.slice(0, 8)}`, hex);
+    : `swap buy ${price} sats from ${parts.txid.slice(0, 8)}`), hex);
   await recordSpend(opts.db, opts.origin, price + built.fee);
   const basket = await resolveBasketForOrigin(opts.db, opts.origin);
   const ours = new Set([lock.toHex()]); // NFT output + sat change (payment output is the seller's)

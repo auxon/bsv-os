@@ -10,6 +10,7 @@ import { migrate } from "../src/storage.ts";
 import { createWallet, destroyWallet, hasWallet, __resetCache, selfAddress } from "../src/custody.ts";
 import { setPolicy } from "../src/policy.ts";
 import { dispatch, setBackend } from "../src/rpc.ts";
+import { signSwapOffer } from "../src/swaps.ts";
 import { inscriptionScript } from "../src/tokens.ts";
 import { p2pkhScript } from "../src/tx.ts";
 
@@ -202,37 +203,102 @@ it("twetchList signs only our carriers", async () => {
   }
 });
 
-it("marketList signs our carriers under the market origin", async () => {
+
+/** Market worker stub: routes market URLs to fixtures, everything else to the chain stub. */
+function marketStub(baseFetch, { listing = null, fee = { feeBps: 200, feeAddress: TO } } = {}) {
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    const u = String(url);
+    if (u.includes("/v1/market/fees")) return Response.json(fee);
+    if (u.includes("/v1/market/listing/")) {
+      return listing
+        ? Response.json({ listing })
+        : Response.json({ error: { code: "NOT_FOUND", message: "listing not found" } }, { status: 404 });
+    }
+    if (/\/v1\/market(\?|$)/.test(u)) return Response.json({ listings: listing ? [listing] : [] });
+    if (/\/(buy|settle|list|cancel)$/.test(new URL(u).pathname)) {
+      calls.push({ path: new URL(u).pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return Response.json({ ok: true });
+    }
+    return baseFetch(url, init);
+  };
+  return { fetchFn, calls };
+}
+
+function marketListing(over = {}) {
+  return {
+    origin: `${N1}.0`, assetKind: "ordinal", title: "Test ordinal", image: null,
+    priceSats: 5000, seller: TO, sellerUnlock: null, payScript: null, inputScript: null,
+    tokenId: null, tokenAmount: null, feeBps: 200, feeAddress: TO, status: "active",
+    ...over,
+  };
+}
+
+it("marketBrowse and marketFees read the configured deployment", async () => {
   const { db } = await backend();
+  const realFetch = globalThis.fetch;
+  try {
+    const { fetchFn } = marketStub(async () => new Response("nope", { status: 404 }), { listing: marketListing() });
+    globalThis.fetch = fetchFn;
+    const browse = await dispatch({ method: "marketBrowse", params: {}, id: 10 });
+    assert.equal(browse.result.listings.length, 1);
+    assert.equal(browse.result.listings[0].origin, `${N1}.0`);
+    assert.match(browse.result.market, /^https:/);
+    const fees = await dispatch({ method: "marketFees", params: {}, id: 11 });
+    assert.equal(fees.result.feeBps, 200);
+    assert.equal(fees.result.feeAddress, TO);
+    const kind = await dispatch({ method: "marketBrowse", params: { kind: "bsv21" }, id: 12 });
+    assert.equal(kind.error, undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+    setBackend(null);
+    await db.destroy();
+  }
+});
+
+it("marketList signs and posts with the operator fee", async () => {
+  const { db } = await backend();
+  const realFetch = globalThis.fetch;
   try {
     await createWallet();
-    const { fetchFn } = makeNet(selfAddress());
-    const realFetch = globalThis.fetch;
+    const addr = selfAddress();
+    const net = makeNet(addr);
+    const { fetchFn, calls } = marketStub(net.fetchFn);
     globalThis.fetch = fetchFn;
-    try {
-      await setPolicy(db, "market", "allow");
-      const res = await dispatch({
-        method: "marketList",
-        params: { outpoint: `${N1}.0`, priceSats: 2500 },
-        id: 10,
-      });
-      assert.equal(res.result.kind, "ordinal");
-      assert.equal(res.result.version, 2);
-      assert.equal(res.result.priceSats, 2500);
-      assert.match(res.result.unlockHex, /^[0-9a-f]+$/);
-      const bad = await dispatch({ method: "marketList", params: { outpoint: "nope", priceSats: 5 }, id: 11 });
-      assert.equal(bad.error.code, "BAD_PARAM");
-      // underscore outpoints (indexer format) are accepted too
-      const underscored = await dispatch({
-        method: "marketList",
-        params: { outpoint: `${N1}_0`, priceSats: 2500 },
-        id: 12,
-      });
-      assert.equal(underscored.error, undefined);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    await setPolicy(db, "cli", "allow");
+    const res = await dispatch({
+      method: "marketList",
+      params: { outpoint: `${N1}.0`, priceSats: 2500, title: "T" },
+      id: 13,
+    });
+    assert.equal(res.result.listed, true);
+    assert.equal(res.result.origin, `${N1}.0`);
+    assert.equal(res.result.feeBps, 200);
+    assert.equal(res.result.feeAddress, TO);
+    const posted = calls.find((c) => c.path === "/v1/market/list");
+    assert.ok(posted, "listing was posted");
+    assert.equal(posted.body.priceSats, 2500);
+    assert.equal(posted.body.title, "T");
+    assert.equal(posted.body.seller, addr);
+    assert.equal(posted.body.feeBps, 200);
+    assert.equal(posted.body.feeAddress, TO);
+    assert.match(posted.body.sellerUnlock, /^[0-9a-f]+$/);
+    assert.equal(posted.body.metadata.source, "cli");
+    // fee override and underscore outpoints
+    const zero = await dispatch({
+      method: "marketList",
+      params: { outpoint: `${N1}_0`, priceSats: 2500, feeBps: 0 },
+      id: 14,
+    });
+    assert.equal(zero.result.feeBps, 0);
+    const bad = await dispatch({ method: "marketList", params: { outpoint: "nope", priceSats: 5 }, id: 15 });
+    assert.equal(bad.error.code, "BAD_PARAM");
+    // policy-gated under the caller's origin
+    await db("policies").where({ origin: "cli" }).delete();
+    const denied = await dispatch({ method: "marketList", params: { outpoint: `${N1}.0`, priceSats: 2500 }, id: 16 });
+    assert.equal(denied.error.code, "POLICY_DENY");
   } finally {
+    globalThis.fetch = realFetch;
     setBackend(null);
     await db.destroy();
     await destroyWallet();
@@ -240,33 +306,37 @@ it("marketList signs our carriers under the market origin", async () => {
   }
 });
 
-it("marketBuy direct pays seller + market fee through policy", async () => {
+it("marketBuy atomic: fetches terms, verifies, buys, posts buy + settle", async () => {
   const { db, chain } = await backend();
+  const realFetch = globalThis.fetch;
   try {
     await createWallet();
     const addr = selfAddress();
-    const { fetchFn } = makeNet(addr);
-    const realFetch = globalThis.fetch;
+    const net = makeNet(addr);
+    await setPolicy(db, "cli", "allow");
+    const offer = await signSwapOffer({
+      db, chain, origin: "cli", txid: N1, vout: 0, priceSats: 5000, fetchFn: net.fetchFn,
+    });
+    const listing = marketListing({
+      seller: addr, sellerUnlock: offer.unlockHex, payScript: offer.payScriptHex,
+      inputScript: offer.input.scriptHex,
+    });
+    const { fetchFn, calls } = marketStub(net.fetchFn, { listing });
     globalThis.fetch = fetchFn;
-    try {
-      chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
-      await setPolicy(db, "market", "allow");
-      const res = await dispatch({
-        method: "marketBuy",
-        params: {
-          outpoint: OUT, priceSats: 5000, sellerAddress: TO,
-          fee: { to: TO, sats: 100 },
-        },
-        id: 13,
-      });
-      assert.match(res.result.txid, /^[0-9a-f]{64}$/);
-      assert.equal(res.result.atomic, false);
-      const rows = await db("pending_txs").where({ txid: res.result.txid });
-      assert.match(rows[0].label, /^market buy /);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    const res = await dispatch({ method: "marketBuy", params: { listing: `${N1}.0` }, id: 20 });
+    assert.equal(res.result.atomic, true);
+    assert.equal(res.result.posted, true);
+    assert.equal(res.result.settled, true);
+    assert.equal(res.result.marketFee, 100);
+    assert.equal(res.result.priceSats, 5000);
+    assert.match(res.result.txid, /^[0-9a-f]{64}$/);
+    assert.ok(calls.some((c) => c.path === "/v1/market/buy"));
+    assert.ok(calls.some((c) => c.path === "/v1/market/settle"));
+    const rows = await db("pending_txs").where({ txid: res.result.txid });
+    assert.match(rows[0].label, /^market buy /);
   } finally {
+    globalThis.fetch = realFetch;
     setBackend(null);
     await db.destroy();
     await destroyWallet();
@@ -274,46 +344,67 @@ it("marketBuy direct pays seller + market fee through policy", async () => {
   }
 });
 
-it("marketBuy atomic completes offers and denies without approval", async () => {
+it("marketBuy direct pays seller + fee; maxPrice and budgets bind", async () => {
   const { db, chain } = await backend();
+  const realFetch = globalThis.fetch;
   try {
     await createWallet();
     const addr = selfAddress();
-    const { fetchFn } = makeNet(addr);
-    const realFetch = globalThis.fetch;
+    const net = makeNet(addr);
+    const { fetchFn, calls } = marketStub(net.fetchFn, { listing: marketListing() });
     globalThis.fetch = fetchFn;
-    try {
-      chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
-      await setPolicy(db, "market", "allow");
-      const listed = await dispatch({
-        method: "marketList",
-        params: { outpoint: `${N1}.0`, priceSats: 5000 },
-        id: 14,
-      });
-      const res = await dispatch({
-        method: "marketBuy",
-        params: {
-          outpoint: `${N1}.0`, priceSats: 5000, sellerAddress: addr,
-          offer: listed.result,
-        },
-        id: 15,
-      });
-      assert.equal(res.result.atomic, true);
-      assert.match(res.result.txid, /^[0-9a-f]{64}$/);
-      // fresh origin without approval: denied (F2 keeps funding available
-      // after the swap consumed F1)
-      chain.credit(addr, { txid: F2, vout: 0, value: 50_000, height: 900 });
-      await db("policies").where({ origin: "market" }).delete();
-      const denied = await dispatch({
-        method: "marketBuy",
-        params: { outpoint: OUT, priceSats: 5000, sellerAddress: TO },
-        id: 16,
-      });
-      assert.equal(denied.error.code, "POLICY_DENY");
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    // no approval for cli → denied
+    const denied = await dispatch({ method: "marketBuy", params: { listing: `${N1}.0` }, id: 21 });
+    assert.equal(denied.error.code, "POLICY_DENY");
+    // a budgeted agent buys without a policy row (minting is the approval)
+    const { mintAgent } = await import("../src/agents.ts");
+    await mintAgent(db, { name: "buyer-agent", budgetSats: 20_000 });
+    const res = await dispatch({
+      method: "marketBuy",
+      params: { listing: `${N1}.0`, origin: "buyer-agent" },
+      id: 22,
+    });
+    assert.equal(res.result.atomic, false);
+    assert.equal(res.result.posted, true);
+    assert.equal(res.result.settled, false);
+    assert.equal(res.result.marketFee, 100);
+    assert.ok(calls.some((c) => c.path === "/v1/market/buy"));
+    // maxPrice below the listing price: refused before signing
+    const cap = await dispatch({
+      method: "marketBuy",
+      params: { listing: `${N1}.0`, origin: "buyer-agent", maxPrice: 1000 },
+      id: 23,
+    });
+    assert.equal(cap.error.code, "BAD_PARAM");
+    assert.match(cap.error.message, /exceeds max/);
   } finally {
+    globalThis.fetch = realFetch;
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("marketCancel posts the seller cancel", async () => {
+  const { db } = await backend();
+  const realFetch = globalThis.fetch;
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const net = makeNet(addr);
+    const { fetchFn, calls } = marketStub(net.fetchFn);
+    globalThis.fetch = fetchFn;
+    const res = await dispatch({ method: "marketCancel", params: { listing: `${N1}_0` }, id: 24 });
+    assert.equal(res.result.cancelled, true);
+    assert.equal(res.result.origin, `${N1}.0`);
+    const posted = calls.find((c) => c.path === "/v1/market/cancel");
+    assert.equal(posted.body.seller, addr);
+    const bad = await dispatch({ method: "marketCancel", params: {}, id: 25 });
+    assert.equal(bad.error.code, "BAD_PARAM");
+  } finally {
+    globalThis.fetch = realFetch;
     setBackend(null);
     await db.destroy();
     await destroyWallet();
