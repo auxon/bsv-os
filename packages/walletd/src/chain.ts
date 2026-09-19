@@ -5,6 +5,8 @@
  * returns a txid that must be watched to a terminal state.
  */
 
+import { P2PKH, Transaction } from "@bsv/sdk";
+
 export type TxStatus = "UNKNOWN" | "SEEN" | "MINED" | "REJECTED";
 
 export interface ChainUtxo {
@@ -206,7 +208,37 @@ export class MockChainProvider implements ChainProvider {
   /** Test control: pre-seed a mempool tx (default when broadcasting). */
   async broadcast(txHex: string): Promise<{ txid: string; status: TxStatus; detail?: string }> {
     const txid = MockChainProvider.fakeTxid(txHex);
-    this.mempool.set(txid, { hex: txHex, inputs: [] });
+    let tx: Transaction | null = null;
+    try {
+      tx = Transaction.fromHex(txHex);
+    } catch {
+      tx = null; // opaque fixture (status-only tests): no balance effects
+    }
+    const inputs = (tx?.inputs ?? []).map((i) => ({ txid: i.sourceTXID ?? "", vout: i.sourceOutputIndex }));
+    this.mempool.set(txid, { hex: txHex, inputs });
+    if (tx) {
+      // Model what a live index shows the wallet after its own broadcast:
+      // spent outpoints leave the UTXO set and P2PKH outputs (change) appear
+      // unconfirmed. Without this, tests would re-spend stale outpoints.
+      for (const [address, list] of this.balances) {
+        const remaining = list.filter((u) => !inputs.some((i) => i.txid === u.txid && i.vout === u.vout));
+        if (remaining.length !== list.length) this.balances.set(address, remaining);
+      }
+      const scriptToAddress = new Map<string, string>();
+      for (const address of this.balances.keys()) {
+        try {
+          scriptToAddress.set(new P2PKH().lock(address).toHex(), address);
+        } catch {
+          /* not a P2PKH address key */
+        }
+      }
+      for (let vout = 0; vout < tx.outputs.length; vout++) {
+        const out = tx.outputs[vout]!;
+        const value = out.satoshis ?? 0;
+        const address = out.lockingScript ? scriptToAddress.get(out.lockingScript.toHex()) : undefined;
+        if (address && value > 0) this.credit(address, { txid, vout, value, height: 0 });
+      }
+    }
     return { txid, status: "SEEN" };
   }
 

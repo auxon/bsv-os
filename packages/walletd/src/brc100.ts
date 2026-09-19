@@ -56,7 +56,7 @@ import type { Counterparty, WalletProtocol } from "@bsv/sdk";
 import type { ChainProvider } from "./chain.ts";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
-import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
+import { labelOutputs, resolveBasketForOrigin, spentByUs } from "./baskets.ts";
 import { getCert, listCerts, putCert, revokeCert, showCert } from "./certs.ts";
 import { checkMemo, lockingScriptOf } from "./engine.ts";
 import { hasOrdEnvelope } from "./tokens.ts";
@@ -720,10 +720,15 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
         }
       }
       // Funding from our plain UTXOs (fee counts inscription-skip protection).
+      // WoC's address index does not hide mempool spends, so exclude outpoints
+      // our own in-flight txs already consume — otherwise a second spend
+      // re-picks the just-spent UTXO and double-spends instead of chaining
+      // the unconfirmed change.
       const u = await chain.utxos(address);
       const taken = new Set(explicit.map((e) => `${e.txid}:${e.vout}`));
+      const spent = await spentByUs(db);
       const candidates = u.utxos
-        .filter((x) => !taken.has(`${x.txid}:${x.vout}`) && x.value > 1)
+        .filter((x) => !taken.has(`${x.txid}:${x.vout}`) && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`) && x.value > 1)
         .sort((a, b) => b.value - a.value)
         .slice(0, 12);
       const scripts = await Promise.all(

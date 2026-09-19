@@ -61,7 +61,7 @@ function makeNet(selfAddr) {
     if (m && hexes[m[1]]) return new Response(hexes[m[1]](), { status: 200 });
     return new Response("nope", { status: 404 });
   };
-  return { fetchFn };
+  return { fetchFn, hexes };
 }
 
 const MANIFEST = {
@@ -298,7 +298,7 @@ it("inscribe mints bounded inscriptions policy-gated", async () => {
   try {
     await createWallet();
     const addr = selfAddress();
-    const { fetchFn } = makeNet(addr);
+    const { fetchFn, hexes } = makeNet(addr);
     const chain = new MockChainProvider();
     chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
     let seen = "";
@@ -318,6 +318,7 @@ it("inscribe mints bounded inscriptions policy-gated", async () => {
     const tx = Transaction.fromHex(seen);
     assert.equal(tx.outputs[0].lockingScript.toHex(), inscriptionScript(addr, "image/png", dataHex));
     assert.equal(tx.outputs[0].satoshis, 1);
+    hexes[r.txid] = () => seen; // the second mint funds from this tx's change
     const r2 = await inscribeMint({
       db, chain, origin: "game.example", dataHex, contentType: "image/png",
       fee: { to: TO, sats: 500 }, memo: ["POCKETPETS-MINT", "pet-1"], fetchFn,

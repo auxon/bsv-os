@@ -9,7 +9,7 @@ import { Script, Transaction } from "@bsv/sdk";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
-import { labelOutputs, resolveBasketForOrigin } from "./baskets.ts";
+import { labelOutputs, resolveBasketForOrigin, spentByUs } from "./baskets.ts";
 import {
   BSV20_CONTENT_TYPE,
   BSV20_PROTOCOL,
@@ -102,7 +102,10 @@ export async function anchorTip(opts: {
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
-  const utxos: SpendableUtxo[] = u.utxos.map((x) => ({ ...x, scriptHex: lock.toHex() }));
+  const spent = await spentByUs(opts.db);
+  const utxos: SpendableUtxo[] = u.utxos
+    .filter((x) => !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
+    .map((x) => ({ ...x, scriptHex: lock.toHex() }));
   const built = buildTx({
     utxos,
     unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
@@ -168,8 +171,9 @@ export async function spendTo(opts: {
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
+  const spent = await spentByUs(opts.db);
   const candidates = u.utxos
-    .filter((x) => x.value > 1)
+    .filter((x) => !spent.has(`${x.txid.toLowerCase()}:${x.vout}`) && x.value > 1)
     .sort((a, b) => b.value - a.value)
     .slice(0, 12);
   const scripts = await Promise.all(
@@ -240,7 +244,8 @@ export async function sendOrdinal(opts: {
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
-  const ordinal = u.utxos.find((x) => x.txid === parts.txid && x.vout === parts.vout);
+  const spent = await spentByUs(opts.db);
+  const ordinal = u.utxos.find((x) => x.txid === parts.txid && x.vout === parts.vout && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`));
   if (!ordinal) {
     throw Object.assign(new Error("ordinal not in wallet (unknown or already spent)"), { code: "NOT_FOUND" });
   }
@@ -248,7 +253,7 @@ export async function sendOrdinal(opts: {
     throw Object.assign(new Error(`ordinal carrier must be exactly 1 sat (found ${ordinal.value})`), { code: "BAD_PARAM" });
   }
   const funding = u.utxos.filter(
-    (x) => !(x.txid === parts.txid && x.vout === parts.vout) && x.value > 1,
+    (x) => !(x.txid === parts.txid && x.vout === parts.vout) && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`) && x.value > 1,
   );
   const utxos: SpendableUtxo[] = [
     { ...ordinal, scriptHex: lock.toHex() },
@@ -314,7 +319,10 @@ export async function sendSats(opts: {
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
-  const utxos: SpendableUtxo[] = u.utxos.map((x) => ({ ...x, scriptHex: lock.toHex() }));
+  const spent = await spentByUs(opts.db);
+  const utxos: SpendableUtxo[] = u.utxos
+    .filter((x) => !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
+    .map((x) => ({ ...x, scriptHex: lock.toHex() }));
   const built = buildTx({
     utxos,
     unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
@@ -408,8 +416,9 @@ export async function sendBsv21(opts: {
   // 2. Real carrier scripts (sighash commits to the envelope), verified
   // against the indexer's amounts; plain funding verified inscription-free.
   const taken = new Set(picked.map((h) => `${h.txid}:${h.vout}`));
+  const spent = await spentByUs(opts.db);
   const fundCandidates = u.utxos
-    .filter((x) => !taken.has(`${x.txid}:${x.vout}`) && x.value > 1)
+    .filter((x) => !taken.has(`${x.txid}:${x.vout}`) && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`) && x.value > 1)
     .sort((a, b) => b.value - a.value)
     .slice(0, 12);
   const [tokenScripts, fundScripts] = await Promise.all([
@@ -513,8 +522,9 @@ export async function inscribeMint(opts: {
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
+  const spent = await spentByUs(opts.db);
   const candidates = u.utxos
-    .filter((x) => x.value > 1)
+    .filter((x) => !spent.has(`${x.txid.toLowerCase()}:${x.vout}`) && x.value > 1)
     .sort((a, b) => b.value - a.value)
     .slice(0, 12);
   const scripts = await Promise.all(

@@ -66,7 +66,7 @@ function makeNet(selfAddr) {
     if (m && hexes[m[1]]) return new Response(hexes[m[1]](), { status: 200 });
     return new Response("nope", { status: 404 });
   };
-  return { fetchFn };
+  return { fetchFn, hexes };
 }
 
 function wallet(db, chain, fetchFn) {
@@ -231,6 +231,42 @@ it("createAction funds, labels, tracks; lists filter; outputs relinquish", async
   }
 });
 
+it("a second spend chains own unconfirmed change (never re-spends the just-spent UTXO)", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn, hexes } = makeNet(addr);
+    const chain = new MockChainProvider();
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    const w = wallet(db, chain, fetchFn);
+    await setPolicy(db, "shop.example", "allow");
+    const first = await w.createAction({
+      description: "first payment funds the next",
+      outputs: [{ lockingScript: p2pkhScript(TO).toHex(), satoshis: 5000, outputDescription: "first merchant payment" }],
+    }, "shop.example");
+    const tx1 = Transaction.fromHex(first.rawTx);
+    const selfScript = p2pkhScript(addr).toHex();
+    const changeVout = tx1.outputs.findIndex((o) => o.lockingScript?.toHex() === selfScript);
+    assert.ok(changeVout >= 0);
+    // WoC's address index does not hide mempool spends: re-add the just-spent
+    // UTXO to model that stale view (MockChain already credited the change).
+    // Reusing it is what produced a conflicting double-spend.
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    hexes[first.txid] = () => first.rawTx;
+    const second = await w.createAction({
+      description: "second payment chains the change",
+      outputs: [{ lockingScript: p2pkhScript(TO).toHex(), satoshis: 5000, outputDescription: "second merchant payment" }],
+    }, "shop.example");
+    const inputs = Transaction.fromHex(second.rawTx).inputs.map((i) => `${i.sourceTXID}:${i.sourceOutputIndex}`);
+    assert.deepEqual(inputs, [`${first.txid}:${changeVout}`]);
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
 it("sign-later flow stages, signs, aborts", async () => {
   const db = await memdb();
   try {
@@ -300,8 +336,13 @@ it("deferred note input stages and accepts the caller signature with mock chain 
       return net.fetchFn(url);
     };
     let broadcast;
+    const origBroadcast = chain.broadcast.bind(chain);
     chain.broadcast = async (hex) => {
       broadcast = Transaction.fromHex(hex);
+      const orig = await origBroadcast(hex);
+      // serve the new change tx to lockingScriptOf under both ids
+      net.hexes[orig.txid] = () => hex;
+      net.hexes[broadcast.id("hex")] = () => hex;
       return { txid: broadcast.id("hex"), status: "SEEN" };
     };
     const w = wallet(db, chain, fetchFn);
@@ -341,7 +382,8 @@ it("deferred note input stages and accepts the caller signature with mock chain 
       const done = await w.signAction({ reference, spends: { 0: { unlockingScript } } }, "note-test.example");
       assert.equal(done.txid, broadcast.id("hex"));
       assert.equal(broadcast.inputs[0].unlockingScript.toHex(), unlockingScript);
-      for (const [i, source] of [[0, { script: noteScript, value: 1 }], [1, { script: p2pkhScript(selfAddress()), value: 100_000 }]]) {
+      const funding = context.funding[0];
+      for (const [i, source] of [[0, { script: noteScript, value: 1 }], [1, { script: Script.fromHex(funding.scriptHex), value: funding.value }]]) {
         assert.equal(new Spend({
           sourceTXID: broadcast.inputs[i].sourceTXID, sourceOutputIndex: broadcast.inputs[i].sourceOutputIndex,
           sourceSatoshis: source.value, lockingScript: source.script, transactionVersion: broadcast.version,
