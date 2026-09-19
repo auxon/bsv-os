@@ -223,6 +223,19 @@ main { max-width: 720px; margin: 0 auto; padding: 16px; }
   text-overflow: ellipsis;
 }
 .market-card { text-decoration: none; color: inherit; display: block; }
+.market-buy { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+#market-sell { margin: 4px 0 10px; }
+#market-sell summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.market-sell-row { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
+.market-sell-row input {
+  flex: 1 1 140px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: var(--ink);
+  font: inherit;
+}
 .market-card .price-tag {
   padding: 2px 9px 0;
   color: var(--accent);

@@ -18,13 +18,13 @@ test("twetch app: manifest validates for the localhost domain", () => {
   const v = validateManifest("localhost", raw);
   assert.equal(v.name, "Twetch");
   assert.equal(v.startUrl, "https://localhost:2121/twetch/");
-  assert.equal(v.spendCapSats, 20000);
+  assert.equal(v.spendCapSats, 100000000);
 });
 
 test("twetch app: page has no key material and calls same-origin rpc only", () => {
   const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
   assert.ok(js.includes("twetchFeed") && js.includes("twetchPost") && js.includes("twetchStatus"));
-  assert.ok(!/https?:\/\/(?!(?:api\.)?twetch\.com|media\.ordinalswallet\.com|localhost|127\.0\.0\.1)/.test(js));
+  assert.ok(!/https?:\/\/(?!(?:api\.)?twetch\.com|media\.ordinalswallet\.com|atomic-market\.richard-hein\.workers\.dev|localhost|127\.0\.0\.1)/.test(js));
   assert.ok(!/WIF|privateKey|accessToken|idToken/i.test(js));
 });
 
@@ -42,6 +42,15 @@ test("twetch app: market tab and endpoints are wired", () => {
   assert.ok(html.includes('data-tab="market"'));
   assert.ok(html.includes('id="market-grid"'));
   assert.ok(js.includes("twetchMarket"));
+});
+
+test("twetch app: market buys and sells route through the daemon", () => {
+  const html = fs.readFileSync(path.join(appDir, "index.html"), "utf8");
+  const js = fs.readFileSync(path.join(appDir, "app.js"), "utf8");
+  assert.ok(js.includes("twetchBuy") && js.includes("twetchList"));
+  assert.ok(js.includes("MARKET_WORKER") && js.includes("marketOffer"));
+  assert.ok(html.includes('id="sell-go"') && html.includes('id="sell-outpoint"'));
+  assert.ok(js.includes("POLICY_DENY") && js.includes("bsv allow twetch"));
 });
 
 test("twetch app: profile overlay is wired to post heads and notifications", () => {

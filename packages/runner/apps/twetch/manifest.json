@@ -7,7 +7,7 @@
     "schemaVersion": "1",
     "groupPermissions": {
       "description": "Twetch companion: read the public feed and notifications, post text on-chain through the OS wallet (network fee only).",
-      "spendingAuthorization": { "amount": 20000, "description": "network fees for posts" }
+      "spendingAuthorization": { "amount": 100000000, "description": "NFT buys + network fees for posts (per-spend ceiling; each buy still gates on policy)" }
     }
   }
 }

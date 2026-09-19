@@ -67,6 +67,16 @@
           <button type="button" class="chip" data-view="collections">Collections</button>
         </div>
         <div id="market-meta" class="status"></div>
+        <details id="market-sell">
+          <summary>Sell an OS-custodied NFT</summary>
+          <div class="market-sell-row">
+            <input id="sell-outpoint" placeholder="outpoint: txid.vout" autocomplete="off" />
+            <input id="sell-price" placeholder="price sats" inputmode="numeric" autocomplete="off" />
+            <input id="sell-title" placeholder="title" autocomplete="off" />
+            <button id="sell-go" type="button" class="chip">List</button>
+          </div>
+          <div id="sell-status" class="status"></div>
+        </details>
         <div id="market-grid" class="grid"></div>
         <div class="load-more">
           <button id="market-more" class="hidden">Load more</button>

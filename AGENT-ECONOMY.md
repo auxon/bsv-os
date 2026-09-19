@@ -554,6 +554,17 @@ curl -sk https://127.0.0.2:8790/api/listings -X POST \
   -H 'content-type: application/json' \
   -d '{"photoBase64":"…","mime":"image/jpeg","name":"chair.jpg",
        "notes":"solid oak","priceHintSats":25000,"channels":["twetch"]}'
+
+# atomic market (generic worker; sellers list OS-custodied assets, buyers settle atomically)
+export MARKET=https://atomic-market.richard-hein.workers.dev
+curl -s "$MARKET/v1/market?kind=ordinal"            # active listings
+curl -s -X POST "$MARKET/v1/market/list" -H 'content-type: application/json' -d '{
+  "origin": "<txid>.<vout>", "assetKind": "ordinal", "title": "Show ticket",
+  "priceSats": 5000, "seller": "<address>", "sellerUnlock": "<hex>",
+  "payScript": "<hex>", "inputScript": "<hex>", "feeBps": 200, "feeAddress": "<address>"}'
+# sellers sign offers with window.bsv signSwapOffer (ordinal) or kind bsv21
+# + tokenId/tokenAmount; buyers complete with completeSwap + buyerChecks
+# { expectedSeller, maxPrice }. Twetch app: per-card Buy, twetchBuy RPC.
 ```
 
 ---

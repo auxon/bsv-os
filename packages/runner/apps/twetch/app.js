@@ -528,7 +528,161 @@ function marketCard(view, item) {
   }
 
   a.append(title, price, sub);
-  return a;
+  const wrap = document.createElement("div");
+  wrap.append(a);
+  if (view === "listings" && item.outpoint && item.priceSats > 0 && item.sellerAddress) {
+    wrap.append(marketBuyRow(item));
+  }
+  return wrap;
+}
+
+// ── Market buys + sells (OS custody) ───────────────────────────────
+const MARKET_WORKER = "https://atomic-market.richard-hein.workers.dev";
+
+async function marketFetch(path, body) {
+  const res = await fetch(`${MARKET_WORKER}${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data?.error?.message || `market ${res.status}`);
+    err.code = data?.error?.code;
+    throw err;
+  }
+  return data;
+}
+
+function shortAddr(a) {
+  const s = String(a ?? "");
+  return s.length > 14 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s;
+}
+
+function parseOutpoint(outpoint) {
+  const m = /^([0-9a-fA-F]{64})\.(\d+)$/.exec(String(outpoint ?? "").trim());
+  return m ? { txid: m[1].toLowerCase(), vout: Number(m[2]) } : null;
+}
+
+/** Atomic offer for an outpoint if the market worker holds one, else null (direct buy). */
+async function marketOffer(item) {
+  const parts = parseOutpoint(item.outpoint);
+  if (!parts || !(item.priceSats >= 1) || !item.sellerAddress) return null;
+  try {
+    const { listing } = await marketFetch(`/v1/market/listing/${encodeURIComponent(item.outpoint)}`);
+    if (!listing || listing.status !== "active" || !listing.sellerUnlock || !listing.payScript || !listing.inputScript) {
+      return null;
+    }
+    return {
+      input: { txid: parts.txid, vout: parts.vout, scriptHex: listing.inputScript, sequence: 4294967295 },
+      unlockHex: listing.sellerUnlock,
+      payScriptHex: listing.payScript,
+      priceSats: listing.priceSats,
+      version: listing.assetKind === "bsv21" ? 3 : 2,
+      lockTime: 0,
+      ...(listing.assetKind === "bsv21"
+        ? { kind: "bsv21", tokenId: listing.tokenId, tokenAmount: listing.tokenAmount }
+        : {}),
+    };
+  } catch (e) {
+    return null; // worker unreachable or unlisted: fall back to direct buy
+  }
+}
+
+function marketBuyRow(item) {
+  const row = document.createElement("div");
+  row.className = "market-buy";
+  const showButton = () => {
+    row.textContent = "";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip";
+    btn.textContent = `Buy · ${fmtBsv(item.priceSats)}`;
+    btn.addEventListener("click", () => marketBuyConfirm(row, item, showButton));
+    row.append(btn);
+  };
+  showButton();
+  return row;
+}
+
+async function marketBuyConfirm(row, item, reset) {
+  row.textContent = "";
+  const msg = document.createElement("span");
+  msg.className = "status";
+  msg.textContent = "checking for atomic offer…";
+  row.append(msg);
+  const offer = await marketOffer(item);
+  msg.textContent = offer
+    ? `Atomic: ${fmtBsv(item.priceSats)} → ${shortAddr(item.sellerAddress)}. Payment + NFT settle in one tx.`
+    : `Direct: ${fmtBsv(item.priceSats)} → ${shortAddr(item.sellerAddress)}. Pay first — delivery via Twetch.`;
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "chip";
+  go.textContent = "Confirm";
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "chip";
+  no.textContent = "Cancel";
+  no.addEventListener("click", reset);
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    no.disabled = true;
+    msg.className = "status";
+    msg.textContent = "broadcasting…";
+    try {
+      const res = await rpc("twetchBuy", {
+        outpoint: item.outpoint,
+        priceSats: item.priceSats,
+        sellerAddress: item.sellerAddress,
+        ...(offer ? { offer } : {}),
+      });
+      msg.className = "status ok";
+      msg.textContent = `bought · ${String(res.txid).slice(0, 12)}…${res.atomic ? " (atomic)" : ""}`;
+    } catch (e) {
+      msg.className = "status warn";
+      msg.textContent = e && e.code === "POLICY_DENY"
+        ? "needs approval first — run: bsv allow twetch (then retry)"
+        : (e instanceof Error ? e.message : String(e));
+      go.disabled = false;
+      no.disabled = false;
+    }
+  });
+  row.append(go, no);
+}
+
+async function marketSell() {
+  const st = $("sell-status");
+  st.className = "status";
+  try {
+    const outpoint = $("sell-outpoint").value.trim();
+    const priceSats = Math.floor(Number($("sell-price").value));
+    const title = $("sell-title").value.trim() || "Twetch NFT";
+    if (!parseOutpoint(outpoint)) throw new Error("outpoint must be <txid>.<vout>");
+    if (!(priceSats >= 1)) throw new Error("price must be ≥ 1 sat");
+    st.textContent = "signing offer…";
+    const offer = await rpc("twetchList", { outpoint, priceSats });
+    st.textContent = "posting listing…";
+    const bal = await rpc("balance", {});
+    await marketFetch("/v1/market/list", {
+      origin: outpoint,
+      assetKind: "ordinal",
+      title,
+      priceSats,
+      seller: bal.address,
+      sellerUnlock: offer.unlockHex,
+      payScript: offer.payScriptHex,
+      feeBps: 0,
+      feeAddress: bal.address,
+      metadata: { source: "twetch" },
+    });
+    st.className = "status ok";
+    st.textContent = `listed · ${outpoint}`;
+  } catch (e) {
+    st.className = "status warn";
+    st.textContent = e && e.code === "POLICY_DENY"
+      ? "needs approval first — run: bsv allow twetch (then retry)"
+      : (e instanceof Error ? e.message : String(e));
+  }
 }
 
 async function loadMarket(reset) {
@@ -576,6 +730,7 @@ for (const b of document.querySelectorAll("#market-views .chip")) {
   });
 }
 $("market-more").addEventListener("click", () => loadMarket(false));
+$("sell-go").addEventListener("click", marketSell);
 
 function setTab(next) {
   tab = next;

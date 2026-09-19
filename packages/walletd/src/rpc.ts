@@ -939,15 +939,21 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
         });
       }
       case "signSwapOffer": {
-        const { txid, vout, priceSats } = args as { txid?: unknown; vout?: unknown; priceSats?: unknown };
+        const { txid, vout, priceSats, kind, tokenId, tokenAmount } = args as {
+          txid?: unknown; vout?: unknown; priceSats?: unknown;
+          kind?: unknown; tokenId?: unknown; tokenAmount?: unknown;
+        };
         if (typeof txid !== "string" || !txid) throw Object.assign(new Error("txid required"), { code: "BAD_PARAM" });
         return signSwapOffer({
           db: b.db, chain: b.chain, origin: app.domain,
           txid, vout: Math.floor(Number(vout) || 0), priceSats: Number(priceSats) || 0,
+          ...(kind === "ordinal" || kind === "bsv21" ? { kind } : {}),
+          ...(typeof tokenId === "string" ? { tokenId } : {}),
+          ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
         });
       }
       case "completeSwap": {
-        const { offer, fee, memo, label } = args as { offer?: unknown; fee?: unknown; memo?: unknown; label?: unknown };
+        const { offer, fee, memo, label, buyerChecks } = args as { offer?: unknown; fee?: unknown; memo?: unknown; label?: unknown; buyerChecks?: unknown };
         if (!offer || typeof offer !== "object") throw Object.assign(new Error("offer required"), { code: "BAD_PARAM" });
         const intent = intentFromMemo(memo, label);
         return completeSwap({
@@ -956,6 +962,9 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
           memo: Array.isArray(memo) ? (memo as string[]) : undefined,
           ...(intent.label ? { label: intent.label } : {}),
           ...(intent.description ? { description: intent.description } : {}),
+          ...(buyerChecks && typeof buyerChecks === "object"
+            ? { buyerChecks: buyerChecks as { expectedSeller?: string; maxPrice?: number } }
+            : {}),
         });
       }
       default:
@@ -1173,6 +1182,65 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     if (view === "sales") return { view, ...(await marketSales(fetch, opts)) };
     if (view === "collections") return { view, ...(await marketCollections(fetch, opts)) };
     return { view: "listings", ...(await marketListings(fetch, opts)) };
+  },
+  /**
+   * Buy a Twetch-listed NFT through OS custody. Atomic when the seller
+   * published a swap offer (same outpoint listed on the atomic market):
+   * payment + NFT settle in one tx or nothing moves. Otherwise a
+   * direct-buy spend to the seller — pay first, delivery via Twetch,
+   * stated plainly in the confirm. Policy origin "twetch" either way.
+   */
+  twetchBuy: async (params) => {
+    const b = needBackend();
+    const { outpoint, priceSats, sellerAddress, offer } = p(params) as {
+      outpoint?: unknown; priceSats?: unknown; sellerAddress?: unknown; offer?: unknown;
+    };
+    if (typeof outpoint !== "string" || !/^([0-9a-fA-F]{64})\.(\d+)$/.test(outpoint)) {
+      throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
+    }
+    const price = Math.floor(Number(priceSats) || 0);
+    if (!(price >= 1)) throw Object.assign(new Error("priceSats must be a positive sat number"), { code: "BAD_PARAM" });
+    if (typeof sellerAddress !== "string" || !sellerAddress) {
+      throw Object.assign(new Error("sellerAddress required"), { code: "BAD_PARAM" });
+    }
+    const memo = ["TWETCH-BUY", outpoint];
+    if (offer && typeof offer === "object") {
+      const r = await completeSwap({
+        db: b.db, chain: b.chain, origin: "twetch", offer,
+        memo, label: `twetch buy ${outpoint}`,
+        buyerChecks: { expectedSeller: sellerAddress, maxPrice: price },
+      });
+      return { txid: r.txid, fee: r.fee, atomic: true };
+    }
+    const r = await spendTo({
+      db: b.db, chain: b.chain, origin: "twetch",
+      payments: [{ to: sellerAddress, sats: price }],
+      memo, label: `twetch buy ${outpoint}`,
+      description: `Twetch market direct buy ${outpoint} for ${price} sats (pay first, delivery via Twetch)`,
+    });
+    return { txid: r.txid, fee: r.fee, atomic: false };
+  },
+  /**
+   * List an OS-custodied NFT for atomic sale: pre-signs the swap offer
+   * (proceeds to self, SINGLE|ANYONECANPAY). The app posts the returned
+   * offer to the atomic market worker itself. Rejects foreign carriers —
+   * only our inscribed 1-sat UTXOs list.
+   */
+  twetchList: async (params) => {
+    const b = needBackend();
+    const { outpoint, priceSats, kind, tokenId, tokenAmount } = p(params) as {
+      outpoint?: unknown; priceSats?: unknown; kind?: unknown; tokenId?: unknown; tokenAmount?: unknown;
+    };
+    const m = typeof outpoint === "string" ? /^([0-9a-fA-F]{64})\.(\d+)$/.exec(outpoint) : null;
+    if (!m) throw Object.assign(new Error("outpoint must be <64-hex-txid>.<vout>"), { code: "BAD_PARAM" });
+    return signSwapOffer({
+      db: b.db, chain: b.chain, origin: "twetch",
+      txid: m[1]!, vout: Number(m[2]),
+      priceSats: Number(priceSats) || 0,
+      ...(kind === "ordinal" || kind === "bsv21" ? { kind } : {}),
+      ...(typeof tokenId === "string" ? { tokenId } : {}),
+      ...(typeof tokenAmount === "string" ? { tokenAmount } : {}),
+    });
   },
 };
 

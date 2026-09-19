@@ -14,6 +14,7 @@ import { seedRequest, setPolicy } from "../src/policy.ts";
 import { dispatch, setBackend } from "../src/rpc.ts";
 import { completeSwap, signSwapOffer, SWAP_LOCKTIME, SWAP_SEQ, SWAP_VERSION } from "../src/swaps.ts";
 import { inscriptionScript } from "../src/tokens.ts";
+import { bsv21TransferScript, parseBsv21Envelope } from "../src/tokens.ts";
 import { p2pkhScript } from "../src/tx.ts";
 
 const TO = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
@@ -239,6 +240,50 @@ it("completion rejects tampered offers before signing", async () => {
   }
 });
 
+it("completion verifies buyer checks before funding", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNet(addr);
+    const chain = new MockChainProvider();
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    await setPolicy(db, "game.example", "allow");
+    const offer = await signSwapOffer({
+      db, chain, origin: "game.example", txid: N1, vout: 0, priceSats: 5000, fetchFn,
+    });
+    const base = { db, chain, origin: "game.example", offer, fetchFn };
+    // matching seller + cap: settles
+    const r = await completeSwap({
+      ...base, buyerChecks: { expectedSeller: addr, maxPrice: 5000 },
+    });
+    assert.match(r.txid, /^[0-9a-f]{64}$/);
+    // redirected payee: refused before any funding is touched
+    await rejectsCode(
+      completeSwap({ ...base, buyerChecks: { expectedSeller: TO } }),
+      "BAD_OFFER",
+    );
+    // price above the buyer's max: refused
+    await rejectsCode(
+      completeSwap({ ...base, buyerChecks: { maxPrice: 4999 } }),
+      "BAD_OFFER",
+    );
+    // malformed checks: caller error, not offer error
+    await rejectsCode(
+      completeSwap({ ...base, buyerChecks: { expectedSeller: "nope" } }),
+      "BAD_PARAM",
+    );
+    await rejectsCode(
+      completeSwap({ ...base, buyerChecks: { maxPrice: -1 } }),
+      "BAD_PARAM",
+    );
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
 it("spendTo pays many with memo and skips inscribed funding", async () => {
   const db = await memdb();
   try {
@@ -378,6 +423,140 @@ it("appInvoke serves game intents under the app origin", async () => {
   } finally {
     globalThis.fetch = realFetch;
     setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+const TOKEN = `${F1}_0`;
+const N2 = "c".repeat(64);
+
+/** makeNet + a 100-unit BSV21 carrier parent + stubbed token-holdings indexer. */
+function makeNetBsv21(selfAddr, holdings) {
+  const net = makeNet(selfAddr);
+  net.hexes[N2] = () => parentHex([{ scriptHex: bsv21TransferScript(selfAddr, TOKEN, "100"), sats: 1 }]);
+  const rows = holdings ?? [{ outpoint: `${N2}_0`, data: { bsv21: { id: TOKEN, op: "transfer", amt: "100" } } }];
+  const fetchFn = async (url, init) => {
+    if (String(url).includes("/1sat/bsv21/")) {
+      return new Response(JSON.stringify(rows), { status: 200 });
+    }
+    return net.fetchFn(url, init);
+  };
+  return { fetchFn };
+}
+
+it("bsv21 offers list exact-amount token carriers", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNetBsv21(addr);
+    await setPolicy(db, "game.example", "allow");
+    const base = { db, chain: new MockChainProvider(), origin: "game.example", fetchFn };
+    const offer = await signSwapOffer({
+      ...base, txid: N2, vout: 0, priceSats: 5000,
+      kind: "bsv21", tokenId: TOKEN, tokenAmount: "100",
+    });
+    assert.equal(offer.kind, "bsv21");
+    assert.equal(offer.version, 3);
+    assert.equal(offer.tokenId, TOKEN);
+    assert.equal(offer.tokenAmount, "100");
+    assert.equal(offer.payScriptHex, p2pkhScript(addr).toHex());
+    assert.equal(offer.priceSats, 5000);
+    const bad = { ...base, txid: N2, vout: 0, priceSats: 5000, kind: "bsv21" };
+    await rejectsCode(signSwapOffer({ ...bad, tokenId: "zzz", tokenAmount: "100" }), "BAD_PARAM");
+    await rejectsCode(signSwapOffer({ ...bad, tokenId: TOKEN }), "BAD_PARAM");
+    await rejectsCode(signSwapOffer({ ...bad, tokenId: TOKEN, tokenAmount: "101" }), "BAD_PARAM");
+    await rejectsCode(signSwapOffer({ ...bad, tokenId: TOKEN, tokenAmount: "100", txid: F1 }), "BAD_PARAM");
+    await rejectsCode(signSwapOffer({ ...bad, kind: "doge", tokenId: TOKEN, tokenAmount: "100" }), "BAD_PARAM");
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("bsv21 completion settles tokens atomically", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNetBsv21(addr);
+    const chain = new MockChainProvider();
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    let seen = "";
+    const origBroadcast = chain.broadcast.bind(chain);
+    chain.broadcast = async (hex) => {
+      seen = hex;
+      return origBroadcast(hex);
+    };
+    await setPolicy(db, "game.example", "allow");
+    const offer = await signSwapOffer({
+      db, chain, origin: "game.example", txid: N2, vout: 0, priceSats: 5000,
+      kind: "bsv21", tokenId: TOKEN, tokenAmount: "100", fetchFn,
+    });
+    const r = await completeSwap({
+      db, chain, origin: "game.example", offer,
+      fee: { to: TO, sats: 100 }, memo: ["TICKETS-BUY", "show-7"],
+      buyerChecks: { expectedSeller: addr, maxPrice: 5000 }, fetchFn,
+    });
+    assert.match(r.txid, /^[0-9a-f]{64}$/);
+    const tx = Transaction.fromHex(seen);
+    // output 0: byte-exact seller terms; output 1: 100 token units to buyer
+    assert.equal(tx.outputs[0].lockingScript.toHex(), offer.payScriptHex);
+    assert.equal(tx.outputs[0].satoshis, 5000);
+    assert.equal(tx.outputs[1].satoshis, 1);
+    const env = parseBsv21Envelope(tx.outputs[1].lockingScript.toHex());
+    assert.equal(env.id, TOKEN);
+    assert.equal(env.amt, "100");
+    assert.equal(tx.outputs[2].satoshis, 100);
+    const rows = await db("pending_txs").where({ txid: r.txid });
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].label, /^swap buy 100 /);
+  } finally {
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("bsv21 completion rejects template, holding, and buyer-check failures", async () => {
+  const db = await memdb();
+  try {
+    await createWallet();
+    const addr = selfAddress();
+    const { fetchFn } = makeNetBsv21(addr);
+    const chain = new MockChainProvider();
+    chain.credit(addr, { txid: F1, vout: 0, value: 100_000, height: 900 });
+    await setPolicy(db, "game.example", "allow");
+    const base = { db, chain, origin: "game.example", fetchFn };
+    const offer = await signSwapOffer({
+      ...base, txid: N2, vout: 0, priceSats: 5000,
+      kind: "bsv21", tokenId: TOKEN, tokenAmount: "100",
+    });
+    const withOffer = { ...base, offer };
+    await rejectsCode(completeSwap({ ...withOffer, offer: { ...offer, version: 2 } }), "BAD_OFFER");
+    await rejectsCode(completeSwap({ ...withOffer, offer: { ...offer, kind: "doge" } }), "BAD_OFFER");
+    await rejectsCode(
+      completeSwap({ ...withOffer, buyerChecks: { expectedSeller: TO } }), "BAD_OFFER",
+    );
+    await rejectsCode(
+      completeSwap({ ...withOffer, buyerChecks: { maxPrice: 4999 } }), "BAD_OFFER",
+    );
+    // spent holding: indexer no longer lists the outpoint
+    const spentNet = makeNetBsv21(addr, []);
+    await rejectsCode(
+      completeSwap({ ...base, fetchFn: spentNet.fetchFn, offer }), "BAD_OFFER",
+    );
+    // holding disagrees on amount
+    const shortNet = makeNetBsv21(addr, [
+      { outpoint: `${N2}_0`, data: { bsv21: { id: TOKEN, op: "transfer", amt: "50" } } },
+    ]);
+    await rejectsCode(
+      completeSwap({ ...base, fetchFn: shortNet.fetchFn, offer }), "BAD_OFFER",
+    );
+  } finally {
     await db.destroy();
     await destroyWallet();
     __resetCache();

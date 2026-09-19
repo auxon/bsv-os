@@ -216,11 +216,29 @@ Size key: **S** = days, single module; **M** = ~1–2 weeks, cross-module;
    Accept: feed/notifications read keyless; a post rebuilds the exact
    B://+MAP+AIP record and renders on twetch.com; the account key never
    funds and never joins the OS identity.
+- **F17 — Generalized atomic asset market.** Problem: the only atomic
+  market is PocketPets' pet-specific order book on a legacy worker, so
+  tickets, art, game items, and Twetch NFTs have no venue where
+  settlement needs no custodian. Behavior: a generic order-book worker
+  (asset kinds, per-market fees, chain verification of parents, payments,
+  and transfers) plus daemon swap templates per kind (v2 ordinals, v3
+  BSV21 with indexer-arbiter + exact-UTXO rule) with buyer verification
+  (expected seller + max price before funding), and Twetch NFT buys
+  through OS custody (atomic when the seller published an offer, direct
+  pay-first spend otherwise). Layer: worker (new, live market untouched)
+  + daemon (swaps, twetchBuy/twetchList) + runner (twetch app).
+  Size: **L**. State: shipped — worker live with verification, v2+v3
+  templates tested, Twetch buy/list flows in the app. Depends: **F2**
+  (runner), **F5** (ordinals), **F14** (fee rails).
+  Accept: list → buy → settle a non-pet ordinal and a BSV21 lot
+  end-to-end; a Twetch buy settles atomically with zero browser keys;
+  the PocketPets suite passes unmodified.
 
 ## Dependency sketch
 
 P3 → F1 → F2 → {F4 → F5, F12}; P3 → F7, F8, F14; F8 ← {F3, F9}; F3 →
-{F6, F10}; P2 → {F4, F11} → F6; F9 → {F13, F14}; F4 → F12 → F13.
+{F6, F10}; P2 → {F4, F11} → F6; F9 → {F13, F14}; F4 → F12 → F13;
+F2 + F5 → F17 (atomic market) → F12 (gig/trade assets).
 
 ## Next 3 (explicit recommendation)
 
