@@ -595,13 +595,14 @@ Panel {
   // App windows outlive the click: `bsv app open` blocks until its window
   // closes, so Open must NOT reuse the single-shot actionProc above — a
   // second Open while one window lives would be swallowed by its running
-  // guard (exactly the one-app-at-a-time symptom). A transient user scope
-  // detaches the opener; the CLI keeps supervising its bridge/window pair
-  // and the scope ends with it. The panel just stops waiting on clicks.
+  // guard (exactly the one-app-at-a-time symptom). A transient user SERVICE
+  // detaches the opener; `--scope` must NOT be used — it waits for the
+  // command and blocks the panel again. The CLI keeps supervising its
+  // bridge/window pair and the unit ends with it. The panel stops waiting.
   Process {
     id: openProc
     property string domain: ""
-    command: ["systemd-run", "--user", "--scope", "--quiet", "bsv", "app", "open", domain]
+    command: ["systemd-run", "--user", "--quiet", "--collect", "bsv", "app", "open", domain]
     onExited: root.refresh()
   }
 
