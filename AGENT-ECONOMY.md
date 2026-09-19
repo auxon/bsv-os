@@ -540,6 +540,7 @@ bsv market fees                                  # operator fee sellers list wit
 bsv market buy <listing> [--origin=agent] [--max=sats]   # atomic buy from a budget
 bsv market list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--origin=agent]
 bsv market cancel <listing>                      # seller-only delist
+bsv market sync <listing> <txid>                 # reconcile a buy whose post raced the indexer
 bsv allow sell4sats 500000          # origin, cap (omit cap = UNCAPPED)
 bsv deny <origin>
 bsv agent mint sell4sats --budget=2000000 --daily=500000 --expiry=30d

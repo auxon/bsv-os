@@ -396,8 +396,10 @@ async function main(): Promise<void> {
         }));
       } else if (mSub === "cancel" && mPos[0]) {
         print(await call("marketCancel", { listing: mPos[0] }));
+      } else if (mSub === "sync" && mPos[0] && mPos[1]) {
+        print(await call("marketSync", { listing: mPos[0], txid: mPos[1] }));
       } else {
-        console.error("usage: bsv market <browse [--kind=ordinal|bsv21]|fees|buy <listing> [--origin=name] [--max=sats]|list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--title=] [--fee-bps=] [--origin=name]|cancel <listing>>");
+        console.error("usage: bsv market <browse [--kind=ordinal|bsv21]|fees|buy <listing> [--origin=name] [--max=sats]|list <outpoint> <priceSats> [--kind=bsv21 --token-id= --amount=] [--title=] [--fee-bps=] [--origin=name]|cancel <listing>|sync <listing> <txid>>");
         process.exitCode = 2;
       }
       break;

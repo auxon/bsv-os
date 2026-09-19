@@ -109,7 +109,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | See NFTs and tokens | `bsv ord list`, `bsv bsv21 list` (also in the bar panel) |
 | Send NFTs and tokens | `bsv ord send <txid:vout> --to <addr>`, `bsv bsv21 send --id <id> --to <addr> --amt <base-units>` (amounts are base units; token change returns automatically) |
 | Trade on the atomic market | `bsv app install market.entangleit.com` → `bsv app open market.entangleit.com` (BRC-100 app; browse, buy atomically, list your ordinals/tokens — approve once with `bsv allow market.entangleit.com [cap]`) |
-| Market from the terminal / agents | `bsv market browse`, `bsv market buy <listing>`, `bsv market list <outpoint> <priceSats>`, `bsv market cancel <listing>` — buys can run under an agent budget (`--origin=<agent>`) |
+| Market from the terminal / agents | `bsv market browse`, `bsv market buy <listing>`, `bsv market list <outpoint> <priceSats>`, `bsv market cancel <listing>` — buys can run under an agent budget (`--origin=<agent>`); `bsv market sync <listing> <txid>` reconciles a post that raced the indexer |
 | Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery verified peer-to-peer) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |

@@ -1403,6 +1403,48 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     return { cancelled: true, origin: dot };
   },
   /**
+   * Reconcile a broadcast buy with the market: post the buy (+settle for
+   * atomic swaps) for a tx that already exists. Use when a buy's market
+   * post failed because the indexer had not seen the fresh tx yet —
+   * idempotent when the listing already recorded the same txid.
+   */
+  marketSync: async (params) => {
+    const { listing, txid } = p(params) as { listing?: unknown; txid?: unknown };
+    if (typeof listing !== "string" || !listing) {
+      throw Object.assign(new Error("listing (asset outpoint) required"), { code: "BAD_PARAM" });
+    }
+    if (typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
+      throw Object.assign(new Error("txid must be a 64-hex transaction id"), { code: "BAD_PARAM" });
+    }
+    const clean = txid.toLowerCase();
+    const l = await fetchListing(listing.replace("_", "."));
+    if (!l) throw Object.assign(new Error(`unknown listing ${listing}`), { code: "NOT_FOUND" });
+    if (l.buyTxid === clean || l.transferTxid === clean) {
+      return { listing: l.origin, txid: clean, posted: true, settled: l.status === "sold", status: l.status };
+    }
+    if (l.status !== "active") {
+      throw Object.assign(new Error(`listing is ${l.status} with a different tx recorded`), { code: "ALREADY_SOLD" });
+    }
+    let posted = false;
+    let postError: string | undefined;
+    try {
+      await markBought(l.origin, clean, "sync");
+      posted = true;
+    } catch (e) {
+      postError = e instanceof Error ? e.message : String(e);
+    }
+    let settled = false;
+    if (posted && l.sellerUnlock) {
+      try {
+        await markSettled(l.origin, clean);
+        settled = true;
+      } catch {
+        /* settle is bookkeeping; the swap already moved the asset */
+      }
+    }
+    return { listing: l.origin, txid: clean, posted, settled, status: l.status, ...(postError ? { postError } : {}) };
+  },
+  /**
    * Token UTXOs for one tokenId: which of our wallet UTXOs carry the
    * token and how much. Listing is exact-UTXO (partial fills can't be
    * atomic-safe), so the sell UI needs these, not just balances.

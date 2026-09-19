@@ -148,6 +148,18 @@ const TOOLS = [
       required: ["outpoint", "priceSats"],
     },
   },
+  {
+    name: "market_sync",
+    description: "Reconcile a completed buy with the market when the immediate post failed (indexers lag fresh broadcasts): posts the buy (+settle for atomic swaps) for a txid that already exists. Idempotent when the listing already recorded that txid.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        listing: { type: "string", description: "asset outpoint of the listing that was bought" },
+        txid: { type: "string", description: "64-hex txid of the broadcast buy" },
+      },
+      required: ["listing", "txid"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -271,6 +283,15 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             ...(typeof args.tokenAmount === "string" ? { tokenAmount: args.tokenAmount } : {}),
             ...(typeof args.title === "string" && args.title ? { title: args.title } : {}),
           }));
+        }
+        case "market_sync": {
+          if (typeof args.listing !== "string" || !args.listing) {
+            throw new McpError(ErrorCode.InvalidParams, "listing (asset outpoint) is required");
+          }
+          if (typeof args.txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(args.txid)) {
+            throw new McpError(ErrorCode.InvalidParams, "txid must be a 64-hex transaction id");
+          }
+          return text(await callDaemon("marketSync", { listing: args.listing, txid: args.txid }));
         }
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {

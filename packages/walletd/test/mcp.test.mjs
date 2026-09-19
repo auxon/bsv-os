@@ -13,12 +13,12 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the thirteen wallet tools", async () => {
+test("lists the fourteen wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, [
     "anchor_tip", "events_poll", "get_version", "jev_decide", "jev_status",
-    "list_pending", "market_browse", "market_buy", "market_list",
+    "list_pending", "market_browse", "market_buy", "market_list", "market_sync",
     "policy_probe", "wallet_balance", "wallet_status", "x402_pay",
   ]);
   await client.close();
@@ -50,6 +50,12 @@ test("market tools stamp the agent origin and validate input", async () => {
   await assert.rejects(
     client.callTool({ name: "market_list", arguments: { outpoint: "a_0", priceSats: 0 } }),
     /priceSats/,
+  );
+  await client.callTool({ name: "market_sync", arguments: { listing: "a.b", txid: "AB".repeat(32) } });
+  assert.deepEqual(seen[3], { method: "marketSync", params: { listing: "a.b", txid: "AB".repeat(32) } });
+  await assert.rejects(
+    client.callTool({ name: "market_sync", arguments: { listing: "a.b", txid: "zz" } }),
+    /txid/,
   );
   await client.close();
   await server.close();

@@ -29,6 +29,8 @@ export interface MarketListing {
   feeBps: number;
   feeAddress: string;
   status: string;
+  buyTxid: string | null;
+  transferTxid: string | null;
 }
 
 type FetchFn = typeof fetch;
@@ -97,17 +99,55 @@ export function postListing(body: Record<string, unknown>, fetchFn: FetchFn = fe
   return post("/v1/market/list", body, fetchFn);
 }
 
+export interface RetryOpts {
+  attempts?: number;
+  /** Delay before attempt N (1-based retry index); default 4s, 8s, 12s… */
+  delayMs?: (retry: number) => number;
+}
+
+/**
+ * Post a buy/settle with backoff, retrying only `TX_UNKNOWN`: indexers
+ * lag behind a fresh broadcast by up to a couple of minutes, and that is
+ * exactly the window where the market cannot verify yet. Every other
+ * error (bad payment, wrong fee) is final and fails fast.
+ */
+async function postSettlement(path: string, body: Record<string, unknown>, fetchFn: FetchFn, retry: RetryOpts): Promise<void> {
+  const attempts = Math.max(1, retry.attempts ?? 5);
+  const delay = retry.delayMs ?? ((n: number) => 4000 * n);
+  for (let i = 1; ; i++) {
+    try {
+      await post(path, body, fetchFn);
+      return;
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code !== "TX_UNKNOWN" || i >= attempts) throw e;
+      await new Promise((r) => setTimeout(r, delay(i)));
+    }
+  }
+}
+
 export function markBought(
   origin: string,
   buyTxid: string,
   buyerHandle: string | undefined,
   fetchFn: FetchFn = fetch,
+  retry: RetryOpts = {},
 ): Promise<void> {
-  return post("/v1/market/buy", { origin, buyTxid, ...(buyerHandle ? { buyerHandle } : {}) }, fetchFn);
+  return postSettlement(
+    "/v1/market/buy",
+    { origin, buyTxid, ...(buyerHandle ? { buyerHandle } : {}) },
+    fetchFn,
+    retry,
+  );
 }
 
-export function markSettled(origin: string, transferTxid: string, fetchFn: FetchFn = fetch): Promise<void> {
-  return post("/v1/market/settle", { origin, transferTxid }, fetchFn);
+export function markSettled(
+  origin: string,
+  transferTxid: string,
+  fetchFn: FetchFn = fetch,
+  retry: RetryOpts = {},
+): Promise<void> {
+  return postSettlement("/v1/market/settle", { origin, transferTxid }, fetchFn, retry);
 }
 
 export function cancelListing(origin: string, seller: string, fetchFn: FetchFn = fetch): Promise<void> {

@@ -230,6 +230,7 @@ function marketListing(over = {}) {
     origin: `${N1}.0`, assetKind: "ordinal", title: "Test ordinal", image: null,
     priceSats: 5000, seller: TO, sellerUnlock: null, payScript: null, inputScript: null,
     tokenId: null, tokenAmount: null, feeBps: 200, feeAddress: TO, status: "active",
+    buyTxid: null, transferTxid: null,
     ...over,
   };
 }
@@ -403,6 +404,84 @@ it("marketCancel posts the seller cancel", async () => {
     assert.equal(posted.body.seller, addr);
     const bad = await dispatch({ method: "marketCancel", params: {}, id: 25 });
     assert.equal(bad.error.code, "BAD_PARAM");
+  } finally {
+    globalThis.fetch = realFetch;
+    setBackend(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("market settlement posts retry TX_UNKNOWN with backoff", async () => {
+  const { markBought } = await import("../src/market.ts");
+  let n = 0;
+  const flaky = async () => {
+    n += 1;
+    if (n < 3) return Response.json({ error: { code: "TX_UNKNOWN", message: "not yet" } }, { status: 502 });
+    return Response.json({ ok: true });
+  };
+  await markBought("a.b", "ab".repeat(32), "x", flaky, { attempts: 5, delayMs: () => 1 });
+  assert.equal(n, 3);
+  let m = 0;
+  const always = async () => {
+    m += 1;
+    return Response.json({ error: { code: "TX_UNKNOWN", message: "not yet" } }, { status: 502 });
+  };
+  await assert.rejects(
+    markBought("a.b", "ab".repeat(32), "x", always, { attempts: 3, delayMs: () => 1 }),
+    /not yet/,
+  );
+  assert.equal(m, 3);
+  // non-retryable errors fail fast
+  let k = 0;
+  const bad = async () => {
+    k += 1;
+    return Response.json({ error: { code: "BAD_PAYMENT", message: "nope" } }, { status: 400 });
+  };
+  await assert.rejects(
+    markBought("a.b", "ab".repeat(32), "x", bad, { attempts: 5, delayMs: () => 1 }),
+    /nope/,
+  );
+  assert.equal(k, 1);
+});
+
+it("marketSync reconciles a lagging buy post", async () => {
+  const { db } = await backend();
+  const realFetch = globalThis.fetch;
+  try {
+    await createWallet();
+    const net = makeNet(selfAddress());
+    const atomic = marketListing({
+      sellerUnlock: "ab".repeat(50),
+      payScript: `76a914${"11".repeat(20)}88ac`,
+      inputScript: `76a914${"11".repeat(20)}88ac`,
+    });
+    const { fetchFn, calls } = marketStub(net.fetchFn, { listing: atomic });
+    globalThis.fetch = fetchFn;
+    const res = await dispatch({ method: "marketSync", params: { listing: `${N1}.0`, txid: "AB".repeat(32) }, id: 30 });
+    assert.equal(res.result.posted, true);
+    assert.equal(res.result.settled, true);
+    assert.ok(calls.some((c) => c.path === "/v1/market/buy"));
+    assert.ok(calls.some((c) => c.path === "/v1/market/settle"));
+    // idempotent when the same txid is already recorded
+    const again = marketStub(net.fetchFn, {
+      listing: marketListing({ status: "paid", buyTxid: "ab".repeat(32), sellerUnlock: "ab".repeat(50) }),
+    });
+    globalThis.fetch = again.fetchFn;
+    const idem = await dispatch({ method: "marketSync", params: { listing: `${N1}.0`, txid: "AB".repeat(32) }, id: 31 });
+    assert.equal(idem.result.posted, true);
+    assert.equal(idem.result.settled, false);
+    assert.equal(again.calls.length, 0);
+    // a different tx on a non-active listing is a conflict
+    const conflict = marketStub(net.fetchFn, {
+      listing: marketListing({ status: "sold", transferTxid: "cd".repeat(32) }),
+    });
+    globalThis.fetch = conflict.fetchFn;
+    const bad = await dispatch({ method: "marketSync", params: { listing: `${N1}.0`, txid: "AB".repeat(32) }, id: 32 });
+    assert.equal(bad.error.code, "ALREADY_SOLD");
+    const badTx = await dispatch({ method: "marketSync", params: { listing: `${N1}.0`, txid: "zz" }, id: 33 });
+    assert.equal(badTx.error.code, "BAD_PARAM");
   } finally {
     globalThis.fetch = realFetch;
     setBackend(null);
