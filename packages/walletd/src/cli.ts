@@ -709,6 +709,12 @@ async function main(): Promise<void> {
       const ordArg = ordRest.find((a) => !a.startsWith("--"));
       if (ordSub === "list" || ordSub === undefined) {
         print(await call("ordList", flag(rest, "address") ? { address: flag(rest, "address") } : {}));
+      } else if (ordSub === "inscribe" && ordArg) {
+        print(await call("ordInscribe", {
+          dataHex: ordArg,
+          contentType: flag(rest, "type") ?? "text/plain",
+          ...(flag(rest, "origin") !== undefined ? { origin: flag(rest, "origin") } : {}),
+        }));
       } else if (ordSub === "send" && ordArg) {
         const [txid, vout] = ordArg.split(":");
         const to = flag(rest, "to") ?? ordRest.filter((a) => !a.startsWith("--"))[1];

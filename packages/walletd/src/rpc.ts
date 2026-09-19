@@ -839,6 +839,26 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const addr = typeof address === "string" && address ? address : selfAddress();
     return { tokens: await bsv21For(addr) };
   },
+  /** Mint a 1-sat inscription (dataHex, contentType) from the wallet. */
+  ordInscribe: async (params) => {
+    const b = needBackend();
+    const { dataHex, contentType, fee, memo, origin } = p(params) as {
+      dataHex?: unknown; contentType?: unknown; fee?: unknown; memo?: unknown; origin?: unknown;
+    };
+    if (typeof dataHex !== "string" || !dataHex) {
+      throw Object.assign(new Error("dataHex required"), { code: "BAD_PARAM" });
+    }
+    if (typeof contentType !== "string" || !contentType) {
+      throw Object.assign(new Error("contentType required"), { code: "BAD_PARAM" });
+    }
+    return inscribeMint({
+      db: b.db, chain: b.chain,
+      origin: typeof origin === "string" && origin ? origin : "cli",
+      dataHex, contentType,
+      ...(fee && typeof fee === "object" ? { fee: fee as { to: string; sats: number } } : {}),
+      ...(Array.isArray(memo) ? { memo: memo as string[] } : {}),
+    });
+  },
   ordSend: async (params) => {
     const b = needBackend();
     const { txid, vout, to, origin } = p(params) as {
