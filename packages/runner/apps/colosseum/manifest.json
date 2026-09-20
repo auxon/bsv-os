@@ -1,0 +1,13 @@
+{
+  "name": "Ordinal Colosseum",
+  "short_name": "Colosseum",
+  "start_url": "https://localhost:2121/colosseum/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Ordinal Colosseum: reads your 1Sat ordinals through the local wallet, runs deterministic battles on this machine, and can inscribe an optional 1-sat champion medal when you clear the gauntlet.",
+      "spendingAuthorization": { "amount": 20000, "description": "optional champion medal inscription (1 sat + miner fee); every mint still gates on policy approval" }
+    }
+  }
+}

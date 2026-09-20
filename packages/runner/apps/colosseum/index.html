@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ordinal Colosseum</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">⚔️</span>
+    <div>
+      <h1>Ordinal Colosseum</h1>
+      <p class="tag">Your ordinals fight. Stats are derived from the chain.</p>
+    </div>
+  </div>
+  <div class="wallet-chip" id="wallet-chip">checking wallet…</div>
+  <nav>
+    <button data-view="roster" class="active">Roster</button>
+    <button data-view="fame">Hall of Fame</button>
+    <button data-view="about">How it works</button>
+  </nav>
+</header>
+
+<main>
+  <section id="view-roster" class="view active">
+    <div class="toolbar">
+      <button id="refresh">Refresh ordinals</button>
+      <button id="scout">Scout a fighter</button>
+      <span id="roster-note" class="dim"></span>
+    </div>
+    <div id="roster" class="grid"></div>
+  </section>
+  <section id="view-battle" class="view"></section>
+  <section id="view-fame" class="view"></section>
+  <section id="view-about" class="view"></section>
+</main>
+
+<footer>bsvOS · 1Sat ordinals · deterministic battles · optional champion medal on-chain</footer>
+<div id="modal" class="modal hidden"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

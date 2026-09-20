@@ -49,6 +49,10 @@ fetch skipped. Production installs stay https-manifest-only.
   (MAIN-world `window.bsv`). No extension API permissions, no remote code,
   loopback-only network (all asserted in `test/extension.test.mjs`).
 - `demo/`: `manifest.json`, `index.html`, `serve.mjs`.
+- `apps/`: bundled runner apps served from the daemon's own origin —
+  `twetch/` (companion), `explorer/` (local chain explorer), and
+  `colosseum/` (Ordinal Colosseum: your ordinals fight; deterministic stats
+  from inscription origins, optional champion-medal inscription).
 - `store.json`: curated catalog for `bsv store` (v1: the loopback demo,
   flagged `devOnly`; real entries land as Metanet apps ship manifests).
 

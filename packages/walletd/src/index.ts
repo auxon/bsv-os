@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
 import { dispatch, setBackend } from "./rpc.ts";
+import { resolveRunnerAppFile } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { migrate, openDb } from "./storage.ts";
@@ -122,22 +123,7 @@ function originHost(origin: string | undefined): string | null {
 }
 
 /** Bundled runner apps served from the daemon's own origin. */
-const RUNNER_APPS = new Set(["twetch", "explorer"]);
-
-const RUNNER_APP_ASSETS: Record<string, string> = {
-  "/": "index.html",
-  "/index.html": "index.html",
-  "/app.js": "app.js",
-  "/styles.css": "styles.css",
-  "/manifest.json": "manifest.json",
-};
-
-const RUNNER_APP_MIME: Record<string, string> = {
-  "index.html": "text/html; charset=utf-8",
-  "app.js": "text/javascript; charset=utf-8",
-  "styles.css": "text/css; charset=utf-8",
-  "manifest.json": "application/json",
-};
+const RUNNER_APPS = new Set(["twetch", "explorer", "colosseum"]);
 
 function runnerAppDir(name: string): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -292,17 +278,16 @@ function handler() {
         : null;
     if (appMatch && RUNNER_APPS.has(appMatch[1]!)) {
       const name = appMatch[1]!;
-      const rel = appMatch[2] ?? "/";
-      const file = RUNNER_APP_ASSETS[rel === "" ? "/" : rel];
-      const dir = file ? runnerAppDir(name) : null;
-      if (!file || !dir) {
+      const dir = runnerAppDir(name);
+      const asset = dir ? resolveRunnerAppFile(dir, appMatch[2] ?? "/") : null;
+      if (!asset) {
         res.writeHead(404, { "content-type": "text/plain" });
         res.end("not found");
         return;
       }
       try {
-        const body = fs.readFileSync(path.join(dir, file));
-        res.writeHead(200, { "content-type": RUNNER_APP_MIME[file] ?? "application/octet-stream", "cache-control": "no-store" });
+        const body = fs.readFileSync(asset.file);
+        res.writeHead(200, { "content-type": asset.mime, "cache-control": "no-store" });
         res.end(body);
       } catch {
         res.writeHead(500, { "content-type": "text/plain" });

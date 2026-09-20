@@ -103,6 +103,54 @@ export function stableStringify(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
+
+/** MIME map for runner app assets served from the daemon's own origin. */
+const RUNNER_APP_MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".woff2": "font/woff2",
+};
+
+/**
+ * Resolve a request path inside a runner app directory. Returns null for
+ * traversal attempts, missing files, and directories, so a bundled app can
+ * ship any static assets without opening the daemon's filesystem.
+ */
+export function resolveRunnerAppFile(dir: string, relPath: string): { file: string; mime: string } | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(relPath);
+  } catch {
+    return null;
+  }
+  if (decoded.includes("\0")) return null;
+  const cleaned = decoded.replace(/^[/\\]+/, "");
+  const root = path.resolve(dir);
+  const resolved = path.resolve(root, cleaned === "" ? "index.html" : cleaned);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  return { file: resolved, mime: RUNNER_APP_MIME[path.extname(resolved).toLowerCase()] ?? "application/octet-stream" };
+}
+
 export function manifestSha256(manifest: unknown): string {
   return createHash("sha256").update(stableStringify(manifest), "utf8").digest("hex");
 }

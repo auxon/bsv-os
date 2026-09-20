@@ -4,8 +4,11 @@ import knex from "knex";
 import {
   appIdFor, applyAppUpdate, checkAppUpdates, diffPermissions, getApp, installApp,
   intentFromMemo, isLoopbackHost, listApps, manifestSha256, manifestUrlFor, readCatalog, removeApp,
-  stableStringify, storeList, validateIntents, validateManifest,
+  resolveRunnerAppFile, stableStringify, storeList, validateIntents, validateManifest,
 } from "../src/apps.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { migrate } from "../src/storage.ts";
 import { desktopFile } from "../src/desktop.ts";
 
@@ -367,4 +370,27 @@ test("intentFromMemo maps the action tag to label + description", () => {
   assert.deepEqual(intentFromMemo(undefined, undefined), {});
   assert.deepEqual(intentFromMemo([], undefined), {});
   assert.deepEqual(intentFromMemo("not-an-array", undefined), {});
+});
+
+test("resolveRunnerAppFile serves app assets and refuses traversal", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runner-app-"));
+  fs.writeFileSync(path.join(dir, "index.html"), "<!doctype html>");
+  fs.mkdirSync(path.join(dir, "sub"));
+  fs.writeFileSync(path.join(dir, "sub", "logic.js"), "export const x = 1;");
+  fs.writeFileSync(path.join(dir, "icon.png"), "png");
+  try {
+    assert.deepEqual(resolveRunnerAppFile(dir, "/"), { file: path.join(dir, "index.html"), mime: "text/html; charset=utf-8" });
+    assert.deepEqual(resolveRunnerAppFile(dir, ""), { file: path.join(dir, "index.html"), mime: "text/html; charset=utf-8" });
+    assert.equal(resolveRunnerAppFile(dir, "/sub/logic.js").mime, "text/javascript; charset=utf-8");
+    assert.equal(resolveRunnerAppFile(dir, "/icon.png").mime, "image/png");
+    assert.equal(resolveRunnerAppFile(dir, "/manifest.json"), null, "missing files are null");
+    assert.equal(resolveRunnerAppFile(dir, "/sub"), null, "directories are not served");
+    assert.equal(resolveRunnerAppFile(dir, "/../outside.txt"), null, "plain traversal refused");
+    assert.equal(resolveRunnerAppFile(dir, "/%2e%2e%2foutside.txt"), null, "encoded traversal refused");
+    assert.equal(resolveRunnerAppFile(dir, "/%00.png"), null, "null bytes refused");
+    assert.equal(resolveRunnerAppFile(dir, "/%2e%2e%2foutside.txt"), null, "encoded traversal refused");
+    assert.equal(resolveRunnerAppFile(dir, "/nope%2F..%2Findex.html").file, path.join(dir, "index.html"), "decoded paths that stay inside are allowed");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

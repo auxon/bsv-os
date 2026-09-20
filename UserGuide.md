@@ -194,6 +194,28 @@ and API auth only — it never funds and never joins your OS wallet identity.
 The network fee is policy-gated under the `twetch` origin: the first post is
 denied until `bsv allow twetch` (optionally with a cap).
 
+### Ordinal Colosseum (your ordinals fight)
+
+A bundled game that turns every 1Sat ordinal in your wallet into a fighter.
+Stats, rarity, name, and class ability are derived deterministically from the
+inscription's origin (`sha256(origin|contentType|contentLength|sequence)`), so
+the same ordinal always fields the same fighter and anyone can re-derive it.
+Clear the seven-floor gauntlet and you can optionally inscribe a 1-sat
+champion medal through the runner bridge — the only spend in the game, and it
+goes through the normal policy approval.
+
+```bash
+bsv unlock                                            # so the roster can read your ordinals
+bsv app install https://localhost:2121/colosseum/
+bsv app open localhost                                # play in the sandboxed runner
+```
+
+No ordinals yet? **Scout a fighter** generates a local seed that behaves
+exactly like an on-chain one. Battles are turn-based and deterministic (the
+RNG is a hash chain seeded by the run), so a run replays identically from the
+same fighter, seed, and moves. Best floors are kept locally in the app's Hall
+of Fame. Details: `packages/runner/apps/colosseum/README.md`.
+
 ## 5. AI agents and allowances
 
 Any MCP-capable agent (Claude Code, OpenCode, …) connects with:
