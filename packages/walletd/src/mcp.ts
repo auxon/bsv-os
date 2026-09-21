@@ -52,6 +52,11 @@ const TOOLS = [
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
+    name: "p2p_peers",
+    description: "Other bsvOS wallets discovered on the local network by the daemon's direct P2P channel: identity key, address, online flag. Messages to online peers are delivered directly; others fall back to the encrypted relay.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
     name: "x402_pay",
     description: "Pay-per-call metered fetch: quotes, pays from this agent's budget through policy, retries with proof, returns the resource + receipt. Denials work exactly like anchor_tip.",
     inputSchema: {
@@ -221,6 +226,8 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
         }
         case "list_pending":
           return text(await callDaemon("pending"));
+        case "p2p_peers":
+          return text(await callDaemon("p2pPeers"));
         case "x402_pay": {
           if (typeof args.url !== "string" || !args.url) {
             throw new McpError(ErrorCode.InvalidParams, "url is required");

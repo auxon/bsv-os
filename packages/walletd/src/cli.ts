@@ -704,6 +704,18 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "p2p": {
+      const [p2pSub] = rest;
+      if (p2pSub === "status" || p2pSub === undefined) {
+        print(await call("p2pStatus"));
+      } else if (p2pSub === "peers") {
+        print(await call("p2pPeers"));
+      } else {
+        console.error("usage: bsv p2p <status|peers>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

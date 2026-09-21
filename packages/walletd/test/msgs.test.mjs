@@ -30,6 +30,8 @@ import {
   parseEnvelope,
   readDm,
   sendDm,
+  sendDmPreferred,
+  storeInboundEnvelope,
   syncInbox,
 } from "../src/msgs.ts";
 import { msgWallet, msgWalletFull } from "../src/msgwallet.ts";
@@ -54,6 +56,11 @@ test("envelopes validate strictly", () => {
   assert.throws(() => parseEnvelope({ ...good, v: 2 }), /version/);
   assert.throws(() => parseEnvelope({ ...good, from: "xyz" }), /pubkeys/);
   assert.throws(() => parseEnvelope({ ...good, body: "zz" }), /hex/);
+  // caught live: the wallet used its address as the sender, which relay
+  // recipients cannot decrypt. Parties must be identity keys.
+  const addr = "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU";
+  assert.throws(() => packEnvelope(addr, PEER, "deadbeef"), /pubkeys/);
+  assert.throws(() => packEnvelope(PEER, addr, "deadbeef"), /pubkeys/);
 });
 
 test("relay list normalizes double-encoded wrapped bodies", async () => {
@@ -223,6 +230,68 @@ it("outbox stores ciphertext; inbox decrypts on read; ack marks", async () => {
     assert.deepEqual(f.calls.acked, ["in-1"]);
     const all = await listStored(db);
     assert.equal(all.length, 4);
+  } finally {
+    __setRelay(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("p2p-first send: direct when delivered, relay fallback reuses the id, p2p acks skip the relay", async () => {
+  const db = await memdb();
+  const f = fakeRelay();
+  __setRelay(f.relay);
+  try {
+    await createWallet();
+    const self = identityPubkeyHex();
+
+    // Live direct peer: relay is never touched.
+    const direct = { online: () => true, deliver: async () => true };
+    const a = await sendDmPreferred(db, f.relay, direct, self, self, "direct hello");
+    assert.equal(a.transport, "p2p");
+    assert.equal(a.delivered, true);
+    assert.equal(f.calls.sent.length, 0);
+
+    // Peer online but the frame is not acked: same id falls back to relay.
+    let seenId = null;
+    let seenEnvelope = null;
+    const failing = {
+      online: () => true,
+      deliver: async (to, id, envelope) => {
+        seenId = id;
+        seenEnvelope = envelope;
+        return false;
+      },
+    };
+    const b = await sendDmPreferred(db, f.relay, failing, self, self, "fallback hello");
+    assert.equal(b.transport, "relay");
+    assert.equal(b.id, seenId);
+    assert.equal(f.calls.sent.length, 1);
+    assert.equal(f.calls.sent[0].messageId, seenId);
+    assert.deepEqual(f.calls.sent[0].body, seenEnvelope);
+
+    // The p2p copy and a relay copy share an id: inbound dedupes. Use a
+    // fresh id — sender and recipient live in different wallets in prod.
+    const dup = "dup-1";
+    const first = await storeInboundEnvelope(db, dup, seenEnvelope, "p2p");
+    assert.equal(first.fresh, true);
+    const second = await storeInboundEnvelope(db, dup, seenEnvelope, "relay");
+    assert.equal(second.fresh, false);
+
+    // Reading the p2p row decrypts; acking it never calls the relay.
+    const read = await readDm(db, dup);
+    assert.equal(read.text, "fallback hello");
+    const acked = await ackDm(db, f.relay, dup);
+    assert.equal(acked.acked, true);
+    assert.deepEqual(f.calls.acked, []);
+
+    // Rows carry their transport for the UI.
+    const all = await listStored(db);
+    const byId = Object.fromEntries(all.map((r) => [r.id, r.transport]));
+    assert.equal(byId[a.id], "p2p");
+    assert.equal(byId[b.id], "relay");
+    assert.equal(byId[dup], "p2p");
   } finally {
     __setRelay(null);
     await db.destroy();

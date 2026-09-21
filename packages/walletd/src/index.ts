@@ -11,11 +11,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
-import { dispatch, setBackend } from "./rpc.ts";
+import { dispatch, setBackend, setP2P } from "./rpc.ts";
 import { resolveRunnerAppFile } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { migrate, openDb } from "./storage.ts";
+import { P2PNode, P2P_DEFAULT_PORT, P2P_DISCOVERY_PORT, custodyP2PCrypto } from "./p2p.ts";
+import { storeInboundEnvelope } from "./msgs.ts";
 import { createBrc100Wallet, type Brc100Context } from "./brc100.ts";
 import { check } from "./policy.ts";
 import { stringifyBRC100, WalletWireProcessor } from "@bsv/sdk";
@@ -427,6 +429,32 @@ export async function main(): Promise<void> {
     const chain = new CombinedProvider();
     setBackend({ db, chain });
     setWireBackend({ db, chain });
+
+    // F6.2 direct channel: LAN discovery + authenticated TCP sessions.
+    // Inbound frames store ciphertext through the same path as the relay.
+    if (process.env.BSV_P2P !== "0") {
+      const p2p = new P2PNode({
+        crypto: custodyP2PCrypto,
+        port: Number(process.env.BSV_P2P_PORT) || P2P_DEFAULT_PORT,
+        discoveryPort: Number(process.env.BSV_P2P_DISCOVERY_PORT) || P2P_DISCOVERY_PORT,
+        seeds: process.env.BSV_P2P_PEERS,
+        onDm: (id, envelope) => storeInboundEnvelope(db, id, envelope, "p2p"),
+      });
+      try {
+        await p2p.start();
+        setP2P(p2p);
+        const s = p2p.status();
+        // eslint-disable-next-line no-console
+        console.log(`bsv-walletd p2p on 0.0.0.0:${p2p.port}${s.discovery ? " (LAN discovery on)" : " (discovery unavailable, TCP only)"}`);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("p2p disabled:", err instanceof Error ? err.message : err);
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.log("bsv-walletd p2p disabled (BSV_P2P=0)");
+    }
+
     const loop = async (): Promise<void> => {
       try {
         const res = await tick(

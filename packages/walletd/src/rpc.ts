@@ -1,4 +1,4 @@
-import { createWallet, exportEntropy, getStatus, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
+import { createWallet, exportEntropy, getStatus, identityPubkeyHex, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import {
   twetchAccountImport,
   twetchAccountImportFromPhrase,
@@ -30,7 +30,8 @@ import {
 } from "./nightshift.ts";
 import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./recovery.ts";
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
-import { ackDm, listStored, liveRelay, readDm, sendDm, syncInbox } from "./msgs.ts";
+import { ackDm, listStored, liveRelay, readDm, sendDmPreferred, syncInbox } from "./msgs.ts";
+import type { P2PChannel } from "./p2p.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -82,6 +83,13 @@ let backend: MonitorBackend | null = null;
 /** Wired by index.ts at boot; RPC stays usable without it. */
 export function setBackend(b: MonitorBackend | null): void {
   backend = b;
+}
+
+let p2pChannel: P2PChannel | null = null;
+
+/** Wired by index.ts when the F6.2 direct channel starts. */
+export function setP2P(channel: P2PChannel | null): void {
+  p2pChannel = channel;
 }
 
 function needBackend(): MonitorBackend {
@@ -683,8 +691,8 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { to, text } = p(params) as { to?: unknown; text?: unknown };
     if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient identity key required"), { code: "BAD_PARAM" });
     if (typeof text !== "string" || !text) throw Object.assign(new Error("text required"), { code: "BAD_PARAM" });
-    const self = selfAddress();
-    return sendDm(b.db, liveRelay(), self, to, text);
+    const self = identityPubkeyHex();
+    return sendDmPreferred(b.db, liveRelay(), p2pChannel, self, to, text);
   },
   msgSync: async () => {
     const b = needBackend();
@@ -697,7 +705,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     return {
       messages: rows.map((r) => ({
         id: r.id, peer: r.peer, direction: r.direction,
-        createdAt: r.createdAt, acked: r.acked === 1,
+        createdAt: r.createdAt, acked: r.acked === 1, transport: r.transport,
       })),
     };
   },
@@ -724,6 +732,19 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       throw Object.assign(new Error("username required"), { code: "BAD_PARAM" });
     }
     return liveRelay().register(username);
+  },
+  /** F6.2 direct channel: discovery + session state (no keys involved). */
+  p2pStatus: async () => {
+    needBackend();
+    if (!p2pChannel) {
+      return { enabled: false, identityKey: null, port: null, discovery: false, sessions: 0, peers: 0 };
+    }
+    return p2pChannel.status();
+  },
+  p2pPeers: async () => {
+    needBackend();
+    if (!p2pChannel) return { enabled: false, peers: [] };
+    return { enabled: true, peers: p2pChannel.peers() };
   },
   /**
    * F10 social recovery. Setup/rotate need the wallet unlocked and print

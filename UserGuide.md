@@ -110,7 +110,8 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Send NFTs and tokens | `bsv ord send <txid:vout> --to <addr>`, `bsv bsv21 send --id <id> --to <addr> --amt <base-units>` (amounts are base units; token change returns automatically) |
 | Trade on the atomic market | `bsv app install market.entangleit.com` → `bsv app open market.entangleit.com` (BRC-100 app; browse, buy atomically, list your ordinals/tokens — approve once with `bsv allow market.entangleit.com [cap]`) |
 | Market from the terminal / agents | `bsv market browse`, `bsv market buy <listing>`, `bsv market list <outpoint> <priceSats>`, `bsv market cancel <listing>` — listing an ordinal locks it on-chain (OrdLock, miner fee) and cancelling unlocks it; buys can run under an agent budget (`--origin=<agent>`); `bsv market sync <listing> <txid>` reconciles a post that raced the indexer |
-| Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH, relay inbox; delivery verified peer-to-peer) |
+| Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH; the wallet panel has Inbox/Compose — sends go direct to peers on your network, otherwise over the encrypted relay) |
+| Find wallets on your network | `bsv p2p peers` (auto-discovered via LAN beacons; `bsv p2p status` for the channel itself) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
@@ -149,6 +150,39 @@ bsv logout                          # revoke refresh token, clear session
 
 Quickshell users can also tap **Sign in with Twetch** in the panel once the
 client id is configured — the CLI does the browser round-trip for you.
+
+### Peer-to-peer messaging (no relay needed)
+
+Wallets on the same network find each other automatically: the daemon
+announces a signed presence beacon on the LAN every few seconds, and opens
+an authenticated TCP channel to peers it meets. `bsv msg send` then prefers
+the direct channel when the recipient is live and falls back to the
+encrypted MessageBox relay otherwise — the message id and envelope are the
+same in both legs, so a send can never duplicate. Rows in `bsv msg list`
+say `direct` or `relay`.
+
+Discovery and handshake details: beacons carry only the identity key plus
+the listening port; the channel proves the key with a BRC-42 challenge,
+both directions, scoped to `[2, "bsvos p2p v1"]`. Message bodies are the
+standard ECDH ciphertext — no plaintext anywhere, same store as the relay.
+
+```bash
+bsv p2p peers                            # live wallets on your network
+bsv p2p status                           # channel state (port, sessions)
+BSV_P2P_PEERS=<key>@<host>:<port>[,…]    # static peers (VPN/cross-subnet)
+```
+
+Set `BSV_P2P=0` in the daemon's environment (it already sources
+`~/.config/bsv-walletd.env`) to run relay-only — discovery off, no
+listener, sends always via the relay.
+
+On machines with a host firewall (Omarchy ships ufw on), two rules let
+peers actually reach you:
+
+```bash
+sudo ufw allow 21212/udp   # LAN beacons
+sudo ufw allow 21213/tcp   # direct channel
+```
 
 ### Twetch companion (feed, notifications, posting)
 

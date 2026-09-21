@@ -23,6 +23,7 @@ import { randomBytes } from "node:crypto";
 import { AuthFetch, type WalletInterface } from "@bsv/sdk";
 import { dmDecrypt, dmEncrypt } from "./custody.ts";
 import { msgWalletFull } from "./msgwallet.ts";
+import type { P2PChannel } from "./p2p.ts";
 
 export const MESSAGE_BOX = "https://messagebox.1sat.app";
 /** Overridable for probing relay box semantics (default: our own box). */
@@ -43,6 +44,7 @@ export interface StoredMessage {
   envelope: string;
   createdAt: number;
   acked: number;
+  transport: "relay" | "p2p";
 }
 
 function fail(code: string, message: string): never {
@@ -50,6 +52,12 @@ function fail(code: string, message: string): never {
 }
 
 export function packEnvelope(from: string, to: string, bodyHex: string): DmEnvelope {
+  // Parties are identity keys, never addresses — the recipient derives the
+  // DM key from `from`, and an address here would make the message
+  // undecryptable (caught live: the wallet sent its address for a while).
+  if (!/^[0-9a-fA-F]{66}$/.test(from) || !/^[0-9a-fA-F]{66}$/.test(to)) {
+    fail("BAD_PARAM", "envelope parties must be compressed pubkeys (identity keys, not addresses)");
+  }
   return { v: 1, from: from.toLowerCase(), to: to.toLowerCase(), body: bodyHex, sentAt: Date.now() };
 }
 
@@ -181,15 +189,23 @@ export function createMessageBoxRelay(authFetch: FetchLike, base = MESSAGE_BOX):
 }
 
 export async function migrateMsgs(db: Knex): Promise<void> {
-  if (await db.schema.hasTable("messages")) return;
-  await db.schema.createTable("messages", (t) => {
-    t.string("id", 128).primary();
-    t.string("peer", 66).notNullable().defaultTo("");
-    t.string("direction", 3).notNullable().defaultTo("in");
-    t.text("envelope").notNullable();
-    t.integer("created_at").notNullable();
-    t.integer("acked").notNullable().defaultTo(0);
-  });
+  if (!(await db.schema.hasTable("messages"))) {
+    await db.schema.createTable("messages", (t) => {
+      t.string("id", 128).primary();
+      t.string("peer", 66).notNullable().defaultTo("");
+      t.string("direction", 3).notNullable().defaultTo("in");
+      t.text("envelope").notNullable();
+      t.integer("created_at").notNullable();
+      t.integer("acked").notNullable().defaultTo(0);
+      t.string("transport", 8).notNullable().defaultTo("relay");
+    });
+    return;
+  }
+  if (!(await db.schema.hasColumn("messages", "transport"))) {
+    await db.schema.alterTable("messages", (t) => {
+      t.string("transport", 8).notNullable().defaultTo("relay");
+    });
+  }
 }
 
 export function newMessageId(): string {
@@ -212,13 +228,29 @@ export function __setRelay(relay: Relay | null): void {
 }
 
 function rowToStored(r: {
-  id: string; peer: string; direction: string; envelope: string; created_at: number; acked: number;
+  id: string; peer: string; direction: string; envelope: string; created_at: number; acked: number; transport?: string;
 }): StoredMessage {
   return {
     id: r.id, peer: r.peer,
     direction: r.direction === "out" ? "out" : "in",
     envelope: r.envelope, createdAt: r.created_at, acked: r.acked,
+    transport: r.transport === "p2p" ? "p2p" : "relay",
   };
+}
+
+function insertRow(
+  db: Knex,
+  row: { id: string; peer: string; direction: "in" | "out"; envelope: unknown; acked: 0 | 1; transport: "relay" | "p2p" },
+): Promise<unknown> {
+  return db("messages").insert({
+    id: row.id,
+    peer: row.peer.toLowerCase(),
+    direction: row.direction,
+    envelope: JSON.stringify(row.envelope),
+    created_at: Date.now(),
+    acked: row.acked,
+    transport: row.transport,
+  });
 }
 
 /** Encrypt + deliver + store the out record. Needs the wallet unlocked. */
@@ -233,11 +265,55 @@ export async function sendDm(
   const id = newMessageId();
   const envelope = packEnvelope(selfHex, to, body);
   await relay.send(to.toLowerCase(), DM_BOX, id, envelope);
-  await db("messages").insert({
-    id, peer: to.toLowerCase(), direction: "out",
-    envelope: JSON.stringify(envelope), created_at: Date.now(), acked: 1,
-  });
+  await insertRow(db, { id, peer: to, direction: "out", envelope, acked: 1, transport: "relay" });
   return { id };
+}
+
+/**
+ * P2P-first send: when the peer is live on a direct channel, deliver there;
+ * otherwise fall back to the relay with the SAME message id and envelope, so
+ * a lost ack can never duplicate the message — the recipient dedupes by id.
+ */
+export async function sendDmPreferred(
+  db: Knex,
+  relay: Relay,
+  p2p: P2PChannel | null,
+  selfHex: string,
+  to: string,
+  text: string,
+): Promise<{ id: string; transport: "relay" | "p2p"; delivered: boolean }> {
+  const body = dmEncrypt(to, text);
+  const id = newMessageId();
+  const envelope = packEnvelope(selfHex, to, body);
+  if (p2p && p2p.online(to)) {
+    const delivered = await p2p.deliver(to.toLowerCase(), id, envelope);
+    if (delivered) {
+      await insertRow(db, { id, peer: to, direction: "out", envelope, acked: 1, transport: "p2p" });
+      return { id, transport: "p2p", delivered: true };
+    }
+  }
+  await relay.send(to.toLowerCase(), DM_BOX, id, envelope);
+  await insertRow(db, { id, peer: to, direction: "out", envelope, acked: 1, transport: "relay" });
+  return { id, transport: "relay", delivered: false };
+}
+
+/** Store one inbound envelope (ciphertext only); dedupes by relay message id. */
+export async function storeInboundEnvelope(
+  db: Knex,
+  id: string,
+  body: unknown,
+  transport: "relay" | "p2p" = "relay",
+): Promise<{ fresh: boolean; peer: string }> {
+  const known = (await db("messages").where({ id }).first()) as { id: string; peer?: string } | undefined;
+  if (known) return { fresh: false, peer: known.peer ?? "" };
+  let peer = "";
+  try {
+    peer = parseEnvelope(body).from;
+  } catch {
+    peer = "";
+  }
+  await insertRow(db, { id, peer, direction: "in", envelope: body, acked: 0, transport });
+  return { fresh: true, peer };
 }
 
 /** Pull the inbox; stores unknown envelopes (ciphertext only). */
@@ -245,19 +321,8 @@ export async function syncInbox(db: Knex, relay: Relay): Promise<{ fresh: number
   const items = await relay.list(DM_BOX);
   let fresh = 0;
   for (const m of items) {
-    const known = await db("messages").where({ id: m.messageId }).first();
-    if (known) continue;
-    let peer = "";
-    try {
-      peer = parseEnvelope(m.body).from;
-    } catch {
-      peer = "";
-    }
-    await db("messages").insert({
-      id: m.messageId, peer, direction: "in",
-      envelope: JSON.stringify(m.body), created_at: Date.now(), acked: 0,
-    });
-    fresh++;
+    const stored = await storeInboundEnvelope(db, m.messageId, m.body, "relay");
+    if (stored.fresh) fresh++;
   }
   const total = Number((await db("messages").where({ direction: "in" }).count({ n: "*" }).first() as { n: number })?.n ?? 0);
   return { fresh, total };
@@ -267,7 +332,7 @@ export async function listStored(db: Knex, direction?: "in" | "out"): Promise<St
   let q = db("messages").select();
   if (direction) q = q.where({ direction });
   const rows = (await q.orderBy("created_at", "desc").limit(100)) as Array<{
-    id: string; peer: string; direction: string; envelope: string; created_at: number; acked: number;
+    id: string; peer: string; direction: string; envelope: string; created_at: number; acked: number; transport?: string;
   }>;
   return rows.map(rowToStored);
 }
@@ -284,11 +349,11 @@ export async function readDm(db: Knex, id: string): Promise<{ peer: string; text
   return { peer, text, sentAt: env.sentAt, direction: row.direction };
 }
 
-/** Acknowledge at the relay and mark stored. */
+/** Acknowledge at the relay and mark stored. P2P rows never touch the relay. */
 export async function ackDm(db: Knex, relay: Relay, id: string): Promise<{ id: string; acked: boolean }> {
-  const row = (await db("messages").where({ id }).first()) as { id: string } | undefined;
+  const row = (await db("messages").where({ id }).first()) as { id: string; transport?: string } | undefined;
   if (!row) fail("NOT_FOUND", `no message: ${String(id).slice(0, 12)}…`);
-  await relay.ack([id]);
+  if (row.transport !== "p2p") await relay.ack([id]);
   await db("messages").where({ id }).update({ acked: 1 });
   return { id, acked: true };
 }

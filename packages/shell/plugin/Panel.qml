@@ -72,6 +72,15 @@ Panel {
   property var messages: []
   property string msgText: ""
   property bool msgOk: true
+  property string msgPeer: ""
+  // F6.2 direct channel (see `bsv p2p peers`): LAN-discovered wallets.
+  // Addresses are runtime only; sending prefers a live direct peer.
+  property var peers: []
+  property bool p2pEnabled: false
+  property string msgTo: ""
+  property string msgBody: ""
+  property string msgSendText: ""
+  property bool msgSendOk: true
   // F10 recovery status (see `bsv recovery status`): set metadata only,
   // never shares. Ceremonies stay terminal-only by key-material policy.
   property var recoverySets: []
@@ -141,6 +150,7 @@ Panel {
           if (!bsv21Proc.running) bsv21Proc.running = true;
           if (!msgSyncProc.running) msgSyncProc.running = true;
           if (!msgListProc.running) msgListProc.running = true;
+          if (!p2pPeersProc.running) p2pPeersProc.running = true;
           if (!recoveryProc.running) recoveryProc.running = true;
           if (!gigBoardProc.running) gigBoardProc.running = true;
           if (!gigListProc.running) gigListProc.running = true;
@@ -406,6 +416,56 @@ Panel {
     onExited: (code) => { if (code !== 0) root.messages = []; }
   }
 
+  // F6.2 peer discovery list: runtime only (beacons, not persisted).
+  Process {
+    id: p2pPeersProc
+    command: ["bsv", "p2p", "peers"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.p2pEnabled = !!r.enabled;
+          root.peers = r.peers ?? [];
+        } catch (e) {
+          root.p2pEnabled = false;
+          root.peers = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) { root.p2pEnabled = false; root.peers = []; } }
+  }
+
+  // Compose runner: `bsv msg send <identityKey> --text <msg>` uses the
+  // direct channel when the peer is live, otherwise the relay. The body
+  // never touches argv history: Process passes it as its own argument.
+  Process {
+    id: msgSendProc
+    property string to: ""
+    property string body: ""
+    command: ["bsv", "msg", "send", to, "--text", body]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.msgSendOk = true;
+          root.msgSendText = `Sent via ${r.transport === "p2p" ? "direct channel" : "relay"} (${String(r.id ?? "").slice(0, 12)}…).`;
+          root.msgBody = "";
+        } catch (e) {
+          root.msgSendOk = false;
+          root.msgSendText = "Send failed — is the wallet unlocked?";
+        }
+        if (!msgSyncProc.running) msgSyncProc.running = true;
+        if (!msgListProc.running) msgListProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.msgSendOk = false;
+        root.msgSendText = "Send failed — is the wallet unlocked? Check the identity key.";
+      }
+    }
+  }
+
   // F10 recovery status (metadata only — shares never touch the panel).
   Process {
     id: recoveryProc
@@ -565,6 +625,7 @@ Panel {
         try {
           const r = JSON.parse(text);
           root.msgOk = true;
+          root.msgPeer = r.peer ?? "";
           root.msgText = `${r.peer ? String(r.peer).slice(0, 12) + "…: " : ""}${r.text ?? ""}`;
           if (!msgListProc.running) msgListProc.running = true;
         } catch (e) {
@@ -1583,7 +1644,7 @@ Panel {
     PanelSectionHeader { text: `Inbox (${root.messages.length})` }
 
     Text {
-      text: "ECDH direct messages. Ciphertext at rest — Read decrypts, Ack deletes at the relay."
+      text: "ECDH direct messages. Ciphertext at rest — Read decrypts, Ack clears. Sends go direct to nearby peers, otherwise over the encrypted relay."
       color: Color.muted
       font.pixelSize: Style.font.caption
       wrapMode: Text.Wrap
@@ -1602,7 +1663,7 @@ Panel {
           Layout.fillWidth: true
 
           Text {
-            text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}…${modelData.acked ? "" : " · new"}`
+            text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}… · ${modelData.transport === "p2p" ? "direct" : "relay"}${modelData.acked ? "" : " · new"}`
             color: modelData.acked ? Color.muted : Color.foreground
             font.pixelSize: Style.font.body
             font.bold: !modelData.acked
@@ -1616,6 +1677,12 @@ Panel {
               msgShowProc.msgId = modelData.id;
               msgShowProc.running = true;
             }
+          }
+
+          Button {
+            text: "Reply"
+            visible: /^[0-9a-fA-F]{66}$/.test(String(modelData.peer ?? ""))
+            onClicked: root.msgTo = String(modelData.peer)
           }
 
           Button {
@@ -1637,12 +1704,107 @@ Panel {
     }
 
     Text {
-      text: "No messages — send one with: bsv msg send <identityKey> --text <msg>."
+      text: "No messages — message a nearby peer below, or paste any identity key into Compose."
       color: Color.muted
       font.pixelSize: Style.font.body
       wrapMode: Text.Wrap
       Layout.fillWidth: true
       visible: root.messages.length === 0
+    }
+
+    PanelSectionHeader { text: `Nearby peers (${root.peers.length})` }
+
+    Text {
+      text: root.p2pEnabled
+        ? "Wallets broadcasting on this network. Direct sends need no relay; both sides must be unlocked."
+        : "Direct channel off — messages use the relay. Enable by starting the daemon without BSV_P2P=0."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.peers.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.peers
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.online ? "●" : "○"} ${String(modelData.identityKey ?? "?").slice(0, 16)}… · ${modelData.address ?? "?"}:${modelData.port ?? "?"}`
+            color: modelData.online ? Color.foreground : Color.muted
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Message"
+            enabled: modelData.online
+            onClicked: root.msgTo = String(modelData.identityKey)
+          }
+        }
+      }
+    }
+
+    PanelSectionHeader { text: "Compose" }
+
+    ColumnLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: msgToField
+        placeholderText: "Recipient identity key (66 hex) — or tap Message on a peer"
+        font.family: "monospace"
+        text: root.msgTo
+        onTextEdited: root.msgTo = text
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: msgBodyField
+        placeholderText: "Message"
+        text: root.msgBody
+        onTextEdited: root.msgBody = text
+        onAccepted: {
+          if (root.msgTo.trim() !== "" && root.msgBody.trim() !== "" && !msgSendProc.running) {
+            msgSendProc.to = root.msgTo.trim();
+            msgSendProc.body = root.msgBody;
+            msgSendProc.running = true;
+          }
+        }
+        Layout.fillWidth: true
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        Button {
+          text: "Send"
+          enabled: root.msgTo.trim() !== "" && root.msgBody.trim() !== "" && !msgSendProc.running
+          onClicked: {
+            msgSendProc.to = root.msgTo.trim();
+            msgSendProc.body = root.msgBody;
+            msgSendProc.running = true;
+          }
+        }
+
+        Text {
+          text: root.msgSendText
+          color: root.msgSendOk ? Color.muted : Color.urgent
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+          visible: root.msgSendText !== ""
+        }
+      }
     }
 
     PanelSectionHeader { text: "Recovery" }

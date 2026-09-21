@@ -72,7 +72,8 @@ bsv basket list | bsv basket balance [name]  # per-basket ledger
 bsv basket create <name> | bsv basket remove <name> | bsv basket assign <txid:vout> --to <basket>
 bsv ord list [--address=<addr>] | bsv ord send <txid:vout> --to <address>
 bsv bsv21 list [--address=<addr>] | bsv bsv21 send --id <tokenId> --to <address> --amt <base-units>
-bsv msg send <identityKey> --text <msg> | bsv msg sync|list|show <id>|ack <id>
+bsv msg send <identityKey> --text <msg> | bsv msg sync|list|show <id>|ack <id>  # direct when the peer is live, relay otherwise
+bsv p2p peers | bsv p2p status  # wallets discovered on your network (LAN beacons; BSV_P2P_PEERS for VPNs)
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
