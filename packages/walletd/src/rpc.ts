@@ -39,9 +39,9 @@ import {
 import { faucetClaim, faucetStatus } from "./faucet.ts";
 import type { TorrentService } from "./torrents.ts";
 import {
-  buildRequest, encodeRequest, expireOld, getRequest, listRequests, markDeclined, markPaid,
-  parseDuration, parseRequest, payableError, recordOutgoing, saveIncoming, scanInbound,
-  sendReceipt, sendRequestCode,
+  buildRequest, encodeRequest, expireOld, getRequest, incomingPaymentVerifier, listRequests,
+  markDeclined, markPaid, parseDuration, parseRequest, payableError, recordOutgoing,
+  saveIncoming, scanInbound, sendReceipt, sendRequestCode,
 } from "./requests.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
@@ -965,9 +965,16 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   requestList: async () => {
     const b = needBackend();
     await expireOld(b.db);
-    let sync = { scanned: 0, imported: 0, paid: 0 };
+    let sync = { scanned: 0, imported: 0, paid: 0, claimed: 0 };
     try {
-      sync = await scanInbound(b.db);
+      let address = "";
+      try {
+        address = selfAddress();
+      } catch {
+        /* locked: import will no-op anyway */
+      }
+      const verifyPayment = address ? incomingPaymentVerifier(b.chain, address) : undefined;
+      sync = await scanInbound(b.db, verifyPayment ? { verifyPayment } : {});
     } catch {
       /* locked wallet: list what we already know */
     }

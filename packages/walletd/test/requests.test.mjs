@@ -18,6 +18,7 @@ import {
   expireOld,
   findCode,
   getRequest,
+  incomingPaymentVerifier,
   listRequests,
   markDeclined,
   markPaid,
@@ -110,6 +111,28 @@ test("stored request lifecycle: dedupe, expire, pay, decline", async () => {
   }
 });
 
+test("incoming payments verify against real outputs", async () => {
+  const txid = "aa".repeat(32);
+  const other = "bb".repeat(32);
+  const fake = {
+    tx: async (id) => (id === txid
+      ? { vout: [
+          { value: 0.001, addresses: ["1SomewhereElse"] },
+          { value: 0.000025, addresses: ["1Mine"] },
+        ] }
+      : null),
+  };
+  const verify = incomingPaymentVerifier(fake, "1Mine");
+  assert.equal(await verify(txid, 2500), true);
+  assert.equal(await verify(txid, 2000), true); // overpay is fine
+  assert.equal(await verify(txid, 2501), false); // underpay is not
+  assert.equal(await verify(other, 1), false); // unknown tx
+  assert.equal(await verify("not-a-txid", 1), false);
+  assert.equal(await verify(txid, 0), false);
+  assert.equal(await incomingPaymentVerifier(fake, "1Nobody")(txid, 1), false);
+  assert.equal(await incomingPaymentVerifier(fake, "")(txid, 1), false);
+});
+
 // Guarded like custody tests: never touch a real enrolled wallet.
 const enrolled = await hasWallet();
 const it = enrolled ? test.skip : test;
@@ -182,23 +205,37 @@ it("scanInbound imports requests and settles outgoing ones on signed receipts", 
     assert.equal(first.paid, 0);
     assert.equal((await getRequest(db, incoming.id)).direction, "in");
 
-    // A signed receipt with the wrong amount is ignored; the right one settles.
+    // A signed receipt with the wrong amount is ignored; a matching one that
+    // the chain cannot confirm stays pending and is reported as claimed.
     const wrong = buildReceipt({ requestId: outgoing.id, payer: self, txid: "11".repeat(32), amount: 1 });
     await storeInboundEnvelope(db, "msg-rcpt-wrong", packEnvelope(self, self, dmEncrypt(self, encodeReceipt(wrong))), "p2p");
-    assert.equal((await scanInbound(db)).paid, 0);
+    const wrongScan = await scanInbound(db);
+    assert.equal(wrongScan.paid, 0);
+    assert.equal(wrongScan.claimed, 0);
     assert.equal((await getRequest(db, outgoing.id)).status, "pending");
 
     const right = buildReceipt({ requestId: outgoing.id, payer: self, txid: "22".repeat(32), amount: 2500 });
     await storeInboundEnvelope(db, "msg-rcpt-right", packEnvelope(self, self, dmEncrypt(self, encodeReceipt(right))), "p2p");
-    const settled = await scanInbound(db);
+    const unverified = await scanInbound(db, { verifyPayment: async () => false });
+    assert.equal(unverified.claimed, 1);
+    assert.equal(unverified.paid, 0);
+    const stillPending = await getRequest(db, outgoing.id);
+    assert.equal(stillPending.status, "pending");
+    assert.equal(stillPending.txid, "");
+
+    // Once the chain confirms the payment, the same receipt settles the ask.
+    const settled = await scanInbound(db, { verifyPayment: async (txid, amount) => txid === "22".repeat(32) && amount === 2500 });
     assert.equal(settled.paid, 1);
     const paidRow = await getRequest(db, outgoing.id);
     assert.equal(paidRow.status, "paid");
     assert.equal(paidRow.txid, "22".repeat(32));
 
     // Idempotent: re-scanning imports and settles nothing new.
-    const again = await scanInbound(db);
-    assert.deepEqual({ imported: again.imported, paid: again.paid }, { imported: 0, paid: 0 });
+    const again = await scanInbound(db, { verifyPayment: async () => true });
+    assert.deepEqual(
+      { imported: again.imported, paid: again.paid, claimed: again.claimed },
+      { imported: 0, paid: 0, claimed: 0 },
+    );
   } finally {
     await db.destroy();
     await destroyWallet();

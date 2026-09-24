@@ -255,10 +255,13 @@ payer's daemon verifies the signature before anything moves, so an address
 or amount swap in transit fails closed. Nothing is ever auto-paid: only an
 explicit Approve (panel or `bsv request pay`) releases sats through the
 normal policy gate. After paying, your daemon DMs a signed receipt back;
-the requester's inbox sync verifies it and marks the ask paid with the
-txid. Asks expire (default 7 days, `--expires=12h`), a lapsed ask is not
-payable, and asking yourself is a no-op (your own outbound asks are never
-payable) — use `bsv send` to move money between your own addresses.
+the requester's inbox sync verifies the signature **and the chain** — the
+txid must resolve and contain an output to the requester's address worth at
+least the asked amount — before the ask flips to paid with that txid. An
+unconfirmed or fake receipt leaves the ask pending (reported as claimed,
+not paid). Asks expire (default 7 days, `--expires=12h`), a lapsed ask is
+not payable, and asking yourself is a no-op (your own outbound asks are
+never payable) — use `bsv send` to move money between your own addresses.
 
 ### Twetch companion (feed, notifications, posting)
 

@@ -386,17 +386,46 @@ export interface SyncResult {
   scanned: number;
   imported: number;
   paid: number;
+  /** Signed receipts that matched but are not chain-verified yet. */
+  claimed: number;
+}
+
+export interface TxLookup {
+  tx(txid: string): Promise<{ vout: Array<{ value?: number; addresses?: string[] }> } | null>;
+}
+
+/**
+ * Chain check for incoming payments: the receipt's txid must resolve and
+ * contain an output to our receive address worth at least the claimed
+ * amount. `chain.tx` reports values in BSV (WoC's /tx/hash shape), so the
+ * comparison converts to sats. A fake or underpriced receipt never settles.
+ */
+export function incomingPaymentVerifier(chain: TxLookup, address: string) {
+  return async (txid: string, amountSats: number): Promise<boolean> => {
+    if (!/^[0-9a-fA-F]{64}$/.test(txid) || !(amountSats > 0) || !address) return false;
+    const tx = await chain.tx(txid);
+    if (!tx) return false;
+    return tx.vout.some((o) => {
+      if (!(o.addresses ?? []).includes(address)) return false;
+      const sats = Math.round((o.value ?? 0) * 1e8);
+      return sats >= amountSats;
+    });
+  };
 }
 
 /**
  * Decrypt inbound messages client-side (nothing plaintext is persisted) and
  * fold in any payment codes: requests become payable rows, receipts mark our
- * outgoing requests paid. Safe to run often; both sides dedupe by id.
+ * outgoing requests paid — but only after `verifyPayment` confirms the txid
+ * really paid this wallet. Safe to run often; both sides dedupe by id.
  */
-export async function scanInbound(db: Knex, opts: { limit?: number } = {}): Promise<SyncResult> {
+export async function scanInbound(
+  db: Knex,
+  opts: { limit?: number; verifyPayment?: (txid: string, amountSats: number) => Promise<boolean> } = {},
+): Promise<SyncResult> {
   const limit = Math.max(1, Math.min(500, opts.limit ?? 100));
   const rows = (await db("messages").where({ direction: "in" }).orderBy("created_at", "desc").limit(limit)) as StoredMessage[];
-  const result: SyncResult = { scanned: 0, imported: 0, paid: 0 };
+  const result: SyncResult = { scanned: 0, imported: 0, paid: 0, claimed: 0 };
   for (const row of rows) {
     result.scanned++;
     let text = "";
@@ -415,10 +444,21 @@ export async function scanInbound(db: Knex, opts: { limit?: number } = {}): Prom
       } else {
         const receipt = parseReceipt(code);
         const existing = await getRequest(db, receipt.requestId);
-        if (existing && existing.direction === "out" && existing.status === "pending" && existing.amount === receipt.amount) {
-          const updated = await markPaid(db, receipt.requestId, receipt.txid);
-          if (updated?.status === "paid") result.paid++;
+        if (!existing || existing.direction !== "out" || existing.status !== "pending" || existing.amount !== receipt.amount) {
+          continue;
         }
+        let verified = false;
+        try {
+          verified = opts.verifyPayment ? await opts.verifyPayment(receipt.txid, receipt.amount) : false;
+        } catch {
+          verified = false; // chain unavailable: leave it pending, retry next scan
+        }
+        if (!verified) {
+          result.claimed++;
+          continue;
+        }
+        const updated = await markPaid(db, receipt.requestId, receipt.txid);
+        if (updated?.status === "paid") result.paid++;
       }
     } catch {
       /* malformed or forged payloads are not requests */
