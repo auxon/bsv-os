@@ -15,8 +15,10 @@
  * inbox delivery are proven live against messagebox.1sat.app — a second
  * identity's DM arrived, listed, decrypted, and acked. The account holds
  * a 1 GiB free baseline (no funding needed for this). Caveat: the relay
- * does not return your own sends in the inbox list (self-suppression),
- * so round-trips must be proven peer-to-peer, never self-to-self.
+ * does not return your own sends in the inbox list (self-suppression), so
+ * `sendDmPreferred` stores `to === self` as a local note (transport
+ * "local") instead of relaying it — a note to self still reads and acks
+ * like any inbound message.
  */
 import type { Knex } from "knex";
 import { randomBytes } from "node:crypto";
@@ -44,7 +46,7 @@ export interface StoredMessage {
   envelope: string;
   createdAt: number;
   acked: number;
-  transport: "relay" | "p2p";
+  transport: "relay" | "p2p" | "local";
 }
 
 function fail(code: string, message: string): never {
@@ -234,13 +236,13 @@ function rowToStored(r: {
     id: r.id, peer: r.peer,
     direction: r.direction === "out" ? "out" : "in",
     envelope: r.envelope, createdAt: r.created_at, acked: r.acked,
-    transport: r.transport === "p2p" ? "p2p" : "relay",
+    transport: r.transport === "p2p" ? "p2p" : r.transport === "local" ? "local" : "relay",
   };
 }
 
 function insertRow(
   db: Knex,
-  row: { id: string; peer: string; direction: "in" | "out"; envelope: unknown; acked: 0 | 1; transport: "relay" | "p2p" },
+  row: { id: string; peer: string; direction: "in" | "out"; envelope: unknown; acked: 0 | 1; transport: "relay" | "p2p" | "local" },
 ): Promise<unknown> {
   return db("messages").insert({
     id: row.id,
@@ -273,6 +275,10 @@ export async function sendDm(
  * P2P-first send: when the peer is live on a direct channel, deliver there;
  * otherwise fall back to the relay with the SAME message id and envelope, so
  * a lost ack can never duplicate the message — the recipient dedupes by id.
+ *
+ * A note to self never touches the wire: MessageBox hides your own sends
+ * from your own inbox, so `to === self` is stored as a local inbound row
+ * (readable, ackable, ciphertext at rest like everything else).
  */
 export async function sendDmPreferred(
   db: Knex,
@@ -281,10 +287,14 @@ export async function sendDmPreferred(
   selfHex: string,
   to: string,
   text: string,
-): Promise<{ id: string; transport: "relay" | "p2p"; delivered: boolean }> {
+): Promise<{ id: string; transport: "relay" | "p2p" | "local"; delivered: boolean }> {
   const body = dmEncrypt(to, text);
   const id = newMessageId();
   const envelope = packEnvelope(selfHex, to, body);
+  if (to.toLowerCase() === selfHex.toLowerCase()) {
+    await insertRow(db, { id, peer: to, direction: "in", envelope, acked: 0, transport: "local" });
+    return { id, transport: "local", delivered: true };
+  }
   if (p2p && p2p.online(to)) {
     const delivered = await p2p.deliver(to.toLowerCase(), id, envelope);
     if (delivered) {
@@ -349,11 +359,11 @@ export async function readDm(db: Knex, id: string): Promise<{ peer: string; text
   return { peer, text, sentAt: env.sentAt, direction: row.direction };
 }
 
-/** Acknowledge at the relay and mark stored. P2P rows never touch the relay. */
+/** Acknowledge at the relay and mark stored. p2p and local notes never touch the relay. */
 export async function ackDm(db: Knex, relay: Relay, id: string): Promise<{ id: string; acked: boolean }> {
   const row = (await db("messages").where({ id }).first()) as { id: string; transport?: string } | undefined;
   if (!row) fail("NOT_FOUND", `no message: ${String(id).slice(0, 12)}…`);
-  if (row.transport !== "p2p") await relay.ack([id]);
+  if (row.transport === "relay") await relay.ack([id]);
   await db("messages").where({ id }).update({ acked: 1 });
   return { id, acked: true };
 }

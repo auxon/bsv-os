@@ -1911,7 +1911,7 @@ Panel {
           Layout.fillWidth: true
 
           Text {
-            text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}… · ${modelData.transport === "p2p" ? "direct" : "relay"}${modelData.acked ? "" : " · new"}`
+            text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}… · ${modelData.transport === "p2p" ? "direct" : modelData.transport === "local" ? "note to self" : "relay"}${modelData.acked ? "" : " · new"}`
             color: modelData.acked ? Color.muted : Color.foreground
             font.pixelSize: Style.font.body
             font.bold: !modelData.acked

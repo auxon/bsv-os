@@ -245,10 +245,11 @@ it("p2p-first send: direct when delivered, relay fallback reuses the id, p2p ack
   try {
     await createWallet();
     const self = identityPubkeyHex();
+    const peer = PrivateKey.fromRandom().toPublicKey().toString();
 
     // Live direct peer: relay is never touched.
     const direct = { online: () => true, deliver: async () => true };
-    const a = await sendDmPreferred(db, f.relay, direct, self, self, "direct hello");
+    const a = await sendDmPreferred(db, f.relay, direct, self, peer, "direct hello");
     assert.equal(a.transport, "p2p");
     assert.equal(a.delivered, true);
     assert.equal(f.calls.sent.length, 0);
@@ -264,7 +265,7 @@ it("p2p-first send: direct when delivered, relay fallback reuses the id, p2p ack
         return false;
       },
     };
-    const b = await sendDmPreferred(db, f.relay, failing, self, self, "fallback hello");
+    const b = await sendDmPreferred(db, f.relay, failing, self, peer, "fallback hello");
     assert.equal(b.transport, "relay");
     assert.equal(b.id, seenId);
     assert.equal(f.calls.sent.length, 1);
@@ -278,10 +279,9 @@ it("p2p-first send: direct when delivered, relay fallback reuses the id, p2p ack
     assert.equal(first.fresh, true);
     const second = await storeInboundEnvelope(db, dup, seenEnvelope, "relay");
     assert.equal(second.fresh, false);
+    assert.equal(first.peer, self.toLowerCase()); // envelope `from` is the sender
 
-    // Reading the p2p row decrypts; acking it never calls the relay.
-    const read = await readDm(db, dup);
-    assert.equal(read.text, "fallback hello");
+    // Acking a p2p row never calls the relay.
     const acked = await ackDm(db, f.relay, dup);
     assert.equal(acked.acked, true);
     assert.deepEqual(f.calls.acked, []);
@@ -292,6 +292,39 @@ it("p2p-first send: direct when delivered, relay fallback reuses the id, p2p ack
     assert.equal(byId[a.id], "p2p");
     assert.equal(byId[b.id], "relay");
     assert.equal(byId[dup], "p2p");
+  } finally {
+    __setRelay(null);
+    await db.destroy();
+    await destroyWallet();
+    __resetCache();
+  }
+});
+
+it("note to self lands in the local inbox and never touches the relay", async () => {
+  const db = await memdb();
+  const f = fakeRelay();
+  __setRelay(f.relay);
+  try {
+    await createWallet();
+    const self = identityPubkeyHex();
+    const r = await sendDmPreferred(db, f.relay, null, self, self.toUpperCase(), "remember the milk");
+    assert.equal(r.transport, "local");
+    assert.equal(r.delivered, true);
+    assert.equal(f.calls.sent.length, 0);
+
+    const inbound = await listStored(db, "in");
+    assert.equal(inbound.length, 1);
+    assert.equal(inbound[0].id, r.id);
+    assert.equal(inbound[0].transport, "local");
+    assert.ok(!inbound[0].envelope.includes("remember the milk")); // ciphertext at rest
+    const read = await readDm(db, r.id);
+    assert.equal(read.text, "remember the milk");
+    assert.equal(read.direction, "in");
+    assert.equal(read.peer, self.toLowerCase());
+
+    const acked = await ackDm(db, f.relay, r.id);
+    assert.equal(acked.acked, true);
+    assert.deepEqual(f.calls.acked, []); // no relay copy exists to ack
   } finally {
     __setRelay(null);
     await db.destroy();
