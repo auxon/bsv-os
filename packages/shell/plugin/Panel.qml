@@ -114,6 +114,11 @@ Panel {
   property bool reqOk: true
   property string reqQr: ""
   property string reqCode: ""
+  // Inscribed purchase receipts (see `bsv receipt`): 1Sat ordinals delivered
+  // to the counterparty, signed by this wallet's identity key.
+  property var receipts: []
+  property string receiptText: ""
+  property bool receiptOk: true
   // F10 recovery status (see `bsv recovery status`): set metadata only,
   // never shares. Ceremonies stay terminal-only by key-material policy.
   property var recoverySets: []
@@ -189,6 +194,7 @@ Panel {
           if (!faucetStatusProc.running) faucetStatusProc.running = true;
           if (!torrentListProc.running) torrentListProc.running = true;
           if (!requestsProc.running) requestsProc.running = true;
+          if (!receiptsProc.running) receiptsProc.running = true;
           if (!recoveryProc.running) recoveryProc.running = true;
           if (!gigBoardProc.running) gigBoardProc.running = true;
           if (!gigListProc.running) gigListProc.running = true;
@@ -731,6 +737,49 @@ Panel {
       if (code !== 0) {
         root.reqOk = false;
         root.reqText = "Could not load the request code.";
+      }
+    }
+  }
+
+  // Receipts: list inscribed purchase receipts, issue one for a paid request.
+  Process {
+    id: receiptsProc
+    command: ["bsv", "receipt", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.receipts = JSON.parse(text).receipts ?? [];
+        } catch (e) {
+          root.receipts = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.receipts = []; }
+  }
+
+  Process {
+    id: receiptIssueProc
+    property string request: ""
+    command: ["bsv", "receipt", "issue", "--request", request]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.receiptOk = true;
+          root.receiptText = `Receipt inscribed and delivered: ${String(r.outpoint ?? "").slice(0, 12)}…`;
+        } catch (e) {
+          root.receiptOk = false;
+          root.receiptText = "Receipt failed — see the terminal.";
+        }
+        if (!receiptsProc.running) receiptsProc.running = true;
+        if (!requestsProc.running) requestsProc.running = true;
+        if (!ordProc.running) ordProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.receiptOk = false;
+        root.receiptText = "Receipt failed — only paid incoming requests can be receipted.";
       }
     }
   }
@@ -2382,6 +2431,15 @@ Panel {
             visible: modelData.status === "pending"
             onClicked: root.runAppAction(["request", "decline", modelData.id])
           }
+
+          Button {
+            text: "Receipt"
+            visible: modelData.status === "paid" && !receiptIssueProc.running
+            onClicked: {
+              receiptIssueProc.request = modelData.id;
+              receiptIssueProc.running = true;
+            }
+          }
         }
       }
     }
@@ -2499,6 +2557,55 @@ Panel {
           }
         }
       }
+    }
+
+    PanelSectionHeader { text: `Receipts (${root.receipts.length})` }
+
+    Text {
+      text: "Purchase receipts inscribed as 1Sat ordinals and delivered to the seller in the same transaction — signed by your identity key, provable by anyone."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.receipts.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.receipts
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${String(modelData.id).slice(0, 12)}…`
+            color: Color.muted
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Copy id"
+            onClicked: {
+              copyProc.copyText = `${modelData.id}:0`;
+              if (!copyProc.running) copyProc.running = true;
+            }
+          }
+        }
+      }
+    }
+
+    Text {
+      text: root.receiptText
+      color: root.receiptOk ? Color.muted : Color.urgent
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.receiptText !== ""
     }
 
     PanelSectionHeader { text: "Starter sats" }

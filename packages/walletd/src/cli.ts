@@ -851,6 +851,34 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "receipt": {
+      const [rcSub] = rest;
+      if (rcSub === "list" || rcSub === undefined) {
+        print(await call("receiptList"));
+      } else if (rcSub === "issue") {
+        const request = flag(rest, "request");
+        const txid = flag(rest, "txid");
+        const to = flag(rest, "to");
+        const amount = flag(rest, "amount");
+        const memo = flag(rest, "memo");
+        if (!request && !(txid && to && Number(amount) > 0)) {
+          console.error('usage: bsv receipt issue --request <id> | --txid <txid> --to <@name|key|address> --amount <sats> [--memo "..."]');
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("receiptIssue", {
+          ...(request ? { request } : {}),
+          ...(txid ? { txid } : {}),
+          ...(to ? { to } : {}),
+          ...(amount && Number(amount) > 0 ? { amount: Number(amount) } : {}),
+          ...(memo !== undefined ? { memo } : {}),
+        }));
+      } else {
+        console.error('usage: bsv receipt <list|issue --request <id>|issue --txid <txid> --to <who> --amount <sats> [--memo ".."]>');
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

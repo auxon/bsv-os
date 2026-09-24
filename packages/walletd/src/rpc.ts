@@ -43,6 +43,7 @@ import {
   markDeclined, markPaid, parseDuration, parseRequest, payableError, recordOutgoing,
   saveIncoming, scanInbound, sendReceipt, sendRequestCode,
 } from "./requests.ts";
+import { issueReceipt, listReceipts as listPaymentReceipts } from "./receipts.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -1027,6 +1028,88 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const row = await getRequest(b.db, id);
     if (!row) throw Object.assign(new Error(`no request ${id}`), { code: "NOT_FOUND" });
     return { id: row.id, code: row.code, dataUrl: await qrDataUrlText(row.code), status: row.status, direction: row.direction };
+  },
+  /**
+   * Inscribe a purchase receipt as a 1Sat ordinal and deliver it to the
+   * counterparty in the same transaction. Sources: a paid incoming request
+   * (knows amount, memo, peer, payment txid) or explicit txid/to/amount.
+   */
+  receiptIssue: async (params) => {
+    const b = needBackend();
+    const { request, txid, to, amount, memo } = p(params) as {
+      request?: unknown; txid?: unknown; to?: unknown; amount?: unknown; memo?: unknown;
+    };
+    let paymentTxid = "";
+    let sats = 0;
+    let item = "";
+    let peer = "";
+    let peerAddress = "";
+    let requestId = "";
+    if (typeof request === "string" && request) {
+      const row = await getRequest(b.db, request);
+      if (!row) throw Object.assign(new Error(`no request ${request}`), { code: "NOT_FOUND" });
+      if (row.direction !== "in" || row.status !== "paid" || !row.txid) {
+        throw Object.assign(new Error("only paid incoming requests can be receipted"), { code: "BAD_PARAM" });
+      }
+      paymentTxid = row.txid;
+      sats = row.amount;
+      item = row.memo;
+      peer = row.peer;
+      peerAddress = row.address;
+      requestId = row.id;
+    } else {
+      if (typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
+        throw Object.assign(new Error("txid required (or --request <id>)"), { code: "BAD_PARAM" });
+      }
+      sats = Math.floor(Number(amount) || 0);
+      if (!(sats > 0)) throw Object.assign(new Error("amount (sats) required"), { code: "BAD_PARAM" });
+      if (typeof to !== "string" || !to) throw Object.assign(new Error("to required (@name, identity key, address)"), { code: "BAD_PARAM" });
+      const person = await resolvePerson(b.db, to, livePeople());
+      peer = person.identityKey;
+      peerAddress = person.address;
+      if (!peerAddress && peer && p2pChannel?.meet) {
+        const card = await p2pChannel.meet(peer);
+        if (card?.payTo && validPayTo(card.payTo)) {
+          peerAddress = card.payTo;
+          await learnAddress(b.db, peer, peerAddress);
+        }
+      }
+      if (!peerAddress) {
+        const hint = person.name ? `bsv contact add ${person.name} <identityKey> <address>` : "bsv contact add <name> <identityKey> <address>";
+        throw Object.assign(new Error(`no receive address for ${person.display} — ${hint}`), { code: "BAD_PARAM" });
+      }
+      paymentTxid = txid.toLowerCase();
+      item = typeof memo === "string" ? memo : "";
+    }
+    return issueReceipt(
+      {
+        db: b.db,
+        inscribe: (input) =>
+          inscribeMint({
+            db: b.db,
+            chain: b.chain,
+            origin: "cli",
+            dataHex: input.dataHex,
+            contentType: input.contentType,
+            to: input.to,
+            label: input.label,
+            ...(item ? { description: item } : {}),
+          }),
+        notify: async (peerKey, text) => {
+          try {
+            await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), peerKey, text);
+            return { sent: true };
+          } catch {
+            return { sent: false };
+          }
+        },
+      },
+      { txid: paymentTxid, amount: sats, memo: item, peer, peerAddress, requestId },
+    );
+  },
+  receiptList: async () => {
+    const b = needBackend();
+    return { receipts: await listPaymentReceipts(b.db) };
   },
   /**
    * F10 social recovery. Setup/rotate need the wallet unlocked and print

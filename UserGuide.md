@@ -129,6 +129,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Share a file | `bsv torrent seed <file>` — real BitTorrent; wallets on your network find it via the authenticated channel, no tracker |
 | Fetch a file | `bsv torrent fetch <infohash>` (or a `.torrent` file) with `[--peer host:port]`; serves from `~/.local/share/bsv-os/torrents` |
 | Request money | `bsv request @ana 5000 --memo "lunch"` — a signed ask; `bsv request list` shows asks in/out, `bsv request pay <id>` approves, `bsv request import <code>` takes a pasted/QR ask, `bsv request code <id>` re-shows it |
+| Receipt a purchase | `bsv receipt issue --request <id>` (a paid ask) or `--txid <txid> --to <@name> --amount <sats> [--memo ".."]` — inscribes a signed receipt as a 1Sat ordinal and delivers it in the same transaction; `bsv receipt list` |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
@@ -262,6 +263,27 @@ unconfirmed or fake receipt leaves the ask pending (reported as claimed,
 not paid). Asks expire (default 7 days, `--expires=12h`), a lapsed ask is
 not payable, and asking yourself is a no-op (your own outbound asks are
 never payable) — use `bsv send` to move money between your own addresses.
+
+### Inscribed receipts (purchases on-chain)
+
+After paying someone — or paying an ask — you can turn the payment into a
+portable proof of purchase. A receipt is a small JSON payload (payment
+txid, sats, memo, payer/payee, timestamp) signed by your identity key and
+inscribed as a **1Sat ordinal delivered straight to the seller** in the
+same transaction, so the inscription *is* the send: one fee, and the chain
+proves when it happened.
+
+```bash
+bsv receipt issue --request <id>                                # for a paid ask
+bsv receipt issue --txid <txid> --to @ana --amount 5000 --memo "lunch"
+bsv receipt list                                                # issued receipts + outpoint
+```
+
+The panel offers a **Receipt** button on paid incoming requests and lists
+issued receipts under **Receipts**. Verification needs no server: the
+inscription content is the receipt, and anyone can check the BSM signature
+against the payer's identity key with `bsv ord list` showing the carrier.
+Recipients with an identity key also get a DM pointing at the outpoint.
 
 ### Twetch companion (feed, notifications, posting)
 
