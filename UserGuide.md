@@ -128,6 +128,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Starter sats | `bsv faucet status` → `bsv faucet claim` (one 25k-sat claim per wallet, signed by your identity key; the bar panel offers it when a balance is empty) |
 | Share a file | `bsv torrent seed <file>` — real BitTorrent; wallets on your network find it via the authenticated channel, no tracker |
 | Fetch a file | `bsv torrent fetch <infohash>` (or a `.torrent` file) with `[--peer host:port]`; serves from `~/.local/share/bsv-os/torrents` |
+| Request money | `bsv request @ana 5000 --memo "lunch"` — a signed ask; `bsv request list` shows asks in/out, `bsv request pay <id>` approves, `bsv request import <code>` takes a pasted/QR ask, `bsv request code <id>` re-shows it |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
@@ -234,6 +235,30 @@ at. Two constraints worth knowing: the daemon runs with systemd
 `PrivateTmp`, so share files must live under your home directory (not
 `/tmp`), and v1 is single-file torrents up to 16 GiB. Set `BSV_TORRENT=0`
 to disable the feature entirely.
+
+### Asking for sats (payment requests)
+
+The wallet could send money but not ask for it. Now it can:
+
+```bash
+bsv request @ana 5000 --memo "lunch"     # signs the ask, DMs it, prints the code
+bsv request list                         # asks in (payable) and out (awaiting)
+bsv request pay <id>                     # approve: normal policy gate, then a signed receipt
+bsv request import '<bsvpay1:…>'         # take an ask from anywhere
+bsv request code <id>                    # re-show a code + QR for the panel
+```
+
+A request is a compact signed code: requester identity key, receive address,
+exact sats, memo, and expiry, all signed by the requester's identity key
+(BSM). That makes it safe on any channel — DM, QR, chat, email — because the
+payer's daemon verifies the signature before anything moves, so an address
+or amount swap in transit fails closed. Nothing is ever auto-paid: only an
+explicit Approve (panel or `bsv request pay`) releases sats through the
+normal policy gate. After paying, your daemon DMs a signed receipt back;
+the requester's inbox sync verifies it and marks the ask paid with the
+txid. Asks expire (default 7 days, `--expires=12h`), a lapsed ask is not
+payable, and asking yourself is a no-op (your own outbound asks are never
+payable) — use `bsv send` to move money between your own addresses.
 
 ### Twetch companion (feed, notifications, posting)
 

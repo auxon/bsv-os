@@ -7,7 +7,12 @@ import { toDataURL, toString as toAscii } from "qrcode";
 
 /** PNG data URL (~240px) for QML Image sources (`bsv address --png`). */
 export async function qrDataUrl(address: string): Promise<string> {
-  return toDataURL(address, { width: 240, margin: 1 });
+  return qrDataUrlText(address);
+}
+
+/** Same, for any payload (payment requests, receipts, links). */
+export async function qrDataUrlText(text: string): Promise<string> {
+  return toDataURL(text, { width: 240, margin: 1 });
 }
 
 /** ANSI-art QR for terminals (`bsv address --qr`). */

@@ -232,6 +232,24 @@ export function identitySignMessage(message: string): string {
 }
 
 /**
+ * BSM verification against a peer's identity key. Needs no session and no
+ * private material — callers prove a signed payload (payment requests,
+ * receipts) came from the claimed key even when it arrived over an
+ * untrusted channel.
+ */
+export function verifyIdentitySignature(identityKey: string, message: string, sigBase64: string): boolean {
+  try {
+    return BSM.verify(
+      Array.from(Buffer.from(message, "utf8")),
+      Signature.fromCompact(sigBase64, "base64"),
+      PublicKey.fromString(identityKey),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * BRC-42 scoped signature for auth handshakes (BRC-104). Signs
  * SHA-256(data) — the reference digest — with the exact protocol/keyID/
  * counterparty the caller passes; the verifier mirrors the same scope.

@@ -103,6 +103,17 @@ Panel {
   property string torrentPeer: ""
   property string torrentText: ""
   property bool torrentOk: true
+  // Payment requests (see `bsv request`): signed asks that can travel over
+  // DM, QR, or paste. Approving pays through the normal policy gate.
+  property var requestsIn: []
+  property var requestsOut: []
+  property string reqWho: ""
+  property string reqSats: ""
+  property string reqMemo: ""
+  property string reqText: ""
+  property bool reqOk: true
+  property string reqQr: ""
+  property string reqCode: ""
   // F10 recovery status (see `bsv recovery status`): set metadata only,
   // never shares. Ceremonies stay terminal-only by key-material policy.
   property var recoverySets: []
@@ -177,6 +188,7 @@ Panel {
           if (!profileProc.running) profileProc.running = true;
           if (!faucetStatusProc.running) faucetStatusProc.running = true;
           if (!torrentListProc.running) torrentListProc.running = true;
+          if (!requestsProc.running) requestsProc.running = true;
           if (!recoveryProc.running) recoveryProc.running = true;
           if (!gigBoardProc.running) gigBoardProc.running = true;
           if (!gigListProc.running) gigListProc.running = true;
@@ -612,6 +624,113 @@ Panel {
       if (code !== 0) {
         root.torrentOk = false;
         root.torrentText = "Fetch failed — no peer found, or the torrent is unknown.";
+      }
+    }
+  }
+
+  // Payment requests: sync + list, create, approve, decline, show code/QR.
+  Process {
+    id: requestsProc
+    command: ["bsv", "request", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.requestsIn = r.incoming ?? [];
+          root.requestsOut = r.outgoing ?? [];
+        } catch (e) {
+          root.requestsIn = [];
+          root.requestsOut = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) { root.requestsIn = []; root.requestsOut = []; } }
+  }
+
+  Process {
+    id: requestCreateProc
+    property string who: ""
+    property int sats: 0
+    property string memo: ""
+    command: ["bsv", "request", who, String(sats)].concat(memo.trim() === "" ? [] : ["--memo", memo])
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.reqOk = true;
+          root.reqText = r.sent
+            ? `Request for ${r.amount} sats sent — awaiting payment.`
+            : "Request ready — share the code below (no identity key known for a DM).";
+          root.reqQr = r.dataUrl ?? "";
+          root.reqCode = r.code ?? "";
+          root.reqSats = "";
+          root.reqMemo = "";
+        } catch (e) {
+          root.reqOk = false;
+          root.reqText = "Could not create the request.";
+        }
+        if (!requestsProc.running) requestsProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.reqOk = false;
+        root.reqText = "Request failed — unknown person or bad amount.";
+      }
+    }
+  }
+
+  Process {
+    id: requestPayProc
+    property string id: ""
+    command: ["bsv", "request", "pay", id]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.reqOk = true;
+          root.reqText = `Paid ${r.amount} sats (${String(r.txid).slice(0, 12)}…)${r.receiptSent ? " — receipt sent" : ""}.`;
+        } catch (e) {
+          root.reqOk = false;
+          root.reqText = "Payment failed.";
+        }
+        root.reqQr = "";
+        root.reqCode = "";
+        if (!requestsProc.running) requestsProc.running = true;
+        if (!balanceProc.running) balanceProc.running = true;
+        if (!historyProc.running) historyProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.reqOk = false;
+        root.reqText = "Payment failed — expired, declined, already paid, or policy denied.";
+      }
+    }
+  }
+
+  Process {
+    id: requestCodeProc
+    property string id: ""
+    command: ["bsv", "request", "code", id]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.reqQr = r.dataUrl ?? "";
+          root.reqCode = r.code ?? "";
+          root.reqOk = true;
+          root.reqText = `Code for ${String(r.id).slice(0, 8)}… (${r.status}) — copy or scan.`;
+        } catch (e) {
+          root.reqOk = false;
+          root.reqText = "Could not load the request code.";
+        }
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.reqOk = false;
+        root.reqText = "Could not load the request code.";
       }
     }
   }
@@ -2217,6 +2336,168 @@ Panel {
         wrapMode: Text.Wrap
         Layout.fillWidth: true
         visible: root.payText !== ""
+      }
+    }
+
+    PanelSectionHeader { text: "Payment requests" }
+
+    Text {
+      text: "Ask anyone for sats (or pay an ask): the request is signed by your identity key, so it is safe over DM, QR, or a pasted message. Nothing is auto-paid."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.requestsIn.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.requestsIn
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `← ${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${modelData.status}`
+            color: modelData.status === "pending" ? Color.foreground : Color.muted
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Approve"
+            visible: modelData.status === "pending"
+            onClicked: {
+              requestPayProc.id = modelData.id;
+              requestPayProc.running = true;
+            }
+          }
+
+          Button {
+            text: "Decline"
+            visible: modelData.status === "pending"
+            onClicked: root.runAppAction(["request", "decline", modelData.id])
+          }
+        }
+      }
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.requestsOut.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.requestsOut
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `→ ${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${modelData.status}`
+            color: Color.muted
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Show code"
+            onClicked: {
+              requestCodeProc.id = modelData.id;
+              requestCodeProc.running = true;
+            }
+          }
+        }
+      }
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: reqWhoField
+        placeholderText: "@name, identity key, or address"
+        font.family: "monospace"
+        text: root.reqWho
+        onTextEdited: root.reqWho = text
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: reqSatsField
+        placeholderText: "sats"
+        inputMethodHints: Qt.ImhDigitsOnly
+        text: root.reqSats
+        onTextEdited: root.reqSats = text
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: reqMemoField
+        placeholderText: "memo"
+        text: root.reqMemo
+        onTextEdited: root.reqMemo = text
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Request"
+        enabled: root.reqWho.trim() !== "" && Number(root.reqSats) > 0 && !requestCreateProc.running
+        onClicked: {
+          requestCreateProc.who = root.reqWho.trim();
+          requestCreateProc.sats = Math.max(1, Math.floor(Number(root.reqSats) || 0));
+          requestCreateProc.memo = root.reqMemo;
+          requestCreateProc.running = true;
+        }
+      }
+    }
+
+    Text {
+      text: root.reqText
+      color: root.reqOk ? Color.muted : Color.urgent
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.reqText !== ""
+    }
+
+    RowLayout {
+      spacing: 8
+      visible: root.reqQr !== ""
+      Layout.fillWidth: true
+
+      Image {
+        source: root.reqQr
+        width: 160
+        height: 160
+        fillMode: Image.PreserveAspectFit
+      }
+
+      ColumnLayout {
+        spacing: 4
+        Layout.fillWidth: true
+
+        Text {
+          text: root.reqCode
+          color: Color.muted
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideMiddle
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Copy code"
+          onClicked: {
+            copyProc.copyText = root.reqCode;
+            if (!copyProc.running) copyProc.running = true;
+          }
+        }
       }
     }
 

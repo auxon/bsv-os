@@ -9,7 +9,7 @@ import {
 import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, probe, seedRequest, setPolicy } from "./policy.ts";
-import { qrDataUrl } from "./qr.ts";
+import { qrDataUrl, qrDataUrlText } from "./qr.ts";
 import { readEvents } from "./events.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
@@ -38,6 +38,11 @@ import {
 } from "./people.ts";
 import { faucetClaim, faucetStatus } from "./faucet.ts";
 import type { TorrentService } from "./torrents.ts";
+import {
+  buildRequest, encodeRequest, expireOld, getRequest, listRequests, markDeclined, markPaid,
+  parseDuration, parseRequest, payableError, recordOutgoing, saveIncoming, scanInbound,
+  sendReceipt, sendRequestCode,
+} from "./requests.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -919,6 +924,102 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { infoHash, deleteFile } = p(params) as { infoHash?: unknown; deleteFile?: unknown };
     if (typeof infoHash !== "string" || !infoHash) throw Object.assign(new Error("infoHash required"), { code: "BAD_PARAM" });
     return s.remove(infoHash, { deleteFile: deleteFile === true });
+  },
+  /**
+   * Payment requests: a signed ask for money that travels over DM, QR, or
+   * paste. Creating one costs nothing and never spends; paying one is a
+   * normal policy-gated spend plus a signed receipt back to the requester.
+   */
+  requestCreate: async (params) => {
+    const b = needBackend();
+    const { to, sats, memo, expires } = p(params) as { to?: unknown; sats?: unknown; memo?: unknown; expires?: unknown };
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("who required (@name, identity key, address)"), { code: "BAD_PARAM" });
+    const amount = Math.floor(Number(sats) || 0);
+    if (!(amount > 0)) throw Object.assign(new Error("sats must be a positive sat number"), { code: "BAD_PARAM" });
+    const ttlMs = parseDuration(expires);
+    const person = await resolvePerson(b.db, to, livePeople());
+    const request = buildRequest({
+      identityKey: identityPubkeyHex(),
+      address: selfAddress(),
+      amount,
+      memo: typeof memo === "string" ? memo : "",
+      ttlMs,
+    });
+    const row = await recordOutgoing(b.db, request, person.identityKey);
+    const code = encodeRequest(request);
+    let sent = false;
+    if (person.identityKey) {
+      ({ sent } = await sendRequestCode(b.db, liveRelay(), p2pChannel, person.identityKey, code, request.memo));
+    }
+    return {
+      id: row.id,
+      code,
+      dataUrl: await qrDataUrlText(code),
+      sent,
+      to: { name: person.name, display: person.display, identityKey: person.identityKey },
+      amount: request.amount,
+      memo: request.memo,
+      expiresAt: row.expiresAt,
+    };
+  },
+  requestList: async () => {
+    const b = needBackend();
+    await expireOld(b.db);
+    let sync = { scanned: 0, imported: 0, paid: 0 };
+    try {
+      sync = await scanInbound(b.db);
+    } catch {
+      /* locked wallet: list what we already know */
+    }
+    return {
+      incoming: await listRequests(b.db, "in"),
+      outgoing: await listRequests(b.db, "out"),
+      sync,
+    };
+  },
+  requestPay: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("request id required"), { code: "BAD_PARAM" });
+    const row = await getRequest(b.db, id);
+    if (!row) throw Object.assign(new Error(`no request ${id}`), { code: "NOT_FOUND" });
+    const err = payableError(row);
+    if (err) throw Object.assign(new Error(err), { code: "BAD_PARAM" });
+    // Re-verify the stored code before sats move: the ledger must agree with
+    // the signature the requester actually produced.
+    const verified = parseRequest(row.code);
+    if (verified.id !== row.id || verified.address !== row.address || verified.amount !== row.amount) {
+      throw Object.assign(new Error("stored request failed re-verification"), { code: "BAD_CODE" });
+    }
+    const label = row.memo ? row.memo.slice(0, 100) : `request ${row.id.slice(0, 8)}`;
+    const r = await sendSats({ db: b.db, chain: b.chain, origin: "cli", to: verified.address, sats: verified.amount, label });
+    await markPaid(b.db, row.id, r.txid);
+    const receipt = row.peer ? await sendReceipt(b.db, liveRelay(), p2pChannel, row, r.txid, row.amount) : { sent: false };
+    return { txid: r.txid, fee: r.fee, amount: row.amount, to: row.peer, receiptSent: receipt.sent };
+  },
+  requestDecline: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("request id required"), { code: "BAD_PARAM" });
+    const row = await getRequest(b.db, id);
+    if (!row) throw Object.assign(new Error(`no request ${id}`), { code: "NOT_FOUND" });
+    return markDeclined(b.db, id);
+  },
+  requestImport: async (params) => {
+    const b = needBackend();
+    const { code } = p(params) as { code?: unknown };
+    if (typeof code !== "string" || !code.trim()) throw Object.assign(new Error("code required"), { code: "BAD_PARAM" });
+    const request = parseRequest(code.trim());
+    const saved = await saveIncoming(b.db, request, code.trim());
+    return { fresh: saved.fresh, request: saved.row };
+  },
+  requestCode: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("request id required"), { code: "BAD_PARAM" });
+    const row = await getRequest(b.db, id);
+    if (!row) throw Object.assign(new Error(`no request ${id}`), { code: "NOT_FOUND" });
+    return { id: row.id, code: row.code, dataUrl: await qrDataUrlText(row.code), status: row.status, direction: row.direction };
   },
   /**
    * F10 social recovery. Setup/rotate need the wallet unlocked and print

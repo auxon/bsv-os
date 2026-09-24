@@ -15,6 +15,7 @@ import { migrateBrc100 } from "./brc100.ts";
 import { migrateCerts } from "./certs.ts";
 import { migrateMsgs } from "./msgs.ts";
 import { migratePeople } from "./people.ts";
+import { migrateRequests } from "./requests.ts";
 import { migrateTorrents } from "./torrents.ts";
 import { migrateRecovery } from "./recovery.ts";
 import { migrateX402 } from "./x402.ts";
@@ -66,6 +67,7 @@ export async function migrate(db: Knex): Promise<void> {
   await migrateCerts(db);
   await migrateMsgs(db);
   await migratePeople(db);
+  await migrateRequests(db);
   await migrateTorrents(db);
   await migrateRecovery(db);
   await migrateX402(db);

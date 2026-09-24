@@ -131,6 +131,18 @@ function flag(rest: string[], name: string): string | undefined {
   return undefined;
 }
 
+/** requestList without per-row codes (long; `request code <id>` fetches one). */
+async function requestListForCli(): Promise<unknown> {
+  const res = (await call("requestList")) as {
+    incoming?: Array<Record<string, unknown>>;
+    outgoing?: Array<Record<string, unknown>>;
+  };
+  for (const list of [res.incoming, res.outgoing]) {
+    for (const row of list ?? []) delete row.code;
+  }
+  return res;
+}
+
 /** Inline value, or @file to read the value from a file. */
 function argText(raw: string): string {
   return raw.startsWith("@") ? fs.readFileSync(raw.slice(1), "utf8") : raw;
@@ -800,6 +812,42 @@ async function main(): Promise<void> {
       } else {
         console.error("usage: bsv torrent <list|seed <file> [--name=..]|fetch <infohash|file.torrent> [--peer host:port] [--out path]|peers <infohash>|remove <infohash> [--delete]>");
         process.exitCode = 2;
+      }
+      break;
+    }
+    case "request": {
+      const [rSub, ...rRest] = rest;
+      const rArgs = rRest.filter((a) => !a.startsWith("--"));
+      if (rSub === "pay" && rArgs[0]) {
+        print(await call("requestPay", { id: rArgs[0] }));
+      } else if (rSub === "decline" && rArgs[0]) {
+        print(await call("requestDecline", { id: rArgs[0] }));
+      } else if (rSub === "import" && rArgs[0]) {
+        print(await call("requestImport", { code: rArgs[0] }));
+      } else if (rSub === "code" && rArgs[0]) {
+        const res = (await call("requestCode", { id: rArgs[0] })) as Record<string, unknown>;
+        delete res.dataUrl;
+        print(res);
+      } else if (rSub === "list" || rSub === undefined) {
+        print(await requestListForCli());
+      } else {
+        const who = rSub === "create" ? rArgs[0] : rSub;
+        const satsRaw = rSub === "create" ? rArgs[1] : rArgs[0];
+        if (!who || !(Number(satsRaw) > 0)) {
+          console.error("usage: bsv request <@name|identityKey|address> <sats> [--memo=..] [--expires=7d] | request pay|decline|code <id> | request import <code> | request list");
+          process.exitCode = 2;
+          break;
+        }
+        const memo = flag(rest, "memo");
+        const expires = flag(rest, "expires");
+        const res = (await call("requestCreate", {
+          to: who,
+          sats: Number(satsRaw),
+          ...(memo !== undefined ? { memo } : {}),
+          ...(expires !== undefined ? { expires } : {}),
+        })) as Record<string, unknown>;
+        delete res.dataUrl;
+        print(res);
       }
       break;
     }
