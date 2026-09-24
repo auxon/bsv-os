@@ -213,15 +213,61 @@ async function openInRunner(startUrl: string, domain: string): Promise<boolean> 
     throw e;
   });
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(plan.chromium, plan.args, { stdio: "ignore" });
-      child.on("error", reject);
-      child.on("exit", () => resolve());
+    // Chromium re-execs (or hands off to an existing instance) within a few
+    // hundred ms, so the spawned process exiting does NOT mean the window
+    // closed. Tie the bridge to the app's browser process instead, found by
+    // its unique --user-data-dir; otherwise the bridge dies under a live
+    // window and window.bsv answers BRIDGE_DOWN.
+    const child = spawn(plan.chromium, plan.args, { stdio: "ignore" });
+    let spawnError: Error | null = null;
+    child.on("error", (e) => {
+      spawnError = e as Error;
     });
+    const appeared = await waitForProfile(plan.dataDir, 15000);
+    if (!appeared && spawnError) throw spawnError;
+    if (appeared) await waitForProfileGone(plan.dataDir);
   } finally {
     bridge.kill();
   }
   return true;
+}
+
+/** PIDs whose command line carries this app's private browser profile. */
+function profilePids(dataDir: string): number[] {
+  const pids: number[] = [];
+  let entries: string[];
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch {
+    return pids;
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const cmd = fs.readFileSync(`/proc/${entry}/cmdline`, "utf8");
+      if (cmd.includes(`--user-data-dir=${dataDir}`)) pids.push(Number(entry));
+    } catch {
+      /* process vanished mid-read */
+    }
+  }
+  return pids;
+}
+
+/** True once the app's browser process exists (Chromium may re-exec first). */
+async function waitForProfile(dataDir: string, timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  for (;;) {
+    if (profilePids(dataDir).length > 0) return true;
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+async function waitForProfileGone(dataDir: string): Promise<void> {
+  for (;;) {
+    if (profilePids(dataDir).length === 0) return;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
 }
 
 async function main(): Promise<void> {
