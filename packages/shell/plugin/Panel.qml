@@ -725,10 +725,14 @@ Panel {
         try {
           const r = JSON.parse(text);
           root.reqOk = true;
-          if (r.fresh === false) {
-            root.reqText = `Already had that request (${r.request?.status ?? "known"}).`;
+          const direction = r.request?.direction ?? "in";
+          const label = `${r.request?.amount ?? "?"} sats${r.request?.memo ? " · " + r.request.memo : ""}`;
+          if (direction === "out") {
+            root.reqText = `That is one of your own requests (${label}) — you cannot approve your own ask; use bsv send to move your own sats. It is under outgoing.`;
+          } else if (r.fresh === false) {
+            root.reqText = `Already imported (${r.request?.status ?? "known"}): ${label}.`;
           } else {
-            root.reqText = `Imported ${r.request?.amount ?? "?"} sats${r.request?.memo ? " · " + r.request.memo : ""} — approve it above.`;
+            root.reqText = `Imported ${label} — approve it above.`;
           }
         } catch (e) {
           root.reqOk = false;
@@ -2458,6 +2462,14 @@ Panel {
       font.pixelSize: Style.font.caption
       wrapMode: Text.Wrap
       Layout.fillWidth: true
+    }
+
+    Text {
+      text: "No incoming asks — paste a code above to import one."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      Layout.fillWidth: true
+      visible: root.requestsIn.length === 0
     }
 
     ColumnLayout {
