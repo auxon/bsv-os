@@ -225,6 +225,12 @@ export function identityPubkeyHex(): string {
   return identityOf(session);
 }
 
+/** BSM over the identity root. Remote verifiers (the faucet) can check this; BRC-42 cannot. */
+export function identitySignMessage(message: string): string {
+  if (typeof message !== "string" || !message) throw new CustodyError("BAD_PARAM", "message required");
+  return BSM.sign(Array.from(Buffer.from(message, "utf8")), identityRoot(), "base64") as string;
+}
+
 /**
  * BRC-42 scoped signature for auth handshakes (BRC-104). Signs
  * SHA-256(data) — the reference digest — with the exact protocol/keyID/

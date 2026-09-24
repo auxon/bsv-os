@@ -81,6 +81,20 @@ Panel {
   property string msgBody: ""
   property string msgSendText: ""
   property bool msgSendOk: true
+  // People: local names for keys + receive addresses (see `bsv contact`).
+  property var contacts: []
+  property string myName: ""
+  // One-tap pay (see `bsv pay`): sats to a person, note rides as a DM.
+  property string payWho: ""
+  property string paySats: ""
+  property string payNote: ""
+  property string payText: ""
+  property bool payOk: true
+  // First-run faucet (see `bsv faucet`): one claim per identity key.
+  property bool faucetFunded: false
+  property int faucetAmount: 0
+  property bool faucetClaimed: false
+  property string faucetText: ""
   // F10 recovery status (see `bsv recovery status`): set metadata only,
   // never shares. Ceremonies stay terminal-only by key-material policy.
   property var recoverySets: []
@@ -151,6 +165,9 @@ Panel {
           if (!msgSyncProc.running) msgSyncProc.running = true;
           if (!msgListProc.running) msgListProc.running = true;
           if (!p2pPeersProc.running) p2pPeersProc.running = true;
+          if (!contactsProc.running) contactsProc.running = true;
+          if (!profileProc.running) profileProc.running = true;
+          if (!faucetStatusProc.running) faucetStatusProc.running = true;
           if (!recoveryProc.running) recoveryProc.running = true;
           if (!gigBoardProc.running) gigBoardProc.running = true;
           if (!gigListProc.running) gigListProc.running = true;
@@ -433,6 +450,128 @@ Panel {
       }
     }
     onExited: (code) => { if (code !== 0) { root.p2pEnabled = false; root.peers = []; } }
+  }
+
+  // People + profile: local names bound to keys and receive addresses.
+  Process {
+    id: contactsProc
+    command: ["bsv", "contact", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.contacts = JSON.parse(text).contacts ?? [];
+        } catch (e) {
+          root.contacts = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) root.contacts = []; }
+  }
+
+  Process {
+    id: profileProc
+    command: ["bsv", "me"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.myName = JSON.parse(text).name ?? "";
+        } catch (e) {
+          root.myName = "";
+        }
+      }
+    }
+  }
+
+  Process {
+    id: profileSetProc
+    property string name: ""
+    command: ["bsv", "me", name]
+    onExited: root.refresh()
+  }
+
+  Process {
+    id: contactAddProc
+    property string name: ""
+    property string key: ""
+    property string address: ""
+    command: ["bsv", "contact", "add", name, key].concat(address.trim() === "" ? [] : [address])
+    onExited: root.refresh()
+  }
+
+  // One-tap pay: `bsv pay <@name|key|address> <sats> [--note=..]`. Sats go
+  // to the person's receive address; the note rides as an encrypted DM when
+  // the person has an identity key. Payment is never rolled back by a
+  // failed note — the result says which happened.
+  Process {
+    id: payProc
+    property string who: ""
+    property int sats: 0
+    property string note: ""
+    command: ["bsv", "pay", who, String(sats)].concat(note.trim() === "" ? [] : ["--note", note])
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.payOk = true;
+          const name = r.to && r.to.display ? r.to.display : who;
+          root.payText = `Paid ${sats} sats to ${name}${r.messageSent ? " with your note" : ""}.`;
+          root.paySats = "";
+          root.payNote = "";
+          if (!msgListProc.running) msgListProc.running = true;
+          if (!balanceProc.running) balanceProc.running = true;
+          if (!historyProc.running) historyProc.running = true;
+        } catch (e) {
+          root.payOk = false;
+          root.payText = "Pay failed — see the terminal for the policy reason.";
+        }
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.payOk = false;
+        root.payText = "Pay failed — unknown person, no address, or policy denied.";
+      }
+    }
+  }
+
+  // First-run faucet: status on every refresh, claim on tap.
+  Process {
+    id: faucetStatusProc
+    command: ["bsv", "faucet", "status"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.faucetFunded = !!r.funded;
+          root.faucetAmount = Number(r.amount) || 0;
+          root.faucetClaimed = !!r.claimed;
+        } catch (e) {
+          root.faucetFunded = false;
+        }
+      }
+    }
+  }
+
+  Process {
+    id: faucetClaimProc
+    command: ["bsv", "faucet", "claim"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.faucetClaimed = true;
+          root.faucetText = `Starter sats on the way — ${Number(r.amount) || 0} sats to ${String(r.address ?? "").slice(0, 10)}… The balance updates when it confirms.`;
+        } catch (e) {
+          root.faucetText = "Claim failed — try again in a moment.";
+        }
+        if (!balanceProc.running) balanceProc.running = true;
+        if (!historyProc.running) historyProc.running = true;
+        if (!faucetStatusProc.running) faucetStatusProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) root.faucetText = "Claim failed — already claimed, or the faucet is unreachable.";
+    }
   }
 
   // Compose runner: `bsv msg send <identityKey> --text <msg>` uses the
@@ -1641,6 +1780,115 @@ Panel {
       visible: root.certs.length === 0
     }
 
+    PanelSectionHeader { text: `People (${root.contacts.length})` }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: myNameField
+        placeholderText: root.myName !== "" ? `You announce as “${root.myName}” — change` : "Your name on the network"
+        text: ""
+        onAccepted: {
+          if (text.trim() !== "") {
+            profileSetProc.name = text.trim();
+            profileSetProc.running = true;
+          }
+        }
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Save"
+        enabled: myNameField.text.trim() !== "" && !profileSetProc.running
+        onClicked: {
+          profileSetProc.name = myNameField.text.trim();
+          profileSetProc.running = true;
+        }
+      }
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.contacts.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.contacts
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.display ?? modelData.name}${modelData.address ? " · " + String(modelData.address).slice(0, 10) + "…" : " · no address yet"}`
+            color: Color.foreground
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Message"
+            onClicked: root.msgTo = String(modelData.identityKey)
+          }
+
+          Button {
+            text: "Pay"
+            onClicked: root.payWho = `@${modelData.name}`
+          }
+        }
+      }
+    }
+
+    Text {
+      text: "No people yet — add someone by name, or message a nearby peer first and save them."
+      color: Color.muted
+      font.pixelSize: Style.font.body
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.contacts.length === 0
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: contactNameField
+        placeholderText: "name"
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: contactKeyField
+        placeholderText: "identity key (66 hex)"
+        font.family: "monospace"
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: contactAddrField
+        placeholderText: "address (optional)"
+        font.family: "monospace"
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Add"
+        enabled: contactNameField.text.trim() !== "" && contactKeyField.text.trim() !== "" && !contactAddProc.running
+        onClicked: {
+          contactAddProc.name = contactNameField.text.trim();
+          contactAddProc.key = contactKeyField.text.trim();
+          contactAddProc.address = contactAddrField.text.trim();
+          contactAddProc.running = true;
+          contactNameField.text = "";
+          contactKeyField.text = "";
+          contactAddrField.text = "";
+        }
+      }
+    }
+
     PanelSectionHeader { text: `Inbox (${root.messages.length})` }
 
     Text {
@@ -1736,7 +1984,7 @@ Panel {
           Layout.fillWidth: true
 
           Text {
-            text: `${modelData.online ? "●" : "○"} ${String(modelData.identityKey ?? "?").slice(0, 16)}… · ${modelData.address ?? "?"}:${modelData.port ?? "?"}`
+            text: `${modelData.online ? "●" : "○"} ${modelData.nameVerified && modelData.name ? modelData.name + " · " : ""}${String(modelData.identityKey ?? "?").slice(0, 12)}… · ${modelData.address ?? "?"}:${modelData.port ?? "?"}`
             color: modelData.online ? Color.foreground : Color.muted
             font.pixelSize: Style.font.body
             wrapMode: Text.Wrap
@@ -1747,6 +1995,23 @@ Panel {
             text: "Message"
             enabled: modelData.online
             onClicked: root.msgTo = String(modelData.identityKey)
+          }
+
+          Button {
+            text: "Pay"
+            enabled: modelData.online && (modelData.payTo ?? "") !== ""
+            onClicked: root.payWho = String(modelData.identityKey)
+          }
+
+          Button {
+            text: "Save"
+            visible: !!modelData.nameVerified && modelData.name !== ""
+            onClicked: {
+              contactAddProc.name = modelData.name;
+              contactAddProc.key = modelData.identityKey;
+              contactAddProc.address = modelData.payTo ?? "";
+              contactAddProc.running = true;
+            }
           }
         }
       }
@@ -1760,7 +2025,7 @@ Panel {
 
       TextField {
         id: msgToField
-        placeholderText: "Recipient identity key (66 hex) — or tap Message on a peer"
+        placeholderText: "Recipient: @name, identity key, or tap a peer"
         font.family: "monospace"
         text: root.msgTo
         onTextEdited: root.msgTo = text
@@ -1804,6 +2069,106 @@ Panel {
           Layout.fillWidth: true
           visible: root.msgSendText !== ""
         }
+      }
+    }
+
+    PanelSectionHeader { text: "Pay someone" }
+
+    Text {
+      text: "Sats to a person, with the note sent encrypted when they have an identity key. Addresses are learned from nearby peers, never derived from keys."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: payWhoField
+        placeholderText: "@name, identity key, or address"
+        font.family: "monospace"
+        text: root.payWho
+        onTextEdited: root.payWho = text
+        Layout.fillWidth: true
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: paySatsField
+          placeholderText: "sats"
+          inputMethodHints: Qt.ImhDigitsOnly
+          text: root.paySats
+          onTextEdited: root.paySats = text
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Pay"
+          enabled: Number(root.paySats) > 0 && root.payWho.trim() !== "" && !payProc.running
+          onClicked: {
+            payProc.who = root.payWho.trim();
+            payProc.sats = Math.max(1, Math.floor(Number(root.paySats) || 0));
+            payProc.note = root.payNote;
+            payProc.running = true;
+          }
+        }
+      }
+
+      TextField {
+        id: payNoteField
+        placeholderText: "note (optional, sent as an encrypted DM)"
+        text: root.payNote
+        onTextEdited: root.payNote = text
+        Layout.fillWidth: true
+      }
+
+      Text {
+        text: root.payText
+        color: root.payOk ? Color.muted : Color.urgent
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.payText !== ""
+      }
+    }
+
+    PanelSectionHeader { text: "Starter sats" }
+
+    Text {
+      text: root.faucetClaimed
+        ? "Claimed — one claim per wallet. This is for trying things: anchors, DMs, a first payment."
+        : root.faucetFunded
+          ? `A one-time faucet claim (${root.faucetAmount || "?"} sats) is available for this wallet.`
+          : "Faucet unavailable right now — keep using the wallet; testnet-style starter sats are optional."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      Button {
+        text: root.faucetClaimed ? "Claimed" : "Claim starter sats"
+        enabled: root.faucetFunded && !root.faucetClaimed && !faucetClaimProc.running
+        onClicked: faucetClaimProc.running = true
+      }
+
+      Text {
+        text: root.faucetText
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.faucetText !== ""
       }
     }
 

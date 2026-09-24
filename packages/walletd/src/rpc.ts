@@ -32,6 +32,11 @@ import { combineCards, listSets, recordSet, splitFor, supersedeSets } from "./re
 import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts";
 import { ackDm, listStored, liveRelay, readDm, sendDmPreferred, syncInbox } from "./msgs.ts";
 import type { P2PChannel } from "./p2p.ts";
+import {
+  addContact, getContact, learnAddress, listContacts, profileName, removeContact,
+  resolvePerson, setProfileName, validPayTo, type LivePerson,
+} from "./people.ts";
+import { faucetClaim, faucetStatus } from "./faucet.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -90,6 +95,13 @@ let p2pChannel: P2PChannel | null = null;
 /** Wired by index.ts when the F6.2 direct channel starts. */
 export function setP2P(channel: P2PChannel | null): void {
   p2pChannel = channel;
+}
+
+function livePeople(): LivePerson[] {
+  if (!p2pChannel) return [];
+  return p2pChannel.peers().map((p) => ({
+    identityKey: p.identityKey, name: p.name, payTo: p.payTo, nameVerified: p.nameVerified,
+  }));
 }
 
 function needBackend(): MonitorBackend {
@@ -689,10 +701,14 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   msgSend: async (params) => {
     const b = needBackend();
     const { to, text } = p(params) as { to?: unknown; text?: unknown };
-    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient identity key required"), { code: "BAD_PARAM" });
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient required (@name, identity key)"), { code: "BAD_PARAM" });
     if (typeof text !== "string" || !text) throw Object.assign(new Error("text required"), { code: "BAD_PARAM" });
+    const person = await resolvePerson(b.db, to, livePeople());
+    if (!person.identityKey) {
+      throw Object.assign(new Error(`no identity key for ${person.display} — add one with: bsv contact add`), { code: "BAD_PARAM" });
+    }
     const self = identityPubkeyHex();
-    return sendDmPreferred(b.db, liveRelay(), p2pChannel, self, to, text);
+    return sendDmPreferred(b.db, liveRelay(), p2pChannel, self, person.identityKey, text);
   },
   msgSync: async () => {
     const b = needBackend();
@@ -745,6 +761,104 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     needBackend();
     if (!p2pChannel) return { enabled: false, peers: [] };
     return { enabled: true, peers: p2pChannel.peers() };
+  },
+  /** People: local names bound to identity keys + receive addresses. */
+  contactList: async () => {
+    const b = needBackend();
+    return { contacts: await listContacts(b.db) };
+  },
+  contactAdd: async (params) => {
+    const b = needBackend();
+    const { name, identityKey, address, note } = p(params) as {
+      name?: unknown; identityKey?: unknown; address?: unknown; note?: unknown;
+    };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    if (typeof identityKey !== "string" || !identityKey) throw Object.assign(new Error("identityKey required"), { code: "BAD_PARAM" });
+    return addContact(b.db, {
+      name,
+      identityKey,
+      address: typeof address === "string" ? address : "",
+      note: typeof note === "string" ? note : "",
+    });
+  },
+  contactRemove: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    return removeContact(b.db, name);
+  },
+  contactLookup: async (params) => {
+    const b = needBackend();
+    const { who } = p(params) as { who?: unknown };
+    if (typeof who !== "string" || !who) throw Object.assign(new Error("who required"), { code: "BAD_PARAM" });
+    return resolvePerson(b.db, who, livePeople());
+  },
+  profileGet: async () => {
+    const b = needBackend();
+    return { name: await profileName(b.db) };
+  },
+  profileSet: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    if (typeof name !== "string") throw Object.assign(new Error("name required"), { code: "BAD_PARAM" });
+    return setProfileName(b.db, name);
+  },
+  /**
+   * One-tap pay: resolve `@name` (or key/address), learn the address from a
+   * live peer when needed, send sats, and attach the note as a DM when the
+   * recipient has an identity key. Payment succeeds even if the DM fails.
+   */
+  pay: async (params) => {
+    const b = needBackend();
+    const { to, sats, note } = p(params) as { to?: unknown; sats?: unknown; note?: unknown };
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient required (@name, identity key, address)"), { code: "BAD_PARAM" });
+    const amount = Math.floor(Number(sats) || 0);
+    if (!(amount > 0)) throw Object.assign(new Error("sats must be a positive sat number"), { code: "BAD_PARAM" });
+    const person = await resolvePerson(b.db, to, livePeople());
+    let address = person.address;
+    if (!address && person.identityKey && p2pChannel?.meet) {
+      const card = await p2pChannel.meet(person.identityKey);
+      if (card?.payTo && validPayTo(card.payTo)) {
+        address = card.payTo;
+        if (person.identityKey) await learnAddress(b.db, person.identityKey, address);
+      }
+    }
+    if (!address) {
+      const hint = person.name ? `bsv contact add ${person.name} <identityKey> <address>` : "bsv contact add <name> <identityKey> <address>";
+      throw Object.assign(new Error(`no receive address for ${person.display} — ${hint}`), { code: "BAD_PARAM" });
+    }
+    const label = typeof note === "string" && note.trim() ? note.trim().slice(0, 100) : person.name ? `pay @${person.name}` : `pay ${person.display}`;
+    const r = await sendSats({ db: b.db, chain: b.chain, origin: "cli", to: address, sats: amount, label });
+    let messageSent = false;
+    if (person.identityKey && typeof note === "string" && note.trim()) {
+      try {
+        await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), person.identityKey, note.trim());
+        messageSent = true;
+      } catch {
+        messageSent = false;
+      }
+    }
+    return {
+      txid: r.txid,
+      fee: r.fee,
+      to: { name: person.name, display: person.display, identityKey: person.identityKey, address },
+      messageSent,
+    };
+  },
+  /** First-run faucet (remote service; funds one claim per identity key). */
+  faucetStatus: async () => {
+    needBackend();
+    let identityKey = "";
+    try {
+      identityKey = identityPubkeyHex();
+    } catch {
+      /* locked: status without the claim flag */
+    }
+    return faucetStatus(undefined, undefined, identityKey);
+  },
+  faucetClaim: async () => {
+    needBackend();
+    return faucetClaim();
   },
   /**
    * F10 social recovery. Setup/rotate need the wallet unlocked and print

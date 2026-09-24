@@ -41,6 +41,7 @@ test("peer registry tracks freshness and prunes", () => {
   assert.equal(reg.online(KEY_A.toLowerCase()), true);
   assert.deepEqual(reg.get(KEY_A), {
     identityKey: KEY_A.toLowerCase(), address: "10.0.0.9", port: 21213, lastSeen: now, online: true,
+    name: "", payTo: "", nameVerified: false,
   });
   now += 31_000;
   assert.equal(reg.online(KEY_A), false);
@@ -329,5 +330,56 @@ it("custody crypto interoperates with a real BRC-42 peer over the wire", async (
   } finally {
     await destroyWallet();
     __resetCache();
+  }
+});
+
+test("handshake cards carry verified names and payTo; meet() returns them", async () => {
+  const hub = new MemoryHub();
+  const addrA = PrivateKey.fromRandom().toPublicKey().toAddress("mainnet");
+  const addrB = PrivateKey.fromRandom().toPublicKey().toAddress("mainnet");
+  const seen = { a: [], b: [] };
+  const a = new P2PNode({
+    crypto: fakeCrypto(PrivateKey.fromRandom()),
+    discovery: true,
+    transport: hub.transport(),
+    port: 0,
+    card: () => ({ payTo: addrA, name: "Ana" }),
+    onCard: (key, card) => seen.a.push({ key, card }),
+    connectTimeoutMs: 1000,
+    handshakeTimeoutMs: 1000,
+    ackTimeoutMs: 1500,
+  });
+  const b = new P2PNode({
+    crypto: fakeCrypto(PrivateKey.fromRandom()),
+    discovery: true,
+    transport: hub.transport(),
+    port: 0,
+    card: () => ({ payTo: addrB, name: "Bo" }),
+    onCard: (key, card) => seen.b.push({ key, card }),
+    connectTimeoutMs: 1000,
+    handshakeTimeoutMs: 1000,
+    ackTimeoutMs: 1500,
+  });
+  await a.start();
+  await b.start();
+  try {
+    a.announce();
+    const aKey = a.status().identityKey;
+    const bKey = b.status().identityKey;
+    await waitFor(() => b.registry.online(aKey));
+    const card = await b.meet(aKey);
+    assert.deepEqual(card, { payTo: addrA, name: "Ana" });
+    assert.deepEqual(seen.b, [{ key: aKey, card: { payTo: addrA, name: "Ana" } }]);
+    // The responder also learned the initiator's card.
+    assert.deepEqual(seen.a, [{ key: bKey, card: { payTo: addrB, name: "Bo" } }]);
+    const peer = b.peers().find((p) => p.identityKey === aKey);
+    assert.equal(peer.name, "Ana");
+    assert.equal(peer.payTo, addrA);
+    assert.equal(peer.nameVerified, true);
+    // meet() is idempotent over a live session.
+    assert.deepEqual(await b.meet(aKey), { payTo: addrA, name: "Ana" });
+  } finally {
+    await a.stop();
+    await b.stop();
   }
 });

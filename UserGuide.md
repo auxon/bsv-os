@@ -79,9 +79,19 @@ them for you. Then:
 ```bash
 bsv unlock     # opens the wallet for this session (auto-locks in 15 min)
 bsv balance    # your address, confirmed + unconfirmed sats, UTXO count
+bsv me <name>  # optional: the name nearby wallets see
 ```
 
-Fund it by sending a little BSV to the shown address. A few cents covers
+Fund it by sending a little BSV to the shown address. No sats yet? The
+built-in faucet gives every wallet one claim — signed by your identity key,
+so it needs no account and no email:
+
+```bash
+bsv faucet claim    # one 25,000-sat claim per wallet (when the faucet is funded)
+```
+
+Then try a first action: right-click a file → **Anchor on BSV**, or message
+a wallet you can see in the panel's **Nearby peers**. A few cents covers
 hundreds of actions — most cost a few hundred sats in miner fees.
 
 ## 4. Everyday use
@@ -110,8 +120,12 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Send NFTs and tokens | `bsv ord send <txid:vout> --to <addr>`, `bsv bsv21 send --id <id> --to <addr> --amt <base-units>` (amounts are base units; token change returns automatically) |
 | Trade on the atomic market | `bsv app install market.entangleit.com` → `bsv app open market.entangleit.com` (BRC-100 app; browse, buy atomically, list your ordinals/tokens — approve once with `bsv allow market.entangleit.com [cap]`) |
 | Market from the terminal / agents | `bsv market browse`, `bsv market buy <listing>`, `bsv market list <outpoint> <priceSats>`, `bsv market cancel <listing>` — listing an ordinal locks it on-chain (OrdLock, miner fee) and cancelling unlocks it; buys can run under an agent budget (`--origin=<agent>`); `bsv market sync <listing> <txid>` reconciles a post that raced the indexer |
-| Message privately | `bsv msg send <identityKey> --text <msg>` (ECDH; the wallet panel has Inbox/Compose — sends go direct to peers on your network, otherwise over the encrypted relay) |
+| Message privately | `bsv msg send <@name\|identityKey> --text <msg>` (ECDH; the wallet panel has People + Inbox/Compose — sends go direct to peers on your network, otherwise over the encrypted relay) |
 | Find wallets on your network | `bsv p2p peers` (auto-discovered via LAN beacons; `bsv p2p status` for the channel itself) |
+| Name your people | `bsv contact add ana <identityKey> [address]` → `bsv contact list` / `bsv contact lookup @ana`; nearby peers with announced names show a one-tap **Save**, and their receive address is learned from the authenticated handshake, never derived |
+| Say who you are | `bsv me bsv-air` (announced to nearby wallets; shown in collisions as a verified name) |
+| Pay a person | `bsv pay @ana 5000 --note "lunch"` — sats to their receive address, the note rides as an encrypted DM when they have an identity key |
+| Starter sats | `bsv faucet status` → `bsv faucet claim` (one 25k-sat claim per wallet, signed by your identity key; the bar panel offers it when a balance is empty) |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
@@ -160,6 +174,15 @@ the direct channel when the recipient is live and falls back to the
 encrypted MessageBox relay otherwise — the message id and envelope are the
 same in both legs, so a send can never duplicate. Rows in `bsv msg list`
 say `direct` or `relay`.
+
+Beacons also carry what the handshake proves: a display name (`bsv me`) and
+the wallet's receive address. That is how **People** work — `bsv contact
+add ana <identityKey>` names someone, and an authenticated handshake fills
+in their address if it was missing. `bsv msg send @ana` and `bsv pay @ana
+5000 --note "lunch"` resolve through the same table, and a payment's note
+is delivered as an encrypted DM when the person has an identity key. A
+contact's address is never derived from their identity key — only learned
+from them.
 
 Discovery and handshake details: beacons carry only the identity key plus
 the listening port; the channel proves the key with a BRC-42 challenge,

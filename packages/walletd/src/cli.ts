@@ -681,7 +681,7 @@ async function main(): Promise<void> {
       if (msgSub === "send" && msgArg) {
         const text = flag(rest, "text") ?? msgRest.filter((a) => !a.startsWith("--"))[1];
         if (!text) {
-          console.error("usage: bsv msg send <identityKey> --text <message>");
+          console.error("usage: bsv msg send <@name|identityKey> --text <message>");
           process.exitCode = 2;
           break;
         }
@@ -699,7 +699,7 @@ async function main(): Promise<void> {
       } else if (msgSub === "register" && msgArg) {
         print(await call("msgRegister", { username: msgArg }));
       } else {
-        console.error("usage: bsv msg <send <identityKey> --text <msg>|sync|list|show <id>|ack <id>|status|register <username>>");
+        console.error("usage: bsv msg <send <@name|identityKey> --text <msg>|sync|list|show <id>|ack <id>|status|register <username>>");
         process.exitCode = 2;
       }
       break;
@@ -712,6 +712,66 @@ async function main(): Promise<void> {
         print(await call("p2pPeers"));
       } else {
         console.error("usage: bsv p2p <status|peers>");
+        process.exitCode = 2;
+      }
+      break;
+    }
+    case "contact": {
+      const [cSub, ...cRest] = rest;
+      const cArg = cRest.find((a) => !a.startsWith("--"));
+      if (cSub === "list" || cSub === undefined) {
+        print(await call("contactList"));
+      } else if (cSub === "add" && cArg) {
+        const [name, key, address] = cRest.filter((a) => !a.startsWith("--"));
+        const note = flag(cRest, "note");
+        if (!name || !key) {
+          console.error("usage: bsv contact add <name> <identityKey> [address] [--note=..]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("contactAdd", {
+          name, identityKey: key,
+          ...(address ? { address } : {}),
+          ...(note !== undefined ? { note } : {}),
+        }));
+      } else if (cSub === "remove" && cArg) {
+        print(await call("contactRemove", { name: cArg }));
+      } else if (cSub === "lookup" && cArg) {
+        print(await call("contactLookup", { who: cArg }));
+      } else {
+        console.error("usage: bsv contact <list|add <name> <identityKey> [address]|remove <name>|lookup <who>>");
+        process.exitCode = 2;
+      }
+      break;
+    }
+    case "me": {
+      const name = rest.find((a) => !a.startsWith("--"));
+      print(name ? await call("profileSet", { name }) : await call("profileGet"));
+      break;
+    }
+    case "pay": {
+      const [who, satsRaw] = rest.filter((a) => !a.startsWith("--"));
+      const note = flag(rest, "note") ?? flag(rest, "for");
+      if (!who || !(Number(satsRaw) > 0)) {
+        console.error("usage: bsv pay <@name|identityKey|address> <sats> [--note=..]");
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("pay", {
+        to: who,
+        sats: Number(satsRaw),
+        ...(note !== undefined ? { note } : {}),
+      }));
+      break;
+    }
+    case "faucet": {
+      const [fSub] = rest;
+      if (fSub === "claim") {
+        print(await call("faucetClaim"));
+      } else if (fSub === "status" || fSub === undefined) {
+        print(await call("faucetStatus"));
+      } else {
+        console.error("usage: bsv faucet <status|claim>");
         process.exitCode = 2;
       }
       break;

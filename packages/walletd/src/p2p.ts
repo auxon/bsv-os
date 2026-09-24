@@ -47,6 +47,21 @@ export interface Beacon {
   app: typeof P2P_APP;
   identityKey: string;
   port: number;
+  name?: string;
+  payTo?: string;
+}
+
+const PAY_RE = /^1[1-9A-HJ-NP-Za-km-z]{24,33}$/;
+
+function cleanName(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/[^\x20-\x7e]/g, "").trim().slice(0, 24);
+}
+
+function cleanPay(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const s = raw.trim();
+  return PAY_RE.test(s) ? s : "";
 }
 
 /** Strict beacon codec: unknown versions/shapes are ignored, never routed. */
@@ -55,7 +70,7 @@ export function encodeBeacon(b: Beacon): string {
 }
 
 export function decodeBeacon(raw: string): Beacon | null {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > 512) return null;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 768) return null;
   let o: Record<string, unknown>;
   try {
     o = JSON.parse(raw) as Record<string, unknown>;
@@ -67,7 +82,16 @@ export function decodeBeacon(raw: string): Beacon | null {
   if (typeof o.identityKey !== "string" || !KEY_RE.test(o.identityKey)) return null;
   const port = Number(o.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  return { v: 1, app: P2P_APP, identityKey: o.identityKey.toLowerCase(), port };
+  const name = cleanName(o.name);
+  const payTo = cleanPay(o.payTo);
+  return {
+    v: 1,
+    app: P2P_APP,
+    identityKey: o.identityKey.toLowerCase(),
+    port,
+    ...(name ? { name } : {}),
+    ...(payTo ? { payTo } : {}),
+  };
 }
 
 /**
@@ -81,9 +105,15 @@ export function handshakeTranscript(
   peer: string,
   initiatorNonce: string,
   responderNonce: string,
+  selfPay = "",
+  peerPay = "",
+  selfName = "",
+  peerName = "",
 ): Buffer {
   return createHash("sha256")
-    .update(`${P2P_APP}|v${P2P_VERSION}|${role}|${self.toLowerCase()}|${peer.toLowerCase()}|${initiatorNonce}|${responderNonce}`)
+    .update(
+      `${P2P_APP}|v${P2P_VERSION}|${role}|${self.toLowerCase()}|${peer.toLowerCase()}|${initiatorNonce}|${responderNonce}|${selfPay}|${peerPay}|${selfName}|${peerName}`,
+    )
     .digest();
 }
 
@@ -117,6 +147,9 @@ export interface PeerInfo {
   port: number;
   lastSeen: number;
   online: boolean;
+  name: string;
+  payTo: string;
+  nameVerified: boolean;
 }
 
 export interface PeerSeed {
@@ -145,7 +178,7 @@ export function parsePeerSeeds(raw: string | undefined): PeerSeed[] {
 
 /** Runtime peer table: beacons in, online-if-fresh out. No persistence. */
 export class PeerRegistry {
-  private peers = new Map<string, { address: string; port: number; lastSeen: number }>();
+  private peers = new Map<string, { address: string; port: number; lastSeen: number; name: string }>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -154,9 +187,16 @@ export class PeerRegistry {
     this.now = now;
   }
 
-  observe(identityKey: string, address: string, port: number): void {
+  observe(identityKey: string, address: string, port: number, name = ""): void {
     if (!KEY_RE.test(identityKey) || !Number.isInteger(port) || port < 1 || port > 65535) return;
-    this.peers.set(identityKey.toLowerCase(), { address, port, lastSeen: this.now() });
+    const key = identityKey.toLowerCase();
+    const prev = this.peers.get(key);
+    this.peers.set(key, {
+      address,
+      port,
+      lastSeen: this.now(),
+      name: cleanName(name) || prev?.name || "",
+    });
   }
 
   online(identityKey: string): boolean {
@@ -168,7 +208,16 @@ export class PeerRegistry {
     const key = identityKey.toLowerCase();
     const r = this.peers.get(key);
     if (!r) return null;
-    return { identityKey: key, address: r.address, port: r.port, lastSeen: r.lastSeen, online: this.online(key) };
+    return {
+      identityKey: key,
+      address: r.address,
+      port: r.port,
+      lastSeen: r.lastSeen,
+      online: this.online(key),
+      name: r.name,
+      payTo: "",
+      nameVerified: false,
+    };
   }
 
   list(): PeerInfo[] {
@@ -346,6 +395,8 @@ interface Session {
   inboundCount: number;
   inboundWindowStart: number;
   pending: Map<string, () => void>;
+  payTo: string;
+  name: string;
 }
 
 export interface P2PStatus {
@@ -365,6 +416,7 @@ export interface P2PStatus {
 export interface P2PChannel {
   online(identityKey: string): boolean;
   deliver(identityKey: string, id: string, envelope: unknown): Promise<boolean>;
+  meet?(identityKey: string): Promise<{ payTo: string; name: string } | null>;
   peers(): PeerInfo[];
   status(): P2PStatus;
 }
@@ -372,6 +424,10 @@ export interface P2PChannel {
 export interface P2PNodeOptions {
   crypto: P2PCrypto;
   onDm?: (id: string, envelope: unknown) => unknown | Promise<unknown>;
+  /** Receive address + display name announced in the beacon and bound into the handshake. */
+  card?: () => { payTo: string; name: string };
+  /** Fired once a peer's card is authenticated. */
+  onCard?: (identityKey: string, card: { payTo: string; name: string }) => void;
   port?: number;
   discovery?: boolean;
   transport?: BeaconTransport;
@@ -464,16 +520,44 @@ export class P2PNode implements P2PChannel {
     return this.sessions.has(key) || this.registry.online(key) || this.staticPeers.has(key);
   }
 
+  /** Handshake with a live peer and return their authenticated receive card. */
+  async meet(identityKey: string): Promise<{ payTo: string; name: string } | null> {
+    const key = identityKey.toLowerCase();
+    if (!KEY_RE.test(key) || !this.opts.crypto.available()) return null;
+    const existing = this.sessions.get(key);
+    if (existing) return { payTo: existing.payTo, name: existing.name };
+    const known = this.registry.get(key);
+    const seed = this.staticPeers.get(key);
+    const host = known?.online ? known.address : seed?.address;
+    const port = known?.online ? known.port : seed?.port;
+    if (!host || !port) return null;
+    try {
+      const session = await this.connectTo({
+        identityKey: key, address: host, port, lastSeen: 0, online: true,
+        name: "", payTo: "", nameVerified: false,
+      });
+      return { payTo: session.payTo, name: session.name };
+    } catch {
+      return null;
+    }
+  }
+
   /** Send a discovery beacon now (the periodic tick does this too). */
   announce(): void {
     this.sendBeacon();
   }
 
   peers(): PeerInfo[] {
-    const out = this.registry.list().map((p) => ({
-      ...p,
-      online: p.online || this.sessions.has(p.identityKey),
-    }));
+    const out = this.registry.list().map((p) => {
+      const s = this.sessions.get(p.identityKey);
+      return {
+        ...p,
+        online: p.online || !!s,
+        name: s?.name || p.name,
+        payTo: s?.payTo || "",
+        nameVerified: !!s?.name,
+      };
+    });
     for (const [key, s] of this.sessions) {
       if (out.some((p) => p.identityKey === key)) continue;
       out.push({
@@ -482,11 +566,17 @@ export class P2PNode implements P2PChannel {
         port: s.socket.remotePort ?? 0,
         lastSeen: s.lastActivity,
         online: true,
+        name: s.name,
+        payTo: s.payTo,
+        nameVerified: !!s.name,
       });
     }
     for (const [key, seed] of this.staticPeers) {
       if (out.some((p) => p.identityKey === key)) continue;
-      out.push({ identityKey: key, address: seed.address, port: seed.port, lastSeen: 0, online: true });
+      out.push({
+        identityKey: key, address: seed.address, port: seed.port, lastSeen: 0, online: true,
+        name: "", payTo: "", nameVerified: false,
+      });
     }
     return out.sort((a, b) => b.lastSeen - a.lastSeen);
   }
@@ -517,7 +607,10 @@ export class P2PNode implements P2PChannel {
       if (!peer || !peer.online) {
         const seed = this.staticPeers.get(key);
         if (seed) {
-          peer = { identityKey: key, address: seed.address, port: seed.port, lastSeen: (this.opts.now ?? Date.now)(), online: true };
+          peer = {
+            identityKey: key, address: seed.address, port: seed.port, lastSeen: (this.opts.now ?? Date.now)(),
+            online: true, name: "", payTo: "", nameVerified: false,
+          };
         }
       }
       if (!peer) return false;
@@ -557,13 +650,25 @@ export class P2PNode implements P2PChannel {
     this.sendBeacon();
   }
 
+  private selfCard(): { payTo: string; name: string } {
+    try {
+      const c = this.opts.card?.() ?? { payTo: "", name: "" };
+      return { payTo: cleanPay(c.payTo), name: cleanName(c.name) };
+    } catch {
+      return { payTo: "", name: "" };
+    }
+  }
+
   private sendBeacon(): void {
     if (!this.transport || !this.opts.crypto.available()) return;
+    const card = this.selfCard();
     const beacon: Beacon = {
       v: P2P_VERSION,
       app: P2P_APP,
       identityKey: this.opts.crypto.identity().toLowerCase(),
       port: this.port,
+      ...(card.name ? { name: card.name } : {}),
+      ...(card.payTo ? { payTo: card.payTo } : {}),
     };
     this.transport.send(encodeBeacon(beacon));
   }
@@ -576,7 +681,7 @@ export class P2PNode implements P2PChannel {
     } catch {
       /* locked: identity unknown, record anyway; sends stay closed */
     }
-    this.registry.observe(b.identityKey, address, b.port);
+    this.registry.observe(b.identityKey, address, b.port, b.name ?? "");
   }
 
   // ── inbound connections ────────────────────────────────────────────────
@@ -591,8 +696,8 @@ export class P2PNode implements P2PChannel {
     socket.setNoDelay(true);
     const channel = new JsonLineChannel(socket);
     try {
-      const peer = await this.respond(channel);
-      this.install(socket, channel, peer);
+      const card = await this.respond(channel);
+      this.install(socket, channel, card);
     } catch {
       socket.destroy();
     } finally {
@@ -624,52 +729,62 @@ export class P2PNode implements P2PChannel {
     const channel = new JsonLineChannel(socket);
     try {
       const confirmed = await this.initiate(channel);
-      if (confirmed !== peer.identityKey) throw new Error("peer identity mismatch");
-      return this.install(socket, channel, peer.identityKey);
+      if (confirmed.identity !== peer.identityKey) throw new Error("peer identity mismatch");
+      return this.install(socket, channel, confirmed);
     } catch (e) {
       socket.destroy();
       throw e instanceof Error ? e : new Error(String(e));
     }
   }
 
-  private async initiate(ch: JsonLineChannel): Promise<string> {
+  private async initiate(ch: JsonLineChannel): Promise<{ identity: string; payTo: string; name: string }> {
     const handshakeMs = this.opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     const self = this.opts.crypto.identity().toLowerCase();
+    const mine = this.selfCard();
     const n1 = randomBytes(16).toString("hex");
-    if (!ch.write({ t: "hello", v: P2P_VERSION, id: self, n: n1 })) throw new Error("handshake write failed");
+    if (!ch.write({ t: "hello", v: P2P_VERSION, id: self, n: n1, pay: mine.payTo, name: mine.name })) {
+      throw new Error("handshake write failed");
+    }
     const verify = (await ch.read(handshakeMs)) as Record<string, unknown>;
     if (!verify || verify.t !== "verify" || verify.v !== P2P_VERSION) throw new Error("unexpected handshake frame");
     const peer = typeof verify.id === "string" ? verify.id.toLowerCase() : "";
     const n2 = typeof verify.n === "string" ? verify.n : "";
+    const peerPay = cleanPay(verify.pay);
+    const peerName = cleanName(verify.name);
     if (!KEY_RE.test(peer) || !n2) throw new Error("bad handshake identity");
-    const responderDigest = handshakeTranscript("responder", peer, self, n1, n2);
+    const responderDigest = handshakeTranscript("responder", peer, self, n1, n2, peerPay, mine.payTo, peerName, mine.name);
     const responderSig = Buffer.from(typeof verify.sig === "string" ? verify.sig : "", "hex");
     if (!this.opts.crypto.verify(peer, responderDigest, responderSig)) throw new Error("responder signature invalid");
-    const initiatorDigest = handshakeTranscript("initiator", self, peer, n1, n2);
+    const initiatorDigest = handshakeTranscript("initiator", self, peer, n1, n2, mine.payTo, peerPay, mine.name, peerName);
     if (!ch.write({ t: "auth", sig: this.opts.crypto.sign(peer, initiatorDigest).toString("hex") })) {
       throw new Error("auth write failed");
     }
     const ready = (await ch.read(handshakeMs)) as Record<string, unknown>;
     if (!ready || ready.t !== "ready") throw new Error("no ready frame");
-    return peer;
+    return { identity: peer, payTo: peerPay, name: peerName };
   }
 
-  private async respond(ch: JsonLineChannel): Promise<string> {
+  private async respond(ch: JsonLineChannel): Promise<{ identity: string; payTo: string; name: string }> {
     const handshakeMs = this.opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     const self = this.opts.crypto.identity().toLowerCase();
+    const mine = this.selfCard();
     const hello = (await ch.read(handshakeMs)) as Record<string, unknown>;
     if (!hello || hello.t !== "hello" || hello.v !== P2P_VERSION) throw new Error("unexpected hello");
     const peer = typeof hello.id === "string" ? hello.id.toLowerCase() : "";
     const n1 = typeof hello.n === "string" ? hello.n : "";
+    const peerPay = cleanPay(hello.pay);
+    const peerName = cleanName(hello.name);
     if (!KEY_RE.test(peer) || !n1) throw new Error("bad hello");
     const n2 = randomBytes(16).toString("hex");
-    const responderDigest = handshakeTranscript("responder", self, peer, n1, n2);
+    const responderDigest = handshakeTranscript("responder", self, peer, n1, n2, mine.payTo, peerPay, mine.name, peerName);
     if (
       !ch.write({
         t: "verify",
         v: P2P_VERSION,
         id: self,
         n: n2,
+        pay: mine.payTo,
+        name: mine.name,
         sig: this.opts.crypto.sign(peer, responderDigest).toString("hex"),
       })
     ) {
@@ -677,16 +792,21 @@ export class P2PNode implements P2PChannel {
     }
     const auth = (await ch.read(handshakeMs)) as Record<string, unknown>;
     if (!auth || auth.t !== "auth") throw new Error("unexpected auth frame");
-    const initiatorDigest = handshakeTranscript("initiator", peer, self, n1, n2);
+    const initiatorDigest = handshakeTranscript("initiator", peer, self, n1, n2, peerPay, mine.payTo, peerName, mine.name);
     const sig = Buffer.from(typeof auth.sig === "string" ? auth.sig : "", "hex");
     if (!this.opts.crypto.verify(peer, initiatorDigest, sig)) throw new Error("initiator signature invalid");
     if (!ch.write({ t: "ready" })) throw new Error("ready write failed");
-    return peer;
+    return { identity: peer, payTo: peerPay, name: peerName };
   }
 
   // ── sessions ───────────────────────────────────────────────────────────
 
-  private install(socket: net.Socket, channel: JsonLineChannel, peer: string): Session {
+  private install(
+    socket: net.Socket,
+    channel: JsonLineChannel,
+    card: { identity: string; payTo: string; name: string },
+  ): Session {
+    const peer = card.identity;
     const old = this.sessions.get(peer);
     if (old && old.socket !== socket) {
       try {
@@ -703,12 +823,15 @@ export class P2PNode implements P2PChannel {
       inboundCount: 0,
       inboundWindowStart: (this.opts.now ?? Date.now)(),
       pending: new Map(),
+      payTo: card.payTo,
+      name: card.name,
     };
     this.sessions.set(peer, session);
     channel.setHandler((msg) => void this.onFrame(session, msg));
     socket.on("close", () => {
       if (this.sessions.get(peer) === session) this.sessions.delete(peer);
     });
+    if (card.payTo || card.name) this.opts.onCard?.(peer, { payTo: card.payTo, name: card.name });
     return session;
   }
 

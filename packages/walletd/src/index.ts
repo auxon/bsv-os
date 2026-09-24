@@ -18,6 +18,8 @@ import { CombinedProvider } from "./chain.ts";
 import { migrate, openDb } from "./storage.ts";
 import { P2PNode, P2P_DEFAULT_PORT, P2P_DISCOVERY_PORT, custodyP2PCrypto } from "./p2p.ts";
 import { storeInboundEnvelope } from "./msgs.ts";
+import { selfAddress } from "./custody.ts";
+import { announcedName, learnAddress, profileName, rememberAnnouncedName } from "./people.ts";
 import { createBrc100Wallet, type Brc100Context } from "./brc100.ts";
 import { check } from "./policy.ts";
 import { stringifyBRC100, WalletWireProcessor } from "@bsv/sdk";
@@ -433,11 +435,20 @@ export async function main(): Promise<void> {
     // F6.2 direct channel: LAN discovery + authenticated TCP sessions.
     // Inbound frames store ciphertext through the same path as the relay.
     if (process.env.BSV_P2P !== "0") {
+      rememberAnnouncedName(await profileName(db));
       const p2p = new P2PNode({
         crypto: custodyP2PCrypto,
         port: Number(process.env.BSV_P2P_PORT) || P2P_DEFAULT_PORT,
         discoveryPort: Number(process.env.BSV_P2P_DISCOVERY_PORT) || P2P_DISCOVERY_PORT,
         seeds: process.env.BSV_P2P_PEERS,
+        card: () => {
+          try {
+            return { payTo: selfAddress(), name: announcedName() };
+          } catch {
+            return { payTo: "", name: announcedName() };
+          }
+        },
+        onCard: (identityKey, card) => void learnAddress(db, identityKey, card.payTo).catch(() => {}),
         onDm: (id, envelope) => storeInboundEnvelope(db, id, envelope, "p2p"),
       });
       try {
