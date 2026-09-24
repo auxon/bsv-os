@@ -2719,6 +2719,14 @@ Panel {
             openUrlProc.running = true;
           }
         }
+
+        Button {
+          text: "View in 1Sat Indexer"
+          onClicked: {
+            openUrlProc.url = root.receiptDetail.indexer;
+            openUrlProc.running = true;
+          }
+        }
       }
     }
 

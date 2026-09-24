@@ -97,6 +97,7 @@ test("receiptDetail exposes the NFT view; unverifiable payloads flag invalid", (
   assert.equal(detail.verified, false); // stub signature never verifies
   assert.equal(detail.payload, null);
   assert.equal(detail.explorer, `https://whatsonchain.com/tx/${INSCRIBE_TXID}`);
+  assert.equal(detail.indexer, `https://api.1sat.app/content/${INSCRIBE_TXID}_0`);
 });
 
 test("issueReceipt orchestrates inscribe, ledger, and notify", async () => {

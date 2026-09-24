@@ -14,6 +14,7 @@
  */
 import type { Knex } from "knex";
 import { identityPubkeyHex, identitySignMessage, verifyIdentitySignature } from "./custody.ts";
+import { contentUrl } from "./tokens.ts";
 import { p2pkhScript } from "./tx.ts";
 
 export const RECEIPT_TYPE = "bsvos-receipt";
@@ -178,6 +179,8 @@ export interface ReceiptDetail extends ReceiptRow {
   /** True only when the payload decodes and its BSM signature checks out. */
   verified: boolean;
   explorer: string;
+  /** 1Sat indexer content page (same source the wallet's gallery uses). */
+  indexer: string;
 }
 
 /** What the panel shows when a receipt is opened: the inscribed NFT, decoded. */
@@ -190,6 +193,7 @@ export function receiptDetail(row: ReceiptRow): ReceiptDetail {
     payload,
     verified: payload !== null,
     explorer: `https://whatsonchain.com/tx/${row.id}`,
+    indexer: contentUrl(`${row.id}_0`),
   };
 }
 
