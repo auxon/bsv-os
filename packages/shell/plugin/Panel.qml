@@ -717,6 +717,35 @@ Panel {
   }
 
   Process {
+    id: requestImportProc
+    property string code: ""
+    command: ["bsv", "request", "import", code]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.reqOk = true;
+          if (r.fresh === false) {
+            root.reqText = `Already had that request (${r.request?.status ?? "known"}).`;
+          } else {
+            root.reqText = `Imported ${r.request?.amount ?? "?"} sats${r.request?.memo ? " · " + r.request.memo : ""} — approve it above.`;
+          }
+        } catch (e) {
+          root.reqOk = false;
+          root.reqText = "That is not a payment request code.";
+        }
+        if (!requestsProc.running) requestsProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.reqOk = false;
+        root.reqText = "Import failed — not a valid bsvpay1: code.";
+      }
+    }
+  }
+
+  Process {
     id: requestCodeProc
     property string id: ""
     command: ["bsv", "request", "code", id]
@@ -2503,6 +2532,28 @@ Panel {
               requestCodeProc.running = true;
             }
           }
+        }
+      }
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: reqImportField
+        placeholderText: "Paste a bsvpay1:… code from chat, mail, or a QR"
+        font.family: "monospace"
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Import"
+        enabled: reqImportField.text.trim() !== "" && !requestImportProc.running
+        onClicked: {
+          requestImportProc.code = reqImportField.text.trim();
+          requestImportProc.running = true;
+          reqImportField.text = "";
         }
       }
     }
