@@ -11,12 +11,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
-import { dispatch, setBackend, setP2P } from "./rpc.ts";
+import { dispatch, setBackend, setP2P, setTorrents } from "./rpc.ts";
 import { resolveRunnerAppFile } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
-import { migrate, openDb } from "./storage.ts";
+import { dataDir, migrate, openDb } from "./storage.ts";
 import { P2PNode, P2P_DEFAULT_PORT, P2P_DISCOVERY_PORT, custodyP2PCrypto } from "./p2p.ts";
+import { TorrentService } from "./torrents.ts";
 import { storeInboundEnvelope } from "./msgs.ts";
 import { selfAddress } from "./custody.ts";
 import { announcedName, learnAddress, profileName, rememberAnnouncedName } from "./people.ts";
@@ -432,6 +433,27 @@ export async function main(): Promise<void> {
     setBackend({ db, chain });
     setWireBackend({ db, chain });
 
+    // F6.3 files: BitTorrent listener + torrent registry. Discovery rides
+    // the P2P channel (beacon bt port + authenticated "who has it").
+    let p2pRef: P2PNode | null = null;
+    let torrentService: TorrentService | null = null;
+    if (process.env.BSV_TORRENT !== "0") {
+      torrentService = new TorrentService({
+        db,
+        port: Number(process.env.BSV_TORRENT_PORT) || 51413,
+        fetchDir: path.join(dataDir(), "torrents"),
+        p2p: () => p2pRef,
+      });
+      await torrentService.start();
+      setTorrents(torrentService);
+      // eslint-disable-next-line no-console
+      console.log(
+        torrentService.btPort
+          ? `bsv-walletd files on 0.0.0.0:${torrentService.btPort}`
+          : "bsv-walletd files disabled (BitTorrent port busy)",
+      );
+    }
+
     // F6.2 direct channel: LAN discovery + authenticated TCP sessions.
     // Inbound frames store ciphertext through the same path as the relay.
     if (process.env.BSV_P2P !== "0") {
@@ -441,6 +463,8 @@ export async function main(): Promise<void> {
         port: Number(process.env.BSV_P2P_PORT) || P2P_DEFAULT_PORT,
         discoveryPort: Number(process.env.BSV_P2P_DISCOVERY_PORT) || P2P_DISCOVERY_PORT,
         seeds: process.env.BSV_P2P_PEERS,
+        btPort: torrentService?.btPort ?? undefined,
+        onTorrents: () => torrentService?.cachedHashes() ?? [],
         card: () => {
           try {
             return { payTo: selfAddress(), name: announcedName() };
@@ -453,6 +477,7 @@ export async function main(): Promise<void> {
       });
       try {
         await p2p.start();
+        p2pRef = p2p;
         setP2P(p2p);
         const s = p2p.status();
         // eslint-disable-next-line no-console

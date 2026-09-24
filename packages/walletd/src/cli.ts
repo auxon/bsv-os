@@ -776,6 +776,33 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "torrent": {
+      const [tSub, ...tRest] = rest;
+      const tArg = tRest.find((a) => !a.startsWith("--"));
+      if (tSub === "list" || tSub === undefined) {
+        print(await call("torrentList"));
+      } else if (tSub === "seed" && tArg) {
+        const name = flag(rest, "name");
+        print(await call("torrentShare", { path: tArg, ...(name !== undefined ? { name } : {}) }));
+      } else if (tSub === "fetch" && tArg) {
+        const peer = flag(rest, "peer");
+        const out = flag(rest, "out");
+        const isFile = tArg.endsWith(".torrent") || tArg.includes("/");
+        print(await call("torrentFetch", {
+          ...(isFile ? { torrentFile: tArg } : { infoHash: tArg }),
+          ...(peer !== undefined ? { peer } : {}),
+          ...(out !== undefined ? { out } : {}),
+        }));
+      } else if (tSub === "peers" && tArg) {
+        print(await call("torrentPeers", { infoHash: tArg }));
+      } else if (tSub === "remove" && tArg) {
+        print(await call("torrentRemove", { infoHash: tArg, ...(rest.includes("--delete") ? { deleteFile: true } : {}) }));
+      } else {
+        console.error("usage: bsv torrent <list|seed <file> [--name=..]|fetch <infohash|file.torrent> [--peer host:port] [--out path]|peers <infohash>|remove <infohash> [--delete]>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

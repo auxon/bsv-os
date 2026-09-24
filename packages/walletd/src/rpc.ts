@@ -37,6 +37,7 @@ import {
   resolvePerson, setProfileName, validPayTo, type LivePerson,
 } from "./people.ts";
 import { faucetClaim, faucetStatus } from "./faucet.ts";
+import type { TorrentService } from "./torrents.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -95,6 +96,22 @@ let p2pChannel: P2PChannel | null = null;
 /** Wired by index.ts when the F6.2 direct channel starts. */
 export function setP2P(channel: P2PChannel | null): void {
   p2pChannel = channel;
+}
+
+let torrentService: TorrentService | null = null;
+
+/** Wired by index.ts when the F6.3 BitTorrent listener starts. */
+export function setTorrents(service: TorrentService | null): void {
+  torrentService = service;
+}
+
+function needTorrents(): TorrentService {
+  if (!torrentService) {
+    const err = new Error("file sharing disabled (BSV_TORRENT=0 or BitTorrent port busy)") as Error & { code: string };
+    err.code = "NO_TORRENTS";
+    throw err;
+  }
+  return torrentService;
 }
 
 function livePeople(): LivePerson[] {
@@ -859,6 +876,49 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   faucetClaim: async () => {
     needBackend();
     return faucetClaim();
+  },
+  /** F6.3 file sharing: real BitTorrent, bsvOS discovery. */
+  torrentList: async () => {
+    needBackend();
+    if (!torrentService) return { enabled: false, torrents: [] };
+    return { enabled: true, port: torrentService.btPort, torrents: await torrentService.list() };
+  },
+  torrentShare: async (params) => {
+    needBackend();
+    const s = needTorrents();
+    const { path: file, name } = p(params) as { path?: unknown; name?: unknown };
+    if (typeof file !== "string" || !file) throw Object.assign(new Error("path required"), { code: "BAD_PARAM" });
+    return s.share(file, typeof name === "string" && name ? name : undefined);
+  },
+  torrentFetch: async (params) => {
+    needBackend();
+    const s = needTorrents();
+    const { infoHash, torrentFile, peer, out } = p(params) as {
+      infoHash?: unknown; torrentFile?: unknown; peer?: unknown; out?: unknown;
+    };
+    if (typeof infoHash !== "string" && typeof torrentFile !== "string") {
+      throw Object.assign(new Error("infoHash or torrentFile required"), { code: "BAD_PARAM" });
+    }
+    return s.fetch({
+      ...(typeof infoHash === "string" && infoHash ? { infoHash } : {}),
+      ...(typeof torrentFile === "string" && torrentFile ? { torrentFile } : {}),
+      ...(typeof peer === "string" && peer ? { peer } : {}),
+      ...(typeof out === "string" && out ? { out } : {}),
+    });
+  },
+  torrentPeers: async (params) => {
+    needBackend();
+    const s = needTorrents();
+    const { infoHash } = p(params) as { infoHash?: unknown };
+    if (typeof infoHash !== "string" || !infoHash) throw Object.assign(new Error("infoHash required"), { code: "BAD_PARAM" });
+    return { peers: await s.peersFor(infoHash) };
+  },
+  torrentRemove: async (params) => {
+    needBackend();
+    const s = needTorrents();
+    const { infoHash, deleteFile } = p(params) as { infoHash?: unknown; deleteFile?: unknown };
+    if (typeof infoHash !== "string" || !infoHash) throw Object.assign(new Error("infoHash required"), { code: "BAD_PARAM" });
+    return s.remove(infoHash, { deleteFile: deleteFile === true });
   },
   /**
    * F10 social recovery. Setup/rotate need the wallet unlocked and print

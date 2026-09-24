@@ -41,7 +41,7 @@ test("peer registry tracks freshness and prunes", () => {
   assert.equal(reg.online(KEY_A.toLowerCase()), true);
   assert.deepEqual(reg.get(KEY_A), {
     identityKey: KEY_A.toLowerCase(), address: "10.0.0.9", port: 21213, lastSeen: now, online: true,
-    name: "", payTo: "", nameVerified: false,
+    name: "", payTo: "", nameVerified: false, btPort: 0,
   });
   now += 31_000;
   assert.equal(reg.online(KEY_A), false);
@@ -378,6 +378,35 @@ test("handshake cards carry verified names and payTo; meet() returns them", asyn
     assert.equal(peer.nameVerified, true);
     // meet() is idempotent over a live session.
     assert.deepEqual(await b.meet(aKey), { payTo: addrA, name: "Ana" });
+  } finally {
+    await a.stop();
+    await b.stop();
+  }
+});
+
+test("torrentsOf asks an authenticated peer; garbage hashes are dropped", async () => {
+  const hub = new MemoryHub();
+  const good = "aa".repeat(20);
+  const a = new P2PNode({
+    crypto: fakeCrypto(PrivateKey.fromRandom()),
+    discovery: true,
+    transport: hub.transport(),
+    port: 0,
+    btPort: 51414,
+    onTorrents: () => [good, "nope", "AB".repeat(20)],
+    connectTimeoutMs: 1000,
+    handshakeTimeoutMs: 1000,
+    ackTimeoutMs: 1500,
+  });
+  const b = await startNode(hub, fakeCrypto(PrivateKey.fromRandom()));
+  await a.start();
+  try {
+    a.announce();
+    const aKey = a.status().identityKey;
+    await waitFor(() => b.registry.online(aKey));
+    assert.equal(b.peers().find((p) => p.identityKey === aKey).btPort, 51414);
+    assert.deepEqual(await b.torrentsOf(aKey), [good, "ab".repeat(20)]);
+    assert.equal(await b.torrentsOf(PrivateKey.fromRandom().toPublicKey().toString()), null);
   } finally {
     await a.stop();
     await b.stop();

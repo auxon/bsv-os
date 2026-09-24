@@ -126,6 +126,8 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Say who you are | `bsv me bsv-air` (announced to nearby wallets; shown in collisions as a verified name) |
 | Pay a person | `bsv pay @ana 5000 --note "lunch"` — sats to their receive address, the note rides as an encrypted DM when they have an identity key |
 | Starter sats | `bsv faucet status` → `bsv faucet claim` (one 25k-sat claim per wallet, signed by your identity key; the bar panel offers it when a balance is empty) |
+| Share a file | `bsv torrent seed <file>` — real BitTorrent; wallets on your network find it via the authenticated channel, no tracker |
+| Fetch a file | `bsv torrent fetch <infohash>` (or a `.torrent` file) with `[--peer host:port]`; serves from `~/.local/share/bsv-os/torrents` |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
@@ -206,6 +208,32 @@ peers actually reach you:
 sudo ufw allow 21212/udp   # LAN beacons
 sudo ufw allow 21213/tcp   # direct channel
 ```
+
+### File sharing (BitTorrent, trackerless)
+
+The daemon runs a real BitTorrent listener (default port `51413`, advertised
+in its beacon) and speaks BEP 3 end to end — standard clients can download
+from you, and you can fetch from any standard peer with `--peer host:port`.
+Discovery is bsvOS's own: the authenticated P2P channel answers "which
+infohashes do you seed?", so there is no tracker and no DHT.
+
+```bash
+bsv torrent seed ~/videos/clip.mp4      # prints the infohash; peers can fetch it
+bsv torrent list                        # seeds + downloads with status
+bsv torrent peers <infohash>            # which nearby wallets have it
+bsv torrent fetch <infohash>            # picks a discovered peer automatically
+bsv torrent fetch <infohash> --peer 192.168.0.5:51413   # explicit peer
+bsv torrent fetch <file.torrent>        # from a metainfo file
+bsv torrent remove <infohash> [--delete]
+```
+
+Every piece is verified against its SHA-1 before it is written, downloads
+land in `~/.local/share/bsv-os/torrents` (a `.part` file is renamed only on
+success), and the daemon can only read/share files you explicitly point it
+at. Two constraints worth knowing: the daemon runs with systemd
+`PrivateTmp`, so share files must live under your home directory (not
+`/tmp`), and v1 is single-file torrents up to 16 GiB. Set `BSV_TORRENT=0`
+to disable the feature entirely.
 
 ### Twetch companion (feed, notifications, posting)
 

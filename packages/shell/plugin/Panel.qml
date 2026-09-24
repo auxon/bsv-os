@@ -95,6 +95,14 @@ Panel {
   property int faucetAmount: 0
   property bool faucetClaimed: false
   property string faucetText: ""
+  // F6.3 files (see `bsv torrent`): BitTorrent shares with bsvOS discovery.
+  property var torrents: []
+  property bool torrentEnabled: false
+  property int torrentPort: 0
+  property string torrentPath: ""
+  property string torrentPeer: ""
+  property string torrentText: ""
+  property bool torrentOk: true
   // F10 recovery status (see `bsv recovery status`): set metadata only,
   // never shares. Ceremonies stay terminal-only by key-material policy.
   property var recoverySets: []
@@ -168,6 +176,7 @@ Panel {
           if (!contactsProc.running) contactsProc.running = true;
           if (!profileProc.running) profileProc.running = true;
           if (!faucetStatusProc.running) faucetStatusProc.running = true;
+          if (!torrentListProc.running) torrentListProc.running = true;
           if (!recoveryProc.running) recoveryProc.running = true;
           if (!gigBoardProc.running) gigBoardProc.running = true;
           if (!gigListProc.running) gigListProc.running = true;
@@ -530,6 +539,79 @@ Panel {
       if (code !== 0) {
         root.payOk = false;
         root.payText = "Pay failed — unknown person, no address, or policy denied.";
+      }
+    }
+  }
+
+  // F6.3 files: list, share a path, fetch an infohash (peer optional).
+  Process {
+    id: torrentListProc
+    command: ["bsv", "torrent", "list"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.torrentEnabled = !!r.enabled;
+          root.torrentPort = Number(r.port) || 0;
+          root.torrents = r.torrents ?? [];
+        } catch (e) {
+          root.torrentEnabled = false;
+          root.torrents = [];
+        }
+      }
+    }
+    onExited: (code) => { if (code !== 0) { root.torrentEnabled = false; root.torrents = []; } }
+  }
+
+  Process {
+    id: torrentSeedProc
+    property string path: ""
+    command: ["bsv", "torrent", "seed", path]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.torrentOk = true;
+          root.torrentText = `Sharing ${r.name} (${String(r.infoHash).slice(0, 12)}…) — wallets on your network can fetch it.`;
+          root.torrentPath = "";
+        } catch (e) {
+          root.torrentOk = false;
+          root.torrentText = "Share failed — check the path.";
+        }
+        if (!torrentListProc.running) torrentListProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.torrentOk = false;
+        root.torrentText = "Share failed — file missing, empty, or over 16 GiB.";
+      }
+    }
+  }
+
+  Process {
+    id: torrentFetchProc
+    property string source: ""
+    property string peer: ""
+    command: ["bsv", "torrent", "fetch", source].concat(peer.trim() === "" ? [] : ["--peer", peer.trim()])
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          const r = JSON.parse(text);
+          root.torrentOk = true;
+          root.torrentText = `Fetched ${r.name} → ${r.path}`;
+          root.torrentPeer = "";
+        } catch (e) {
+          root.torrentOk = false;
+          root.torrentText = "Fetch failed — see the terminal for the reason.";
+        }
+        if (!torrentListProc.running) torrentListProc.running = true;
+      }
+    }
+    onExited: (code) => {
+      if (code !== 0) {
+        root.torrentOk = false;
+        root.torrentText = "Fetch failed — no peer found, or the torrent is unknown.";
       }
     }
   }
@@ -2170,6 +2252,114 @@ Panel {
         Layout.fillWidth: true
         visible: root.faucetText !== ""
       }
+    }
+
+    PanelSectionHeader { text: `Files (${root.torrents.length})` }
+
+    Text {
+      text: root.torrentEnabled
+        ? `BitTorrent shares, discovered through bsvOS — no tracker. ${root.torrentPort ? "Serving on port " + root.torrentPort + ". " : ""}Fetched files land in ~/.local/share/bsv-os/torrents.`
+        : "File sharing disabled (port busy or BSV_TORRENT=0)."
+      color: Color.muted
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+    }
+
+    ColumnLayout {
+      spacing: 6
+      visible: root.torrents.length > 0
+      Layout.fillWidth: true
+
+      Repeater {
+        model: root.torrents
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Text {
+            text: `${modelData.direction === "seed" ? "↗" : "↘"} ${modelData.name} · ${modelData.length >= 1048576 ? (modelData.length / 1048576).toFixed(1) + " MiB" : Math.max(1, Math.round(modelData.length / 1024)) + " KiB"} · ${modelData.status}${modelData.detail ? " · " + modelData.detail : ""}`
+            color: modelData.status === "error" ? Color.urgent : Color.foreground
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Copy"
+            onClicked: {
+              copyProc.copyText = modelData.infoHash;
+              if (!copyProc.running) copyProc.running = true;
+            }
+          }
+
+          Button {
+            text: "Stop"
+            onClicked: root.runAppAction(["torrent", "remove", modelData.infoHash])
+          }
+        }
+      }
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: torrentPathField
+        placeholderText: "File to share (path under your home)"
+        text: root.torrentPath
+        onTextEdited: root.torrentPath = text
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Share"
+        enabled: root.torrentPath.trim() !== "" && root.torrentEnabled && !torrentSeedProc.running
+        onClicked: {
+          torrentSeedProc.path = root.torrentPath.trim();
+          torrentSeedProc.running = true;
+        }
+      }
+    }
+
+    RowLayout {
+      spacing: 8
+      Layout.fillWidth: true
+
+      TextField {
+        id: torrentFetchField
+        placeholderText: "infohash to fetch"
+        font.family: "monospace"
+        Layout.fillWidth: true
+      }
+
+      TextField {
+        id: torrentPeerField
+        placeholderText: "peer host:port (optional)"
+        text: root.torrentPeer
+        onTextEdited: root.torrentPeer = text
+        Layout.fillWidth: true
+      }
+
+      Button {
+        text: "Fetch"
+        enabled: torrentFetchField.text.trim() !== "" && root.torrentEnabled && !torrentFetchProc.running
+        onClicked: {
+          torrentFetchProc.source = torrentFetchField.text.trim();
+          torrentFetchProc.peer = root.torrentPeer;
+          torrentFetchProc.running = true;
+        }
+      }
+    }
+
+    Text {
+      text: root.torrentText
+      color: root.torrentOk ? Color.muted : Color.urgent
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      Layout.fillWidth: true
+      visible: root.torrentText !== ""
     }
 
     PanelSectionHeader { text: "Recovery" }

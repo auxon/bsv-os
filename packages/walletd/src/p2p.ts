@@ -49,6 +49,8 @@ export interface Beacon {
   port: number;
   name?: string;
   payTo?: string;
+  /** BitTorrent listener port (file sharing) when the daemon seeds. */
+  bt?: number;
 }
 
 const PAY_RE = /^1[1-9A-HJ-NP-Za-km-z]{24,33}$/;
@@ -84,6 +86,8 @@ export function decodeBeacon(raw: string): Beacon | null {
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
   const name = cleanName(o.name);
   const payTo = cleanPay(o.payTo);
+  const btRaw = Number(o.bt);
+  const bt = Number.isInteger(btRaw) && btRaw >= 1 && btRaw <= 65535 ? btRaw : 0;
   return {
     v: 1,
     app: P2P_APP,
@@ -91,6 +95,7 @@ export function decodeBeacon(raw: string): Beacon | null {
     port,
     ...(name ? { name } : {}),
     ...(payTo ? { payTo } : {}),
+    ...(bt ? { bt } : {}),
   };
 }
 
@@ -150,6 +155,8 @@ export interface PeerInfo {
   name: string;
   payTo: string;
   nameVerified: boolean;
+  /** BitTorrent listener port advertised by the peer (0 = none). */
+  btPort: number;
 }
 
 export interface PeerSeed {
@@ -178,7 +185,7 @@ export function parsePeerSeeds(raw: string | undefined): PeerSeed[] {
 
 /** Runtime peer table: beacons in, online-if-fresh out. No persistence. */
 export class PeerRegistry {
-  private peers = new Map<string, { address: string; port: number; lastSeen: number; name: string }>();
+  private peers = new Map<string, { address: string; port: number; lastSeen: number; name: string; btPort: number }>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -187,7 +194,7 @@ export class PeerRegistry {
     this.now = now;
   }
 
-  observe(identityKey: string, address: string, port: number, name = ""): void {
+  observe(identityKey: string, address: string, port: number, name = "", btPort = 0): void {
     if (!KEY_RE.test(identityKey) || !Number.isInteger(port) || port < 1 || port > 65535) return;
     const key = identityKey.toLowerCase();
     const prev = this.peers.get(key);
@@ -196,6 +203,7 @@ export class PeerRegistry {
       port,
       lastSeen: this.now(),
       name: cleanName(name) || prev?.name || "",
+      btPort: btPort >= 1 && btPort <= 65535 ? btPort : prev?.btPort ?? 0,
     });
   }
 
@@ -217,6 +225,7 @@ export class PeerRegistry {
       name: r.name,
       payTo: "",
       nameVerified: false,
+      btPort: r.btPort,
     };
   }
 
@@ -417,6 +426,8 @@ export interface P2PChannel {
   online(identityKey: string): boolean;
   deliver(identityKey: string, id: string, envelope: unknown): Promise<boolean>;
   meet?(identityKey: string): Promise<{ payTo: string; name: string } | null>;
+  /** Ask a peer which torrents it is seeding (null when it did not answer). */
+  torrentsOf?(identityKey: string): Promise<string[] | null>;
   peers(): PeerInfo[];
   status(): P2PStatus;
 }
@@ -428,6 +439,10 @@ export interface P2PNodeOptions {
   card?: () => { payTo: string; name: string };
   /** Fired once a peer's card is authenticated. */
   onCard?: (identityKey: string, card: { payTo: string; name: string }) => void;
+  /** Answer "which torrents do you seed?" for authenticated peers. */
+  onTorrents?: () => string[];
+  /** Our BitTorrent listener port, advertised in the beacon. */
+  btPort?: number;
   port?: number;
   discovery?: boolean;
   transport?: BeaconTransport;
@@ -454,6 +469,7 @@ export class P2PNode implements P2PChannel {
   private inFlight = 0;
   private readonly opts: P2PNodeOptions;
   private readonly staticPeers = new Map<string, PeerSeed>();
+  private readonly torrentWaiters = new Map<string, (hashes: string[] | null) => void>();
 
   constructor(opts: P2PNodeOptions) {
     this.opts = opts;
@@ -509,6 +525,10 @@ export class P2PNode implements P2PChannel {
       }
     }
     this.sessions.clear();
+    for (const [q, resolve] of this.torrentWaiters) {
+      this.torrentWaiters.delete(q);
+      resolve(null);
+    }
     const server = this.server;
     this.server = null;
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -534,12 +554,55 @@ export class P2PNode implements P2PChannel {
     try {
       const session = await this.connectTo({
         identityKey: key, address: host, port, lastSeen: 0, online: true,
-        name: "", payTo: "", nameVerified: false,
+        name: "", payTo: "", nameVerified: false, btPort: 0,
       });
       return { payTo: session.payTo, name: session.name };
     } catch {
       return null;
     }
+  }
+
+  /** Ask a peer which torrents it seeds. Null when it cannot be reached. */
+  async torrentsOf(identityKey: string): Promise<string[] | null> {
+    const key = identityKey.toLowerCase();
+    if (!KEY_RE.test(key) || !this.opts.crypto.available()) return null;
+    let session = this.sessions.get(key);
+    if (!session) {
+      let peer = this.registry.get(key);
+      if (!peer || !peer.online) {
+        const seed = this.staticPeers.get(key);
+        if (seed) {
+          peer = {
+            identityKey: key, address: seed.address, port: seed.port, lastSeen: (this.opts.now ?? Date.now)(),
+            online: true, name: "", payTo: "", nameVerified: false, btPort: 0,
+          };
+        }
+      }
+      if (!peer) return null;
+      try {
+        session = await this.connectTo(peer);
+      } catch {
+        return null;
+      }
+    }
+    const q = randomBytes(8).toString("hex");
+    const timeoutMs = this.opts.ackTimeoutMs ?? ACK_TIMEOUT_MS;
+    return new Promise<string[] | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.torrentWaiters.delete(q);
+        resolve(null);
+      }, timeoutMs);
+      timer.unref?.();
+      this.torrentWaiters.set(q, (hashes) => {
+        clearTimeout(timer);
+        resolve(hashes);
+      });
+      if (!session.channel.write({ t: "torrents", q })) {
+        clearTimeout(timer);
+        this.torrentWaiters.delete(q);
+        resolve(null);
+      }
+    });
   }
 
   /** Send a discovery beacon now (the periodic tick does this too). */
@@ -569,13 +632,14 @@ export class P2PNode implements P2PChannel {
         name: s.name,
         payTo: s.payTo,
         nameVerified: !!s.name,
+        btPort: this.registry.get(key)?.btPort ?? 0,
       });
     }
     for (const [key, seed] of this.staticPeers) {
       if (out.some((p) => p.identityKey === key)) continue;
       out.push({
         identityKey: key, address: seed.address, port: seed.port, lastSeen: 0, online: true,
-        name: "", payTo: "", nameVerified: false,
+        name: "", payTo: "", nameVerified: false, btPort: 0,
       });
     }
     return out.sort((a, b) => b.lastSeen - a.lastSeen);
@@ -609,7 +673,7 @@ export class P2PNode implements P2PChannel {
         if (seed) {
           peer = {
             identityKey: key, address: seed.address, port: seed.port, lastSeen: (this.opts.now ?? Date.now)(),
-            online: true, name: "", payTo: "", nameVerified: false,
+            online: true, name: "", payTo: "", nameVerified: false, btPort: 0,
           };
         }
       }
@@ -662,6 +726,7 @@ export class P2PNode implements P2PChannel {
   private sendBeacon(): void {
     if (!this.transport || !this.opts.crypto.available()) return;
     const card = this.selfCard();
+    const bt = Number(this.opts.btPort);
     const beacon: Beacon = {
       v: P2P_VERSION,
       app: P2P_APP,
@@ -669,6 +734,7 @@ export class P2PNode implements P2PChannel {
       port: this.port,
       ...(card.name ? { name: card.name } : {}),
       ...(card.payTo ? { payTo: card.payTo } : {}),
+      ...(Number.isInteger(bt) && bt >= 1 && bt <= 65535 ? { bt } : {}),
     };
     this.transport.send(encodeBeacon(beacon));
   }
@@ -681,7 +747,7 @@ export class P2PNode implements P2PChannel {
     } catch {
       /* locked: identity unknown, record anyway; sends stay closed */
     }
-    this.registry.observe(b.identityKey, address, b.port, b.name ?? "");
+    this.registry.observe(b.identityKey, address, b.port, b.name ?? "", b.bt ?? 0);
   }
 
   // ── inbound connections ────────────────────────────────────────────────
@@ -865,6 +931,22 @@ export class P2PNode implements P2PChannel {
       }
     } else if (m.t === "ping") {
       session.channel.write({ t: "pong" });
+    } else if (m.t === "torrents") {
+      const q = typeof m.q === "string" ? m.q : "";
+      if (!q) return;
+      if (Array.isArray(m.hashes)) {
+        const resolve = this.torrentWaiters.get(q);
+        if (resolve) {
+          this.torrentWaiters.delete(q);
+          resolve(
+            m.hashes
+              .filter((h): h is string => typeof h === "string" && /^[0-9a-f]{40}$/i.test(h))
+              .map((h) => h.toLowerCase()),
+          );
+        }
+      } else {
+        session.channel.write({ t: "torrents", q, hashes: this.opts.onTorrents?.() ?? [] });
+      }
     }
   }
 
