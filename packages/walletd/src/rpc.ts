@@ -1,4 +1,4 @@
-import { createWallet, exportEntropy, getStatus, identityPubkeyHex, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
+import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import {
   twetchAccountImport,
   twetchAccountImportFromPhrase,
@@ -1110,6 +1110,24 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   receiptList: async () => {
     const b = needBackend();
     return { receipts: await listPaymentReceipts(b.db) };
+  },
+  /**
+   * Sign an arbitrary short message with the wallet identity key (BSM).
+   * Public verifiers can check it with only the identity key; used for
+   * proofs like adfeed's raised-limit claims. Length-capped so it cannot
+   * become a general document-signing oracle.
+   */
+  signMessage: async (params) => {
+    const { message } = p(params) as { message?: unknown };
+    if (typeof message !== "string" || !message.trim()) {
+      throw Object.assign(new Error("message required"), { code: "BAD_PARAM" });
+    }
+    if (message.length > 1000) throw Object.assign(new Error("message too long (max 1000 chars)"), { code: "BAD_PARAM" });
+    return {
+      identityKey: identityPubkeyHex(),
+      signature: identitySignMessage(message),
+      note: "BSM signature by the wallet identity key",
+    };
   },
   /** The inscribed receipt NFT, decoded and signature-checked, for the panel. */
   receiptShow: async (params) => {

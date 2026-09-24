@@ -124,6 +124,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Find wallets on your network | `bsv p2p peers` (auto-discovered via LAN beacons; `bsv p2p status` for the channel itself) |
 | Name your people | `bsv contact add ana <identityKey> [address]` → `bsv contact list` / `bsv contact lookup @ana`; nearby peers with announced names show a one-tap **Save**, and their receive address is learned from the authenticated handshake, never derived |
 | Say who you are | `bsv me bsv-air` (announced to nearby wallets; shown in collisions as a verified name) |
+| Sign a message | `bsv sign --message "text"` — BSM signature by your identity key, verifiable with only the key (used for proofs and to raise limits on paid-attention sites like adfeed) |
 | Pay a person | `bsv pay @ana 5000 --note "lunch"` — sats to their receive address, the note rides as an encrypted DM when they have an identity key |
 | Starter sats | `bsv faucet status` → `bsv faucet claim` (one 25k-sat claim per wallet, signed by your identity key; the bar panel offers it when a balance is empty) |
 | Share a file | `bsv torrent seed <file>` — real BitTorrent; wallets on your network find it via the authenticated channel, no tracker |

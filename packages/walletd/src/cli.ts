@@ -882,6 +882,16 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "sign": {
+      const msg = flag(rest, "message") ?? rest.filter((a) => !a.startsWith("--")).join(" ");
+      if (!msg.trim()) {
+        console.error('usage: bsv sign --message "text"');
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("signMessage", { message: msg }));
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));
