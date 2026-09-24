@@ -33,7 +33,7 @@ import { attestSpend, listReceipts, verifyAttestation, x402Pay } from "./x402.ts
 import { ackDm, listStored, liveRelay, readDm, sendDmPreferred, syncInbox } from "./msgs.ts";
 import type { P2PChannel } from "./p2p.ts";
 import {
-  addContact, getContact, learnAddress, listContacts, profileName, removeContact,
+  addContact, learnAddress, listContacts, profileName, removeContact,
   resolvePerson, setProfileName, validPayTo, type LivePerson,
 } from "./people.ts";
 import { faucetClaim, faucetStatus } from "./faucet.ts";
