@@ -278,7 +278,15 @@ export async function fetchManifestFrom(url: string): Promise<unknown> {
       headers: { accept: "application/json" },
     });
     if (!res.ok) throw new Error(`manifest fetch failed (${res.status})`);
-    return await res.json();
+    const text = await res.text();
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      // The common case: an SPA or plain site answers every path with HTML.
+      const type = res.headers.get("content-type") ?? "";
+      const kind = type.includes("text/html") || text.trimStart().startsWith("<") ? "HTML" : "non-JSON";
+      throw new Error(`${safeHostname(url)} has no /manifest.json (got ${kind}) — not a bsvOS app`);
+    }
   } finally {
     clearTimeout(t);
   }
@@ -322,7 +330,7 @@ function fetchLoopbackManifest(url: string): Promise<unknown> {
           try {
             resolve(JSON.parse(raw));
           } catch {
-            reject(new Error("manifest is not JSON"));
+            reject(new Error("no /manifest.json on that host (got non-JSON) — not a bsvOS app"));
           }
         });
       },
