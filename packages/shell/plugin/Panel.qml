@@ -119,6 +119,7 @@ Panel {
   property var receipts: []
   property string receiptText: ""
   property bool receiptOk: true
+  property var receiptDetail: ({})
   // F10 recovery status (see `bsv recovery status`): set metadata only,
   // never shares. Ceremonies stay terminal-only by key-material policy.
   property var recoverySets: []
@@ -784,6 +785,28 @@ Panel {
     }
   }
 
+  // Show the inscribed NFT: `bsv receipt show <id>` decodes and verifies it.
+  Process {
+    id: receiptShowProc
+    property string id: ""
+    command: ["bsv", "receipt", "show", id]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.receiptDetail = JSON.parse(text);
+        } catch (e) {
+          root.receiptDetail = ({});
+        }
+      }
+    }
+  }
+
+  Process {
+    id: openUrlProc
+    property string url: ""
+    command: ["xdg-open", url]
+  }
+
   // First-run faucet: status on every refresh, claim on tap.
   Process {
     id: faucetStatusProc
@@ -1163,6 +1186,16 @@ Panel {
     if (v >= 1000000) return `${(v / 1000000).toFixed(v % 1000000 === 0 ? 0 : 2)}M`;
     if (v >= 1000) return `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k`;
     return `${v}`;
+  }
+
+  function fmtDate(ms) {
+    const n = Number(ms) || 0;
+    if (n <= 0) return "";
+    try {
+      return new Date(n).toISOString().slice(0, 10);
+    } catch (e) {
+      return "";
+    }
   }
 
   function runAppAction(args) {
@@ -2589,11 +2622,101 @@ Panel {
           }
 
           Button {
+            text: "View NFT"
+            onClicked: {
+              receiptShowProc.id = modelData.id;
+              receiptShowProc.running = true;
+            }
+          }
+
+          Button {
             text: "Copy id"
             onClicked: {
               copyProc.copyText = `${modelData.id}:0`;
               if (!copyProc.running) copyProc.running = true;
             }
+          }
+        }
+      }
+    }
+
+    // Receipt NFT detail: the inscribed payload, decoded and verified.
+    ColumnLayout {
+      spacing: 4
+      visible: root.receiptDetail !== undefined && root.receiptDetail.outpoint !== undefined
+      Layout.fillWidth: true
+
+      Text {
+        text: root.receiptDetail.payload
+          ? `Receipt NFT · ${root.receiptDetail.payload.amount} sats`
+          : "Receipt NFT · payload unreadable"
+        color: Color.foreground
+        font.pixelSize: Style.font.body
+        font.bold: true
+        Layout.fillWidth: true
+      }
+
+      Text {
+        text: root.receiptDetail.payload && root.receiptDetail.payload.memo
+          ? root.receiptDetail.payload.memo
+          : "(no memo)"
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      Text {
+        text: root.receiptDetail.payload
+          ? `${String(root.receiptDetail.payload.from).slice(0, 12)}… → ${String(root.receiptDetail.payload.to).slice(0, 12)}… · ${fmtDate(root.receiptDetail.payload.at)}`
+          : ""
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      Text {
+        text: root.receiptDetail.verified ? "✓ signature valid" : "✗ signature INVALID"
+        color: root.receiptDetail.verified ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.caption
+        Layout.fillWidth: true
+      }
+
+      Text {
+        text: `carrier ${root.receiptDetail.outpoint}`
+        color: Color.muted
+        font.family: "monospace"
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+        Layout.fillWidth: true
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        Button {
+          text: "Copy outpoint"
+          onClicked: {
+            copyProc.copyText = root.receiptDetail.outpoint;
+            if (!copyProc.running) copyProc.running = true;
+          }
+        }
+
+        Button {
+          text: "Copy payment txid"
+          onClicked: {
+            copyProc.copyText = root.receiptDetail.paymentTxid;
+            if (!copyProc.running) copyProc.running = true;
+          }
+        }
+
+        Button {
+          text: "Open on-chain"
+          onClicked: {
+            openUrlProc.url = root.receiptDetail.explorer;
+            openUrlProc.running = true;
           }
         }
       }

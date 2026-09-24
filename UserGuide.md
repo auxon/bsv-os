@@ -280,10 +280,14 @@ bsv receipt list                                                # issued receipt
 ```
 
 The panel offers a **Receipt** button on paid incoming requests and lists
-issued receipts under **Receipts**. Verification needs no server: the
-inscription content is the receipt, and anyone can check the BSM signature
-against the payer's identity key with `bsv ord list` showing the carrier.
-Recipients with an identity key also get a DM pointing at the outpoint.
+issued receipts under **Receipts**; **View NFT** on a receipt opens the
+inscribed payload decoded — amount, memo, payer → payee, date, a
+signature-valid badge, and the carrier outpoint with copy and
+open-on-chain actions (`bsv receipt show <id>` prints the same). Anyone
+can verify without a server: the inscription content is the receipt, the
+signature checks against the payer's identity key, and `bsv ord list`
+resolves the carrier. Recipients with an identity key also get a DM
+pointing at the outpoint.
 
 ### Twetch companion (feed, notifications, posting)
 

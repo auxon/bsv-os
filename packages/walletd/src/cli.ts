@@ -852,9 +852,12 @@ async function main(): Promise<void> {
       break;
     }
     case "receipt": {
-      const [rcSub] = rest;
+      const [rcSub, ...rcRest] = rest;
+      const rcArg = rcRest.find((a) => !a.startsWith("--"));
       if (rcSub === "list" || rcSub === undefined) {
         print(await call("receiptList"));
+      } else if (rcSub === "show" && rcArg) {
+        print(await call("receiptShow", { id: rcArg }));
       } else if (rcSub === "issue") {
         const request = flag(rest, "request");
         const txid = flag(rest, "txid");
@@ -874,7 +877,7 @@ async function main(): Promise<void> {
           ...(memo !== undefined ? { memo } : {}),
         }));
       } else {
-        console.error('usage: bsv receipt <list|issue --request <id>|issue --txid <txid> --to <who> --amount <sats> [--memo ".."]>');
+        console.error('usage: bsv receipt <list|show <id>|issue --request <id>|issue --txid <txid> --to <who> --amount <sats> [--memo ".."]>');
         process.exitCode = 2;
       }
       break;

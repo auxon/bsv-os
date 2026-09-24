@@ -170,6 +170,29 @@ export async function getReceipt(db: Knex, id: string): Promise<ReceiptRow | nul
   return row ? rowToReceipt(row) : null;
 }
 
+export interface ReceiptDetail extends ReceiptRow {
+  outpoint: string;
+  contentType: string;
+  /** Decoded inscribed payload; null when the hex no longer verifies. */
+  payload: ReceiptPayload | null;
+  /** True only when the payload decodes and its BSM signature checks out. */
+  verified: boolean;
+  explorer: string;
+}
+
+/** What the panel shows when a receipt is opened: the inscribed NFT, decoded. */
+export function receiptDetail(row: ReceiptRow): ReceiptDetail {
+  const payload = parseReceiptPayload(row.dataHex);
+  return {
+    ...row,
+    outpoint: `${row.id}:0`,
+    contentType: "application/json",
+    payload,
+    verified: payload !== null,
+    explorer: `https://whatsonchain.com/tx/${row.id}`,
+  };
+}
+
 export interface ReceiptDeps {
   db: Knex;
   /** Inscribe the payload and deliver the 1-sat ordinal to `to` in one tx. */

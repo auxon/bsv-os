@@ -43,7 +43,7 @@ import {
   markDeclined, markPaid, parseDuration, parseRequest, payableError, recordOutgoing,
   saveIncoming, scanInbound, sendReceipt, sendRequestCode,
 } from "./requests.ts";
-import { issueReceipt, listReceipts as listPaymentReceipts } from "./receipts.ts";
+import { issueReceipt, listReceipts as listPaymentReceipts, getReceipt, receiptDetail } from "./receipts.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -1110,6 +1110,15 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   receiptList: async () => {
     const b = needBackend();
     return { receipts: await listPaymentReceipts(b.db) };
+  },
+  /** The inscribed receipt NFT, decoded and signature-checked, for the panel. */
+  receiptShow: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("receipt id required"), { code: "BAD_PARAM" });
+    const row = await getReceipt(b.db, id);
+    if (!row) throw Object.assign(new Error(`no receipt ${id}`), { code: "NOT_FOUND" });
+    return receiptDetail(row);
   },
   /**
    * F10 social recovery. Setup/rotate need the wallet unlocked and print

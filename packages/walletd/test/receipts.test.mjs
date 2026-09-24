@@ -14,6 +14,7 @@ import {
   issueReceipt,
   listReceipts,
   parseReceiptPayload,
+  receiptDetail,
   receiptCanonical,
   receiptDataHex,
   verifyReceipt,
@@ -83,6 +84,19 @@ test("parse rejects tampered payloads", () => {
     receiptCanonical({ ...rest, amount: 1 }),
     receiptCanonical(rest),
   );
+});
+
+test("receiptDetail exposes the NFT view; unverifiable payloads flag invalid", () => {
+  const row = {
+    id: INSCRIBE_TXID, paymentTxid: TXID, requestId: "", peer: KEY_A, peerAddress: ADDR_A,
+    amount: 5000, memo: "lunch", dataHex: receiptDataHex(stubReceipt()), status: "inscribed", createdAt: 1,
+  };
+  const detail = receiptDetail(row);
+  assert.equal(detail.outpoint, `${INSCRIBE_TXID}:0`);
+  assert.equal(detail.contentType, "application/json");
+  assert.equal(detail.verified, false); // stub signature never verifies
+  assert.equal(detail.payload, null);
+  assert.equal(detail.explorer, `https://whatsonchain.com/tx/${INSCRIBE_TXID}`);
 });
 
 test("issueReceipt orchestrates inscribe, ledger, and notify", async () => {
@@ -177,6 +191,15 @@ it("signed receipts verify with the real identity key", async () => {
     ]) {
       assert.equal(verifyReceipt(tampered), false);
     }
+
+    // The panel's view model decodes and verifies the same payload.
+    const detail = receiptDetail({
+      id: "4b".repeat(32), paymentTxid: TXID, requestId: "", peer: self, peerAddress: ADDR_A,
+      amount: 777, memo: "coffee", dataHex: receiptDataHex(receipt), status: "inscribed", createdAt: 1,
+    });
+    assert.equal(detail.verified, true);
+    assert.equal(detail.payload.amount, 777);
+    assert.equal(detail.payload.memo, "coffee");
   } finally {
     await destroyWallet();
     __resetCache();
