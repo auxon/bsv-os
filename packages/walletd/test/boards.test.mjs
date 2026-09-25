@@ -10,9 +10,9 @@ import { __resetCache, createWallet, destroyWallet, dmEncrypt, hasWallet, identi
 import { packEnvelope, storeInboundEnvelope } from "../src/msgs.ts";
 import { addContact } from "../src/people.ts";
 import {
-  buildPost, createBoard, decodeContent, emitPost, encodeBoardKey, encodePostCode, envelopeShape,
-  getBoard, getPosts, ingestPost, listBoards, newBoardKeyHex, parseBoardKey, parsePostCode, publishPost,
-  scanBoardInbox, verifyPost, waitForPost,
+  addMember, buildPost, createBoard, decodeContent, emitPost, encodeBoardKey, encodePostCode, envelopeShape,
+  getBoard, getPosts, getThread, ingestPost, listBoards, newBoardKeyHex, parseBoardKey, parsePostCode, publishPost,
+  removeMember, rotateBoardKey, scanBoardInbox, verifyPost, waitForPost,
 } from "../src/boards.ts";
 
 async function memdb() {
@@ -163,5 +163,81 @@ it("board lifecycle with the wallet: post, read, unread, relay scan, waiters", a
     await db.destroy();
     await destroyWallet();
     __resetCache();
+  }
+});
+
+test("key rotation: new epochs, old posts readable, removed members locked out", async () => {
+  const db = await memdb();
+  const keyHex = newBoardKeyHex();
+  const member = foreignSigner();
+  const outsider = foreignSigner();
+  try {
+    await createBoard(db, { name: "crew", mode: "members", keyHex, members: [member.pub] });
+
+    // Epoch 1 post from the member: readable with the epoch-1 key.
+    const first = buildPost({ board: "crew", from: member.pub, agent: "builder", keyHex, text: "epoch one", sign: member.sign });
+    assert.equal((await ingestPost(db, first))?.fresh, true);
+    let read = await getPosts(db, "crew");
+    assert.equal(read.posts[0].text, "epoch one");
+    assert.equal(read.locked, 0);
+
+    // Rotation: adding a member bumps the epoch and delivers the new key.
+    const before = await getBoard(db, "crew");
+    await addMember(db, "crew", outsider.pub);
+    const rotated = await rotateBoardKey(db, "crew");
+    const after = await getBoard(db, "crew");
+    assert.equal(rotated.epoch, before.epoch + 1);
+    assert.equal(after.epoch, rotated.epoch);
+    assert.notEqual(after.keyHex, before.keyHex);
+
+    // New-epoch post is readable by the board (key history), and the old
+    // post still reads under its epoch.
+    const second = buildPost({ board: "crew", from: member.pub, agent: "builder", keyHex: rotated.keyHex, epoch: rotated.epoch, text: "epoch two", sign: member.sign });
+    assert.equal((await ingestPost(db, second))?.fresh, true);
+    read = await getPosts(db, "crew");
+    assert.deepEqual(read.posts.map((p) => p.text), ["epoch one", "epoch two"]);
+    assert.equal(read.locked, 0);
+
+    // The newcomer holds only the new key: old post stays locked for them.
+    assert.equal(decodeContent(first, rotated.keyHex), null);
+    assert.equal(decodeContent(second, rotated.keyHex)?.text, "epoch two");
+
+    // Kick: membership drops and the key rotates again for those left.
+    const kicked = await removeMember(db, "crew", outsider.pub);
+    assert.equal(kicked.members.includes(outsider.pub), false);
+    assert.equal(kicked.epoch, rotated.epoch + 1);
+    // A post from the removed member is refused under the new membership.
+    const fromOutsider = buildPost({ board: "crew", from: outsider.pub, agent: "builder", keyHex: kicked.keyHex, epoch: kicked.epoch, text: "let me in", sign: outsider.sign });
+    assert.equal(await ingestPost(db, fromOutsider), null);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("threads assemble root plus descendants in order", async () => {
+  const db = await memdb();
+  const keyHex = newBoardKeyHex();
+  const signer = foreignSigner();
+  try {
+    await createBoard(db, { name: "crew", mode: "members", keyHex, members: [signer.pub] });
+    const env = (text, replyTo = "") =>
+      buildPost({ board: "crew", from: signer.pub, agent: "builder", keyHex, text, replyTo, sign: signer.sign });
+    const root = env("root question");
+    const a = env("first answer", root.id);
+    const b = env("second answer", root.id);
+    const sub = env("follow-up", a.id);
+    for (const post of [root, a, sub, b]) assert.equal((await ingestPost(db, post))?.fresh, true);
+
+    const thread = await getThread(db, root.id);
+    assert.equal(thread.board, "crew");
+    assert.deepEqual(thread.posts.map((p) => p.text), ["root question", "first answer", "follow-up", "second answer"]);
+    assert.equal(thread.posts[0].replyTo, "");
+    assert.equal(thread.posts.find((p) => p.text === "follow-up").replyTo, a.id);
+    assert.equal(thread.locked, 0);
+
+    // A reply whose parent is unknown is not attached; unknown ids are null.
+    assert.equal(await getThread(db, "ab".repeat(16)), null);
+  } finally {
+    await db.destroy();
   }
 });

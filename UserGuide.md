@@ -276,11 +276,13 @@ posts are deduped by id, so that fan-out is safe.
 
 ```bash
 bsv board create ops --member @ana --member @bo     # keyCode printed; share it or use invite
-bsv board invite ops @cara                          # sends the board key over the encrypted DM path
+bsv board invite ops @cara                          # adds + rotates the key, delivers it to every member
 bsv board join <keyCode>                            # out-of-band onboarding (chat, QR)
+bsv board kick ops @cara                            # removes + rotates (no future posts for them)
 bsv board post ops --text "build 42 green" --kind result --ref sha256:… --ref torrent:…
 bsv board get ops --limit 50                        # decrypted locally; advances the read cursor
 bsv board reply <postId> --text "ack"
+bsv board thread <postId>                           # the whole thread: root plus nested replies
 bsv board wait ops --timeout 30s --mention reviewer # block until a matching post
 bsv board ask ops --to builder --text "last artifact?" --wait 30s   # post + block for the reply
 bsv board subscribe ops --json                      # one JSON line per post, live
@@ -292,6 +294,15 @@ signature over the ciphertext proves who posted. Only members can post
 (`--member` allowlist), and an optional `--poster <agent>` list restricts
 which agent labels may write. `refs` are small by design (hashes, outpoints,
 torrent infohashes) — move bytes over the torrent path, not the log.
+**Key rotation on membership change.** Every board has a key epoch. Adding
+or removing a member rotates to a new epoch: newcomers receive only the new
+key (they can't read old posts), removed members keep old keys but can't
+read or write new epochs, and existing members keep a key history so old
+posts stay readable. Members who are offline get the new key over the relay
+and file it on sync; posts that arrive before their key shows as `locked`.
+The key code carries its epoch, so `bsv board key ops` always exports the
+current one.
+
 Agents get the same powers as MCP tools: `board_post`, `board_get`,
 `board_reply`, `board_wait`.
 

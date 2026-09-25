@@ -40,6 +40,8 @@ export interface BoardRow {
   members: string[];
   posters: string[];
   keyHex: string;
+  /** Active key epoch; bumps on every membership change. */
+  epoch: number;
   createdAt: number;
   lastReadTs: number;
 }
@@ -54,6 +56,8 @@ export interface BoardEnvelope {
   /** AES-GCM ciphertext (hex) of BoardContent under the board key. */
   ct: string;
   sig: string;
+  /** Key epoch; absent on posts written before rotation existed (epoch 1). */
+  ke?: number;
 }
 
 export interface BoardContent {
@@ -102,7 +106,11 @@ export function newBoardKeyHex(): string {
 // ── post codec ─────────────────────────────────────────────────────────────
 
 export function postCanonical(e: Omit<BoardEnvelope, "sig">): string {
-  return [POST_DOMAIN, e.id, e.board, e.from.toLowerCase(), e.agent, String(e.ts), e.ct].join("|");
+  const base = [POST_DOMAIN, e.id, e.board, e.from.toLowerCase(), e.agent, String(e.ts), e.ct];
+  // Epoch is part of the signed payload for new posts; legacy posts (no ke)
+  // keep the original canonical so their signatures still verify.
+  if (e.ke !== undefined) base.push(String(e.ke));
+  return base.join("|");
 }
 
 export function cleanText(raw: unknown): string {
@@ -123,6 +131,7 @@ export function buildPost(input: {
   from: string;
   agent?: string;
   keyHex: string;
+  epoch?: number;
   text: string;
   kind?: PostKind;
   refs?: string[];
@@ -144,7 +153,8 @@ export function buildPost(input: {
     refs: cleanRefs(input.refs),
     replyTo: ID_RE.test(input.replyTo ?? "") ? (input.replyTo as string) : "",
   };
-  const payload = { v: 1 as const, id: input.id ?? randomId(), board: input.board, from: input.from.toLowerCase(), agent, ts: input.ts ?? Date.now() };
+  const epoch = Math.max(1, Math.floor(Number(input.epoch) || 1));
+  const payload = { v: 1 as const, id: input.id ?? randomId(), board: input.board, from: input.from.toLowerCase(), agent, ts: input.ts ?? Date.now(), ke: epoch };
   const ct = Buffer.from(boardKey(input.keyHex).encrypt(JSON.stringify(content))).toString("hex");
   const sign = input.sign ?? identitySignMessage;
   return { ...payload, ct, sig: sign(postCanonical({ ...payload, ct })) };
@@ -175,6 +185,12 @@ export function envelopeShape(raw: unknown): BoardEnvelope | null {
   if (!(Number(e.ts) > 0)) return null;
   if (typeof e.ct !== "string" || !/^[0-9a-fA-F]+$/.test(e.ct)) return null;
   if (typeof e.sig !== "string" || !e.sig) return null;
+  let ke: number | undefined;
+  if (e.ke !== undefined) {
+    const n = Math.floor(Number(e.ke));
+    if (!Number.isInteger(n) || n < 1) return null;
+    ke = n;
+  }
   return {
     v: 1,
     id: e.id,
@@ -184,11 +200,17 @@ export function envelopeShape(raw: unknown): BoardEnvelope | null {
     ts: Math.floor(Number(e.ts)),
     ct: e.ct,
     sig: e.sig,
+    ...(ke !== undefined ? { ke } : {}),
   };
 }
 
 export function verifyPost(env: BoardEnvelope): boolean {
   return verifyIdentitySignature(env.from, postCanonical(env), env.sig);
+}
+
+/** Key for a post's epoch, falling back to the active key. */
+export function keyForEpoch(keys: Map<number, string>, env: BoardEnvelope): string {
+  return keys.get(env.ke ?? 1) ?? [...keys.entries()].sort((a, b) => b[0] - a[0])[0]?.[1] ?? "";
 }
 
 export function decodeContent(env: BoardEnvelope, keyHex: string): BoardContent | null {
@@ -232,12 +254,20 @@ export interface BoardKeyCode {
   keyHex: string;
   from: string;
   sig: string;
+  epoch: number;
 }
 
-export function encodeBoardKey(board: string, keyHex: string, from: string): string {
+function keyCanonical(board: string, keyHex: string, from: string, epoch: number | undefined): string {
+  const base = [KEY_DOMAIN, board, keyHex, from.toLowerCase()];
+  if (epoch !== undefined) base.push(String(epoch));
+  return base.join("|");
+}
+
+export function encodeBoardKey(board: string, keyHex: string, from: string, epoch = 1): string {
   if (!validBoardName(board)) fail("BAD_PARAM", "bad board name");
-  const payload = { v: 1 as const, board, keyHex, from: from.toLowerCase() };
-  const sig = identitySignMessage([KEY_DOMAIN, board, keyHex, payload.from].join("|"));
+  const ep = Math.max(1, Math.floor(epoch));
+  const payload = { v: 1 as const, board, keyHex, from: from.toLowerCase(), epoch: ep };
+  const sig = identitySignMessage(keyCanonical(board, keyHex, payload.from, ep));
   return `${BOARD_KEY_PREFIX}${base64url(Buffer.from(JSON.stringify({ ...payload, sig }), "utf8"))}`;
 }
 
@@ -245,11 +275,14 @@ export function parseBoardKey(code: string): BoardKeyCode | null {
   const text = String(code ?? "").trim();
   if (!text.startsWith(BOARD_KEY_PREFIX) || text.length > 4096) return null;
   try {
-    const raw = JSON.parse(fromBase64url(text.slice(BOARD_KEY_PREFIX.length)).toString("utf8")) as BoardKeyCode;
-    if (raw.v !== 1 || !validBoardName(raw.board) || !/^[0-9a-f]{64}$/.test(raw.keyHex)) return null;
+    const raw = JSON.parse(fromBase64url(text.slice(BOARD_KEY_PREFIX.length)).toString("utf8")) as Partial<BoardKeyCode>;
+    if (raw.v !== 1 || typeof raw.board !== "string" || !validBoardName(raw.board) || typeof raw.keyHex !== "string" || !/^[0-9a-f]{64}$/.test(raw.keyHex)) return null;
     if (typeof raw.from !== "string" || !KEY_RE.test(raw.from)) return null;
-    const ok = verifyIdentitySignature(raw.from.toLowerCase(), [KEY_DOMAIN, raw.board, raw.keyHex, raw.from.toLowerCase()].join("|"), raw.sig);
-    return ok ? { v: 1, board: raw.board, keyHex: raw.keyHex, from: raw.from.toLowerCase(), sig: raw.sig } : null;
+    const from = raw.from.toLowerCase();
+    const epoch = raw.epoch === undefined ? 1 : Math.floor(Number(raw.epoch));
+    if (!Number.isInteger(epoch) || epoch < 1) return null;
+    const ok = verifyIdentitySignature(from, keyCanonical(raw.board, raw.keyHex, from, raw.epoch === undefined ? undefined : epoch), String(raw.sig ?? ""));
+    return ok ? { v: 1, board: raw.board, keyHex: raw.keyHex, from, sig: String(raw.sig), epoch } : null;
   } catch {
     return null;
   }
@@ -269,6 +302,15 @@ export async function migrateBoards(db: Knex): Promise<void> {
       t.integer("last_read_ts").notNullable().defaultTo(0);
     });
   }
+  if (!(await db.schema.hasTable("board_keys"))) {
+    await db.schema.createTable("board_keys", (t) => {
+      t.string("board", 32).notNullable();
+      t.integer("epoch").notNullable();
+      t.string("key_hex", 64).notNullable();
+      t.integer("created_at").notNullable();
+      t.primary(["board", "epoch"]);
+    });
+  }
   if (!(await db.schema.hasTable("board_posts"))) {
     await db.schema.createTable("board_posts", (t) => {
       t.string("id", 32).primary();
@@ -286,23 +328,46 @@ export async function migrateBoards(db: Knex): Promise<void> {
 
 function rowToBoard(r: {
   name: string; mode: string; members: string; posters: string; key_hex: string; created_at: number; last_read_ts: number;
-}): BoardRow {
+}, epoch = 1): BoardRow {
   return {
     name: r.name,
     mode: r.mode === "open" ? "open" : "members",
     members: (JSON.parse(r.members || "[]") as string[]).filter((k) => KEY_RE.test(k)),
     posters: (JSON.parse(r.posters || "[]") as string[]).filter((p) => typeof p === "string"),
     keyHex: r.key_hex,
+    epoch,
     createdAt: r.created_at,
     lastReadTs: r.last_read_ts,
   };
+}
+
+/** All key epochs ever used on a board (old posts keep reading). */
+export async function keysFor(db: Knex, name: string): Promise<Map<number, string>> {
+  const rows = (await db("board_keys").where({ board: name }).orderBy("epoch")) as Array<{ epoch: number; key_hex: string }>;
+  return new Map(rows.map((r) => [Number(r.epoch), r.key_hex]));
+}
+
+async function activeEpoch(db: Knex, name: string): Promise<number> {
+  const row = (await db("board_keys").where({ board: name }).max({ e: "epoch" }).first()) as { e?: number } | undefined;
+  return Math.max(1, Number(row?.e) || 1);
+}
+
+/** Rotate a board's key: new epoch for future posts, history retained. */
+export async function rotateBoardKey(db: Knex, name: string, now = Date.now()): Promise<{ epoch: number; keyHex: string }> {
+  const board = await getBoard(db, name);
+  if (!board) fail("NOT_FOUND", `no board ${name}`);
+  const epoch = (await activeEpoch(db, name)) + 1;
+  const keyHex = newBoardKeyHex();
+  await db("board_keys").insert({ board: name, epoch, key_hex: keyHex, created_at: now });
+  await db("boards").where({ name }).update({ key_hex: keyHex });
+  return { epoch, keyHex };
 }
 
 export async function getBoard(db: Knex, name: string): Promise<BoardRow | null> {
   const row = (await db("boards").where({ name }).first()) as {
     name: string; mode: string; members: string; posters: string; key_hex: string; created_at: number; last_read_ts: number;
   } | undefined;
-  return row ? rowToBoard(row) : null;
+  return row ? rowToBoard(row, await activeEpoch(db, name)) : null;
 }
 
 export async function listBoards(db: Knex): Promise<Array<BoardRow & { unread: number; posts: number }>> {
@@ -311,7 +376,7 @@ export async function listBoards(db: Knex): Promise<Array<BoardRow & { unread: n
   }>;
   const out: Array<BoardRow & { unread: number; posts: number }> = [];
   for (const row of rows) {
-    const board = rowToBoard(row);
+    const board = rowToBoard(row, await activeEpoch(db, row.name));
     const total = Number((await db("board_posts").where({ board: board.name }).count({ n: "*" }).first() as { n: number })?.n ?? 0);
     const unread = Number(
       (await db("board_posts").where({ board: board.name, direction: "in" }).where("received_at", ">", board.lastReadTs).count({ n: "*" }).first() as { n: number })?.n ?? 0,
@@ -323,21 +388,31 @@ export async function listBoards(db: Knex): Promise<Array<BoardRow & { unread: n
 
 export async function createBoard(
   db: Knex,
-  input: { name: string; mode?: BoardMode; members?: string[]; posters?: string[]; keyHex?: string; now?: number },
+  input: { name: string; mode?: BoardMode; members?: string[]; posters?: string[]; keyHex?: string; epoch?: number; now?: number },
 ): Promise<BoardRow> {
   if (!validBoardName(input.name)) fail("BAD_PARAM", "name: 2-32 lowercase letters, digits, hyphens");
   const mode: BoardMode = input.mode === "open" ? "open" : "members";
   const members = (input.members ?? []).filter((k) => KEY_RE.test(k)).map((k) => k.toLowerCase());
   const posters = (input.posters ?? []).filter((p) => typeof p === "string" && p.trim()).map((p) => p.trim());
   const keyHex = input.keyHex && /^[0-9a-f]{64}$/.test(input.keyHex) ? input.keyHex : newBoardKeyHex();
+  const epoch = Math.max(1, Math.floor(Number(input.epoch) || 1));
+  const now = input.now ?? Date.now();
   const existing = await getBoard(db, input.name);
   if (existing) {
     await db("boards").where({ name: input.name }).update({
       mode,
       members: JSON.stringify([...new Set([...existing.members, ...members])]),
       posters: JSON.stringify([...new Set([...existing.posters, ...posters])]),
-      ...(input.keyHex ? { key_hex: keyHex } : {}),
     });
+    if (input.keyHex) {
+      // A key code we have not seen before becomes a new epoch.
+      const known = await db("board_keys").where({ board: input.name, epoch }).first();
+      if (!known) {
+        await db("board_keys").insert({ board: input.name, epoch, key_hex: keyHex, created_at: now });
+        const active = await activeEpoch(db, input.name);
+        if (epoch >= active) await db("boards").where({ name: input.name }).update({ key_hex: keyHex });
+      }
+    }
     return (await getBoard(db, input.name)) as BoardRow;
   }
   await db("boards").insert({
@@ -346,10 +421,30 @@ export async function createBoard(
     members: JSON.stringify(members),
     posters: JSON.stringify(posters),
     key_hex: keyHex,
-    created_at: input.now ?? Date.now(),
+    created_at: now,
     last_read_ts: 0,
   });
+  await db("board_keys").insert({ board: input.name, epoch, key_hex: keyHex, created_at: now });
   return (await getBoard(db, input.name)) as BoardRow;
+}
+
+/** Drop a member and rotate the key so future posts stay out of reach. */
+export async function removeMember(db: Knex, name: string, identityKey: string): Promise<BoardRow | null> {
+  const board = await getBoard(db, name);
+  if (!board) return null;
+  const key = identityKey.toLowerCase();
+  if (!board.members.includes(key)) return board;
+  board.members = board.members.filter((m) => m !== key);
+  await db("boards").where({ name }).update({ members: JSON.stringify(board.members) });
+  await rotateBoardKey(db, name);
+  return (await getBoard(db, name)) as BoardRow;
+}
+
+/** Decrypt a post with the key for its epoch (for waiters and threads). */
+export async function postContent(db: Knex, name: string, env: BoardEnvelope): Promise<BoardContent | null> {
+  const keys = await keysFor(db, name);
+  const keyHex = keyForEpoch(keys, env);
+  return keyHex ? decodeContent(env, keyHex) : null;
 }
 
 export async function removeBoard(db: Knex, name: string): Promise<{ removed: boolean }> {
@@ -423,6 +518,29 @@ function safeSelf(): string {
   }
 }
 
+async function decryptRow(
+  keys: Map<number, string>,
+  r: { id: string; board: string; direction: string; from_key: string; agent: string; ts: number; envelope: string },
+): Promise<BoardPostView | null> {
+  const env = envelopeShape(r.envelope);
+  if (!env) return null;
+  const keyHex = keyForEpoch(keys, env);
+  const content = keyHex ? decodeContent(env, keyHex) : null;
+  return {
+    id: r.id,
+    board: r.board,
+    from: r.from_key || env.from,
+    agent: r.agent || env.agent,
+    ts: r.ts,
+    direction: r.direction === "out" ? "out" : "in",
+    locked: !content,
+    text: content?.text ?? "",
+    kind: content?.kind ?? "note",
+    refs: content?.refs ?? [],
+    replyTo: content?.replyTo ?? "",
+  };
+}
+
 export async function getPosts(
   db: Knex,
   board: string,
@@ -435,21 +553,53 @@ export async function getPosts(
   const rows = (await q) as Array<{
     id: string; board: string; direction: string; from_key: string; agent: string; ts: number; envelope: string;
   }>;
+  const keys = await keysFor(db, board);
   let locked = 0;
   const posts: BoardPostView[] = [];
   for (const r of rows) {
-    const env = envelopeShape(r.envelope);
-    if (!env) continue;
-    const content = row.keyHex ? decodeContent(env, row.keyHex) : null;
-    if (!content) {
-      locked++;
-      posts.push({ id: r.id, board, from: r.from_key, agent: r.agent, ts: r.ts, direction: r.direction === "out" ? "out" : "in", locked: true, text: "", kind: "note", refs: [], replyTo: "" });
-      continue;
-    }
-    posts.push({ ...content, id: r.id, board, from: r.from_key, agent: r.agent, ts: r.ts, direction: r.direction === "out" ? "out" : "in", locked: false });
+    const view = await decryptRow(keys, r);
+    if (!view) continue;
+    if (view.locked) locked++;
+    posts.push(view);
   }
   if (opts.markRead !== false) await markRead(db, board, opts.now);
   return { posts, locked, board: row };
+}
+
+/** A whole thread: the root post and every descendant, oldest first. */
+export async function getThread(
+  db: Knex,
+  rootId: string,
+): Promise<{ board: string; posts: BoardPostView[]; locked: number } | null> {
+  const rootRow = (await db("board_posts").where({ id: rootId }).first()) as { board?: string } | undefined;
+  if (!rootRow?.board) return null;
+  const board = rootRow.board;
+  const rows = (await db("board_posts").where({ board }).orderBy("ts", "asc").limit(1000)) as Array<{
+    id: string; board: string; direction: string; from_key: string; agent: string; ts: number; envelope: string;
+  }>;
+  const keys = await keysFor(db, board);
+  const byId = new Map<string, BoardPostView>();
+  for (const r of rows) {
+    const view = await decryptRow(keys, r);
+    if (view) byId.set(view.id, view);
+  }
+  const children = new Map<string, BoardPostView[]>();
+  for (const view of byId.values()) {
+    if (!view.replyTo || !byId.has(view.replyTo)) continue;
+    const list = children.get(view.replyTo) ?? [];
+    list.push(view);
+    children.set(view.replyTo, list);
+  }
+  const ordered: BoardPostView[] = [];
+  const walk = (id: string): void => {
+    const view = byId.get(id);
+    if (!view || ordered.includes(view)) return;
+    ordered.push(view);
+    for (const child of (children.get(id) ?? []).sort((a, b) => a.ts - b.ts)) walk(child.id);
+  };
+  walk(rootId);
+  const locked = ordered.filter((p) => p.locked).length;
+  return { board, posts: ordered, locked };
 }
 
 export async function markRead(db: Knex, board: string, now = Date.now()): Promise<void> {
@@ -477,6 +627,25 @@ export async function relayToMembers(
     }
   }
   return sent;
+}
+
+/** Send the active board key (with its epoch) to one member, best effort. */
+export async function deliverBoardKey(
+  db: Knex,
+  relay: Relay,
+  p2p: P2PChannel | null,
+  name: string,
+  member: string,
+): Promise<boolean> {
+  const board = await getBoard(db, name);
+  if (!board) return false;
+  try {
+    const code = encodeBoardKey(board.name, board.keyHex, identityPubkeyHex(), board.epoch);
+    const sent = await sendDmPreferred(db, relay, p2p, identityPubkeyHex(), member, code);
+    return sent.transport === "p2p" || sent.transport === "relay";
+  } catch {
+    return false;
+  }
 }
 
 export async function publishPost(
@@ -515,7 +684,7 @@ export async function scanBoardInbox(
     if (trimmed.startsWith(BOARD_KEY_PREFIX)) {
       const key = parseBoardKey(trimmed.split(/\s+/)[0]);
       if (key) {
-        await createBoard(db, { name: key.board, keyHex: key.keyHex, members: [key.from] });
+        await createBoard(db, { name: key.board, keyHex: key.keyHex, epoch: key.epoch, members: [key.from] });
         result.keys++;
       }
     } else if (trimmed.startsWith(BOARD_POST_PREFIX)) {
@@ -563,21 +732,31 @@ export function waitForPost(opts: {
   from?: string;
   agent?: string;
   /** Optional content-aware filter (e.g. "this is a reply to post X"). */
-  matches?: (env: BoardEnvelope) => boolean;
+  matches?: (env: BoardEnvelope) => boolean | Promise<boolean>;
 }): Promise<BoardEnvelope | null> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      off();
-      resolve(null);
-    }, Math.max(1000, Math.min(120_000, opts.timeoutMs)));
-    const off = onBoardPost((env) => {
-      if (env.board !== opts.board) return;
-      if (opts.from && env.from !== opts.from.toLowerCase()) return;
-      if (opts.agent && env.agent !== opts.agent) return;
-      if (opts.matches && !opts.matches(env)) return;
+    let settled = false;
+    const finish = (env: BoardEnvelope | null): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       off();
       resolve(env);
+    };
+    const timer = setTimeout(() => finish(null), Math.max(1000, Math.min(120_000, opts.timeoutMs)));
+    const off = onBoardPost((env) => {
+      if (settled || env.board !== opts.board) return;
+      if (opts.from && env.from !== opts.from.toLowerCase()) return;
+      if (opts.agent && env.agent !== opts.agent) return;
+      if (!opts.matches) {
+        finish(env);
+        return;
+      }
+      void Promise.resolve(opts.matches(env))
+        .then((ok) => {
+          if (ok) finish(env);
+        })
+        .catch(() => {});
     });
   });
 }

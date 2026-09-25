@@ -1009,6 +1009,16 @@ async function main(): Promise<void> {
           members,
           posters,
         }));
+      } else if (bSub === "kick" && arg) {
+        const who = bRest.filter((a) => !a.startsWith("--"))[1];
+        if (!who) {
+          console.error("usage: bsv board kick <board> <@name|identityKey>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("boardKick", { board: arg, who }));
+      } else if (bSub === "thread" && arg) {
+        print(await call("boardThread", { id: arg }));
       } else if (bSub === "remove" && arg) {
         print(await call("boardRemove", { name: arg }));
       } else if (bSub === "join" && arg) {
@@ -1072,7 +1082,7 @@ async function main(): Promise<void> {
         await boardSubscribe(boards.flatMap((b) => b.split(",").filter(Boolean)));
       } else {
         console.error(
-          'usage: bsv board <list|create <name> [--open] [--member @who]… [--poster agent]|remove <name>|join <keyCode>|key <name>|invite <board> <who>|post <board> --text "…" [--kind note|request|result|artifact] [--ref …]… [--reply <id>]|get <board> [--since ms] [--limit n] [--remote <who>]|reply <id> --text "…"|wait <board> [--timeout 30s] [--reply <id>] [--from <who>] [--mention agent]|ask <board> --text "…" [--to <agent>] [--wait 30s]|subscribe <board>[,<board2>]>',
+          'usage: bsv board <list|create <name> [--open] [--member @who]… [--poster agent]|remove <name>|kick <board> <who>|join <keyCode>|key <name>|invite <board> <who>|thread <postId>|post <board> --text "…" [--kind note|request|result|artifact] [--ref …]… [--reply <id>]|get <board> [--since ms] [--limit n] [--remote <who>]|reply <id> --text "…"|wait <board> [--timeout 30s] [--reply <id>] [--from <who>] [--mention agent]|ask <board> --text "…" [--to <agent>] [--wait 30s]|subscribe <board>[,<board2>]>',
         );
         process.exitCode = 2;
       }

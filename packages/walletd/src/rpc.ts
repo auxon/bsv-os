@@ -45,7 +45,8 @@ import {
 } from "./requests.ts";
 import { issueReceipt, listReceipts as listPaymentReceipts, getReceipt, receiptDetail } from "./receipts.ts";
 import {
-  addMember, buildPost, createBoard, decodeContent, encodeBoardKey, envelopeShape, getBoard, getPosts, removeBoard,
+  addMember, buildPost, createBoard, deliverBoardKey, encodeBoardKey, envelopeShape, getBoard, getPosts, getThread,
+  removeBoard, removeMember, rotateBoardKey, postContent, markRead,
   ingestPost, listBoards, parseBoardKey, publishPost, scanBoardInbox, waitForPost, type BoardRow, type PostKind,
 } from "./boards.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
@@ -125,6 +126,7 @@ async function boardPublish(
     from: identityPubkeyHex(),
     agent: boardAgentLabel(input.agent, input.origin),
     keyHex: row.keyHex,
+    epoch: row.epoch,
     text: typeof input.text === "string" ? input.text : "",
     kind: (typeof input.kind === "string" ? input.kind : "note") as PostKind,
     refs: Array.isArray(input.refs) ? input.refs.map((r) => String(r)) : [],
@@ -1167,14 +1169,26 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       members: resolved,
       posters: Array.isArray(posters) ? posters.map((x) => String(x)) : [],
     });
-    return { board: row.name, mode: row.mode, members: row.members, keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex()) };
+    // Founding members need the key: deliver it now (best effort).
+    let delivered = 0;
+    for (const member of row.members) {
+      if (await deliverBoardKey(b.db, liveRelay(), p2pChannel, row.name, member)) delivered++;
+    }
+    return {
+      board: row.name,
+      mode: row.mode,
+      epoch: row.epoch,
+      members: row.members,
+      delivered,
+      keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex(), row.epoch),
+    };
   },
   boardKey: async (params) => {
     const b = needBackend();
     const { name } = p(params) as { name?: unknown };
     const row = await getBoard(b.db, String(name ?? ""));
     if (!row) throw Object.assign(new Error(`no board ${String(name ?? "")}`), { code: "NOT_FOUND" });
-    return { board: row.name, keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex()) };
+    return { board: row.name, epoch: row.epoch, keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex(), row.epoch) };
   },
   boardRemove: async (params) => {
     const b = needBackend();
@@ -1188,8 +1202,8 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { code } = p(params) as { code?: unknown };
     const key = parseBoardKey(typeof code === "string" ? code.trim() : "");
     if (!key) throw Object.assign(new Error("not a valid board key code"), { code: "BAD_PARAM" });
-    const row = await createBoard(b.db, { name: key.board, keyHex: key.keyHex, members: [key.from] });
-    return { board: row.name, mode: row.mode, members: row.members };
+    const row = await createBoard(b.db, { name: key.board, keyHex: key.keyHex, epoch: key.epoch, members: [key.from] });
+    return { board: row.name, mode: row.mode, epoch: row.epoch, members: row.members };
   },
   boardInvite: async (params) => {
     const b = needBackend();
@@ -1198,16 +1212,41 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
     const person = await resolvePerson(b.db, String(to ?? ""), livePeople());
     if (!person.identityKey) throw Object.assign(new Error("invitee needs an identity key"), { code: "BAD_PARAM" });
-    const code = encodeBoardKey(row.name, row.keyHex, identityPubkeyHex());
-    // Membership is local truth; notifying the invitee is best effort (an
-    // offline peer without a relay account must not block the invite).
+    // Membership is local truth; notifying members is best effort. Adding a
+    // member rotates the key, so the new epoch is delivered to everyone
+    // (the newcomer cannot read old posts; everyone can read new ones).
     await addMember(b.db, row.name, person.identityKey);
-    try {
-      const dm = await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), person.identityKey, code);
-      return { board: row.name, invited: person.identityKey, transport: dm.transport, delivered: dm.delivered };
-    } catch (e) {
-      return { board: row.name, invited: person.identityKey, transport: "none", delivered: false, detail: e instanceof Error ? e.message : "notify failed" };
+    const rotated = await rotateBoardKey(b.db, row.name);
+    const after = (await getBoard(b.db, row.name)) as BoardRow;
+    let delivered = 0;
+    for (const member of after.members) {
+      if (await deliverBoardKey(b.db, liveRelay(), p2pChannel, after.name, member)) delivered++;
     }
+    return { board: after.name, invited: person.identityKey, epoch: rotated.epoch, delivered, members: after.members.length };
+  },
+  boardKick: async (params) => {
+    const b = needBackend();
+    const { board, who } = p(params) as { board?: unknown; who?: unknown };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    const person = await resolvePerson(b.db, String(who ?? ""), livePeople());
+    if (!person.identityKey) throw Object.assign(new Error("who needs an identity key"), { code: "BAD_PARAM" });
+    const after = await removeMember(b.db, row.name, person.identityKey);
+    if (!after) throw Object.assign(new Error(`no board ${row.name}`), { code: "NOT_FOUND" });
+    let delivered = 0;
+    for (const member of after.members) {
+      if (await deliverBoardKey(b.db, liveRelay(), p2pChannel, after.name, member)) delivered++;
+    }
+    return { board: after.name, removed: person.identityKey, epoch: after.epoch, members: after.members.length, delivered };
+  },
+  boardThread: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("post id required"), { code: "BAD_PARAM" });
+    const thread = await getThread(b.db, id);
+    if (!thread) throw Object.assign(new Error(`no post ${id}`), { code: "NOT_FOUND" });
+    if (thread.board) await markRead(b.db, thread.board);
+    return thread;
   },
   boardPost: async (params) => {
     const b = needBackend();
@@ -1281,8 +1320,8 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       ...(wantAgent ? { agent: wantAgent } : {}),
       ...(needsContent
         ? {
-            matches: (e) => {
-              const content = decodeContent(e, row.keyHex);
+            matches: async (e) => {
+              const content = await postContent(b.db, row.name, e);
               if (!content) return false;
               if (matchId && content.replyTo !== matchId) return false;
               if (wantMention && !content.refs.includes(wantMention)) return false;
@@ -1310,8 +1349,8 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const env = await waitForPost({
       board: row.name,
       timeoutMs: Math.floor(Number(waitMs) || 30_000),
-      matches: (e) => {
-        const content = decodeContent(e, row.keyHex);
+      matches: async (e) => {
+        const content = await postContent(b.db, row.name, e);
         return Boolean(content && content.replyTo === sent.id);
       },
     });
