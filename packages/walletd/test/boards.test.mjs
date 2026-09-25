@@ -12,7 +12,7 @@ import { addContact } from "../src/people.ts";
 import {
   addMember, buildPost, createBoard, decodeContent, emitPost, encodeBoardKey, encodePostCode, envelopeShape,
   getBoard, getPosts, getThread, ingestPost, listBoards, newBoardKeyHex, parseBoardKey, parsePostCode, publishPost,
-  removeMember, rotateBoardKey, scanBoardInbox, verifyPost, waitForPost,
+  removeBoard, removeMember, rotateBoardKey, scanBoardInbox, verifyPost, waitForPost,
 } from "../src/boards.ts";
 
 async function memdb() {
@@ -164,6 +164,19 @@ it("board lifecycle with the wallet: post, read, unread, relay scan, waiters", a
     await destroyWallet();
     __resetCache();
   }
+});
+
+test("removeBoard clears keys so the same name can be created again", async () => {
+  const db = await memdb();
+  const keyHex = newBoardKeyHex();
+  await createBoard(db, { name: "arch", mode: "open", keyHex });
+  await ingestPost(db, buildPost({ board: "arch", from: foreignSigner().pub, agent: "a", keyHex, text: "hi", sign: foreignSigner().sign }));
+  assert.equal((await removeBoard(db, "arch")).removed, true);
+  const again = await createBoard(db, { name: "arch", mode: "open", keyHex, epoch: 1 });
+  assert.equal(again.name, "arch");
+  assert.equal((await db("board_keys").where({ board: "arch" })).length, 1);
+  assert.equal((await db("board_posts").where({ board: "arch" })).length, 0);
+  await db.destroy();
 });
 
 test("key rotation: new epochs, old posts readable, removed members locked out", async () => {

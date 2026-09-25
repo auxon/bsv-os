@@ -465,8 +465,9 @@ export async function postContent(db: Knex, name: string, env: BoardEnvelope): P
 
 export async function removeBoard(db: Knex, name: string): Promise<{ removed: boolean }> {
   const board = await getBoard(db, name);
-  if (!board) return { removed: false };
+  await db("board_keys").where({ board: name }).delete();
   await db("board_posts").where({ board: name }).delete();
+  if (!board) return { removed: false };
   await db("boards").where({ name }).delete();
   return { removed: true };
 }
