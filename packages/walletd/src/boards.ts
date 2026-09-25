@@ -255,25 +255,30 @@ export interface BoardKeyCode {
   from: string;
   sig: string;
   epoch: number;
+  /** Roster at delivery time, so remote joiners know who to relay to. */
+  members?: string[];
 }
 
-function keyCanonical(board: string, keyHex: string, from: string, epoch: number | undefined): string {
+function keyCanonical(board: string, keyHex: string, from: string, epoch: number | undefined, members?: string[]): string {
   const base = [KEY_DOMAIN, board, keyHex, from.toLowerCase()];
+  // Legacy codes carry neither; signed fields are appended only when present.
   if (epoch !== undefined) base.push(String(epoch));
+  if (members !== undefined) base.push(JSON.stringify([...members].map((m) => m.toLowerCase()).sort()));
   return base.join("|");
 }
 
-export function encodeBoardKey(board: string, keyHex: string, from: string, epoch = 1): string {
+export function encodeBoardKey(board: string, keyHex: string, from: string, epoch = 1, members?: string[]): string {
   if (!validBoardName(board)) fail("BAD_PARAM", "bad board name");
   const ep = Math.max(1, Math.floor(epoch));
-  const payload = { v: 1 as const, board, keyHex, from: from.toLowerCase(), epoch: ep };
-  const sig = identitySignMessage(keyCanonical(board, keyHex, payload.from, ep));
+  const roster = members && members.length ? [...new Set(members.filter((m) => KEY_RE.test(m)).map((m) => m.toLowerCase()))].sort() : undefined;
+  const payload = { v: 1 as const, board, keyHex, from: from.toLowerCase(), epoch: ep, ...(roster ? { members: roster } : {}) };
+  const sig = identitySignMessage(keyCanonical(board, keyHex, payload.from, ep, roster));
   return `${BOARD_KEY_PREFIX}${base64url(Buffer.from(JSON.stringify({ ...payload, sig }), "utf8"))}`;
 }
 
 export function parseBoardKey(code: string): BoardKeyCode | null {
   const text = String(code ?? "").trim();
-  if (!text.startsWith(BOARD_KEY_PREFIX) || text.length > 4096) return null;
+  if (!text.startsWith(BOARD_KEY_PREFIX) || text.length > 64 * 1024) return null;
   try {
     const raw = JSON.parse(fromBase64url(text.slice(BOARD_KEY_PREFIX.length)).toString("utf8")) as Partial<BoardKeyCode>;
     if (raw.v !== 1 || typeof raw.board !== "string" || !validBoardName(raw.board) || typeof raw.keyHex !== "string" || !/^[0-9a-f]{64}$/.test(raw.keyHex)) return null;
@@ -281,8 +286,19 @@ export function parseBoardKey(code: string): BoardKeyCode | null {
     const from = raw.from.toLowerCase();
     const epoch = raw.epoch === undefined ? 1 : Math.floor(Number(raw.epoch));
     if (!Number.isInteger(epoch) || epoch < 1) return null;
-    const ok = verifyIdentitySignature(from, keyCanonical(raw.board, raw.keyHex, from, raw.epoch === undefined ? undefined : epoch), String(raw.sig ?? ""));
-    return ok ? { v: 1, board: raw.board, keyHex: raw.keyHex, from, sig: String(raw.sig), epoch } : null;
+    let roster: string[] | undefined;
+    if (Array.isArray(raw.members)) {
+      const cleaned = raw.members.filter((m): m is string => typeof m === "string" && KEY_RE.test(m)).map((m) => m.toLowerCase());
+      if (cleaned.length > 256) return null;
+      roster = [...new Set(cleaned)].sort();
+    }
+    const ok = verifyIdentitySignature(
+      from,
+      keyCanonical(raw.board, raw.keyHex, from, raw.epoch === undefined ? undefined : epoch, roster),
+      String(raw.sig ?? ""),
+    );
+    if (!ok) return null;
+    return { v: 1, board: raw.board, keyHex: raw.keyHex, from, sig: String(raw.sig), epoch, ...(roster ? { members: roster } : {}) };
   } catch {
     return null;
   }
@@ -640,7 +656,7 @@ export async function deliverBoardKey(
   const board = await getBoard(db, name);
   if (!board) return false;
   try {
-    const code = encodeBoardKey(board.name, board.keyHex, identityPubkeyHex(), board.epoch);
+    const code = encodeBoardKey(board.name, board.keyHex, identityPubkeyHex(), board.epoch, board.members);
     const sent = await sendDmPreferred(db, relay, p2p, identityPubkeyHex(), member, code);
     return sent.transport === "p2p" || sent.transport === "relay";
   } catch {
@@ -684,7 +700,12 @@ export async function scanBoardInbox(
     if (trimmed.startsWith(BOARD_KEY_PREFIX)) {
       const key = parseBoardKey(trimmed.split(/\s+/)[0]);
       if (key) {
-        await createBoard(db, { name: key.board, keyHex: key.keyHex, epoch: key.epoch, members: [key.from] });
+        await createBoard(db, {
+          name: key.board,
+          keyHex: key.keyHex,
+          epoch: key.epoch,
+          members: [key.from, ...(key.members ?? [])],
+        });
         result.keys++;
       }
     } else if (trimmed.startsWith(BOARD_POST_PREFIX)) {

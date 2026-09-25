@@ -1180,7 +1180,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       epoch: row.epoch,
       members: row.members,
       delivered,
-      keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex(), row.epoch),
+      keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex(), row.epoch, row.members),
     };
   },
   boardKey: async (params) => {
