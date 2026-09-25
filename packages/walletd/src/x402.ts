@@ -153,10 +153,14 @@ export async function x402Pay(opts: {
 }): Promise<PayResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const method = (opts.method ?? "GET").toUpperCase();
-  const first = await fetchFn(opts.url, {
-    method,
-    headers: { accept: "application/json" },
-  });
+  // The probe must look like the real request: some servers validate the
+  // body (and only then quote), so send it on the unpaid attempt too.
+  const probeInit: RequestInit = { method, headers: { accept: "application/json" } };
+  if (opts.body !== undefined && method !== "GET") {
+    (probeInit.headers as Record<string, string>)["content-type"] = "application/json";
+    probeInit.body = JSON.stringify(opts.body);
+  }
+  const first = await fetchFn(opts.url, probeInit);
   if (first.status !== 402) {
     return { paid: false, receipt: null, status: first.status, data: await first.json().catch(() => null) };
   }

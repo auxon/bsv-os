@@ -117,6 +117,19 @@ it("full metered loop against a stub gateway", async () => {
       /rejected the payment proof/,
     );
 
+    // POST probe carries the body so body-validating servers can quote
+    let probeBody = null;
+    const postGateway = stubGateway({ quoteB64: QUOTE_B64 });
+    const postPaid = await x402Pay({
+      db, chain, url: "https://x.example/metered-post", origin: "cli", method: "POST", body: { subject: "s", body: "b" },
+      fetchFn: async (url, init) => {
+        if (!(init?.headers?.["PAYMENT-SIGNATURE"] ?? init?.headers?.["payment-signature"])) probeBody = init?.body;
+        return postGateway(url, init);
+      },
+    });
+    assert.equal(postPaid.paid, true);
+    assert.equal(probeBody, JSON.stringify({ subject: "s", body: "b" }));
+
     // first spend denied without approval
     await db("policies").where({ origin: "cli" }).delete();
     await assert.rejects(
