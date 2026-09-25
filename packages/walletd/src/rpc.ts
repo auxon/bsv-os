@@ -44,6 +44,10 @@ import {
   saveIncoming, scanInbound, sendReceipt, sendRequestCode,
 } from "./requests.ts";
 import { issueReceipt, listReceipts as listPaymentReceipts, getReceipt, receiptDetail } from "./receipts.ts";
+import {
+  addMember, buildPost, createBoard, decodeContent, encodeBoardKey, envelopeShape, getBoard, getPosts, removeBoard,
+  ingestPost, listBoards, parseBoardKey, publishPost, scanBoardInbox, waitForPost, type BoardRow, type PostKind,
+} from "./boards.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -102,6 +106,32 @@ let p2pChannel: P2PChannel | null = null;
 /** Wired by index.ts when the F6.2 direct channel starts. */
 export function setP2P(channel: P2PChannel | null): void {
   p2pChannel = channel;
+}
+
+/** Board helpers: agent label from the caller, and one publish path. */
+function boardAgentLabel(agent: unknown, origin: unknown): string {
+  if (typeof agent === "string" && agent.trim()) return agent.trim().slice(0, 64);
+  const o = typeof origin === "string" ? origin : "cli";
+  return (o.startsWith("agent:") ? o.slice("agent:".length) : o).slice(0, 64);
+}
+
+async function boardPublish(
+  b: ReturnType<typeof needBackend>,
+  row: BoardRow,
+  input: { text: unknown; kind?: unknown; refs?: unknown; replyTo?: unknown; agent?: unknown; origin?: unknown },
+): Promise<{ id: string; board: string; agent: string; accepted: boolean; direct: string[]; relayed: number }> {
+  const env = buildPost({
+    board: row.name,
+    from: identityPubkeyHex(),
+    agent: boardAgentLabel(input.agent, input.origin),
+    keyHex: row.keyHex,
+    text: typeof input.text === "string" ? input.text : "",
+    kind: (typeof input.kind === "string" ? input.kind : "note") as PostKind,
+    refs: Array.isArray(input.refs) ? input.refs.map((r) => String(r)) : [],
+    replyTo: typeof input.replyTo === "string" ? input.replyTo : "",
+  });
+  const published = await publishPost(b.db, liveRelay(), p2pChannel, env);
+  return { id: env.id, board: env.board, agent: env.agent, ...published };
 }
 
 let torrentService: TorrentService | null = null;
@@ -1110,6 +1140,185 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   receiptList: async () => {
     const b = needBackend();
     return { receipts: await listPaymentReceipts(b.db) };
+  },
+  /** F6.4 boards: fast, permissioned, persistent agent-to-agent logs. */
+  boardList: async () => {
+    const b = needBackend();
+    try {
+      await scanBoardInbox(b.db, liveRelay());
+    } catch {
+      /* relay or lock hiccups must not break listing */
+    }
+    return { boards: await listBoards(b.db) };
+  },
+  boardCreate: async (params) => {
+    const b = needBackend();
+    const { name, mode, members, posters } = p(params) as { name?: unknown; mode?: unknown; members?: unknown; posters?: unknown };
+    if (typeof name !== "string" || !name) throw Object.assign(new Error("board name required"), { code: "BAD_PARAM" });
+    const resolved: string[] = [];
+    for (const who of Array.isArray(members) ? members : []) {
+      const person = await resolvePerson(b.db, String(who), livePeople()).catch(() => null);
+      if (!person?.identityKey) throw Object.assign(new Error(`no identity key for ${String(who)}`), { code: "BAD_PARAM" });
+      resolved.push(person.identityKey);
+    }
+    const row = await createBoard(b.db, {
+      name,
+      mode: mode === "open" ? "open" : "members",
+      members: resolved,
+      posters: Array.isArray(posters) ? posters.map((x) => String(x)) : [],
+    });
+    return { board: row.name, mode: row.mode, members: row.members, keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex()) };
+  },
+  boardKey: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    const row = await getBoard(b.db, String(name ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(name ?? "")}`), { code: "NOT_FOUND" });
+    return { board: row.name, keyCode: encodeBoardKey(row.name, row.keyHex, identityPubkeyHex()) };
+  },
+  boardRemove: async (params) => {
+    const b = needBackend();
+    const { name } = p(params) as { name?: unknown };
+    const row = await getBoard(b.db, String(name ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(name ?? "")}`), { code: "NOT_FOUND" });
+    return removeBoard(b.db, row.name);
+  },
+  boardJoin: async (params) => {
+    const b = needBackend();
+    const { code } = p(params) as { code?: unknown };
+    const key = parseBoardKey(typeof code === "string" ? code.trim() : "");
+    if (!key) throw Object.assign(new Error("not a valid board key code"), { code: "BAD_PARAM" });
+    const row = await createBoard(b.db, { name: key.board, keyHex: key.keyHex, members: [key.from] });
+    return { board: row.name, mode: row.mode, members: row.members };
+  },
+  boardInvite: async (params) => {
+    const b = needBackend();
+    const { board, to } = p(params) as { board?: unknown; to?: unknown };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    const person = await resolvePerson(b.db, String(to ?? ""), livePeople());
+    if (!person.identityKey) throw Object.assign(new Error("invitee needs an identity key"), { code: "BAD_PARAM" });
+    const code = encodeBoardKey(row.name, row.keyHex, identityPubkeyHex());
+    // Membership is local truth; notifying the invitee is best effort (an
+    // offline peer without a relay account must not block the invite).
+    await addMember(b.db, row.name, person.identityKey);
+    try {
+      const dm = await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), person.identityKey, code);
+      return { board: row.name, invited: person.identityKey, transport: dm.transport, delivered: dm.delivered };
+    } catch (e) {
+      return { board: row.name, invited: person.identityKey, transport: "none", delivered: false, detail: e instanceof Error ? e.message : "notify failed" };
+    }
+  },
+  boardPost: async (params) => {
+    const b = needBackend();
+    const { board, text, kind, refs, replyTo, agent, origin } = p(params) as {
+      board?: unknown; text?: unknown; kind?: unknown; refs?: unknown; replyTo?: unknown; agent?: unknown; origin?: unknown;
+    };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    return boardPublish(b, row, { text, kind, refs, replyTo, agent, origin });
+  },
+  boardReply: async (params) => {
+    const b = needBackend();
+    const { id, text, agent, origin } = p(params) as { id?: unknown; text?: unknown; agent?: unknown; origin?: unknown };
+    const post = (await b.db("board_posts").where({ id: String(id ?? "") }).first()) as { board?: string } | undefined;
+    if (!post?.board) throw Object.assign(new Error(`no post ${String(id ?? "")}`), { code: "NOT_FOUND" });
+    const row = await getBoard(b.db, post.board);
+    if (!row) throw Object.assign(new Error(`no board ${post.board}`), { code: "NOT_FOUND" });
+    return boardPublish(b, row, { text, replyTo: String(id ?? ""), agent, origin });
+  },
+  boardGet: async (params) => {
+    const b = needBackend();
+    const { board, since, limit, remote } = p(params) as { board?: unknown; since?: unknown; limit?: unknown; remote?: unknown };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    try {
+      await scanBoardInbox(b.db, liveRelay());
+    } catch {
+      /* local history still serves */
+    }
+    const sinceMs = Math.floor(Number(since) || 0);
+    if (typeof remote === "string" && remote && p2pChannel?.boardGet) {
+      try {
+        const direct = /^[0-9a-fA-F]{66}$/.test(remote) ? remote.toLowerCase() : (await resolvePerson(b.db, remote, livePeople())).identityKey;
+        if (direct) {
+          const pulled = await p2pChannel.boardGet(direct, row.name, sinceMs);
+          for (const env of pulled ?? []) {
+            if (envelopeShape(env)) await ingestPost(b.db, env);
+          }
+        }
+      } catch {
+        /* remote catch-up is best effort */
+      }
+    }
+    const res = await getPosts(b.db, row.name, { since: sinceMs, limit: Math.floor(Number(limit) || 100) });
+    return { board: row.name, locked: res.locked, posts: res.posts };
+  },
+  boardWait: async (params) => {
+    const b = needBackend();
+    const { board, timeoutMs, replyTo, from, agent, mention } = p(params) as {
+      board?: unknown; timeoutMs?: unknown; replyTo?: unknown; from?: unknown; agent?: unknown; mention?: unknown;
+    };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    try {
+      await scanBoardInbox(b.db, liveRelay());
+    } catch {
+      /* keep waiting on the live channel */
+    }
+    let fromKey: string | undefined;
+    if (typeof from === "string" && from) {
+      fromKey = /^[0-9a-fA-F]{66}$/.test(from) ? from.toLowerCase() : (await resolvePerson(b.db, from, livePeople())).identityKey || undefined;
+    }
+    const matchId = typeof replyTo === "string" && replyTo ? replyTo : "";
+    const wantAgent = typeof agent === "string" && agent ? agent : "";
+    const wantMention = typeof mention === "string" && mention ? `agent:${mention}` : "";
+    const needsContent = Boolean(matchId || wantMention);
+    const env = await waitForPost({
+      board: row.name,
+      timeoutMs: Math.floor(Number(timeoutMs) || 30_000),
+      ...(fromKey ? { from: fromKey } : {}),
+      ...(wantAgent ? { agent: wantAgent } : {}),
+      ...(needsContent
+        ? {
+            matches: (e) => {
+              const content = decodeContent(e, row.keyHex);
+              if (!content) return false;
+              if (matchId && content.replyTo !== matchId) return false;
+              if (wantMention && !content.refs.includes(wantMention)) return false;
+              return true;
+            },
+          }
+        : {}),
+    });
+    if (!env) return { timeout: true, post: null };
+    await ingestPost(b.db, env).catch(() => null);
+    const posts = await getPosts(b.db, row.name, { limit: 500, markRead: false });
+    return { timeout: false, post: posts.posts.find((x) => x.id === env.id) ?? null };
+  },
+  /** Post a request and block for its first reply: the agent ask primitive. */
+  boardAsk: async (params) => {
+    const b = needBackend();
+    const { board, text, to, waitMs, kind, refs, agent, origin } = p(params) as {
+      board?: unknown; text?: unknown; to?: unknown; waitMs?: unknown; kind?: unknown; refs?: unknown; agent?: unknown; origin?: unknown;
+    };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    const mentions = Array.isArray(refs) ? refs.map((r) => String(r)) : [];
+    if (typeof to === "string" && to) mentions.push(`agent:${to.replace(/^@/, "")}`);
+    const sent = await boardPublish(b, row, { text, kind: kind ?? "request", refs: mentions, agent, origin });
+    const env = await waitForPost({
+      board: row.name,
+      timeoutMs: Math.floor(Number(waitMs) || 30_000),
+      matches: (e) => {
+        const content = decodeContent(e, row.keyHex);
+        return Boolean(content && content.replyTo === sent.id);
+      },
+    });
+    if (!env) return { postId: sent.id, timeout: true, reply: null };
+    await ingestPost(b.db, env).catch(() => null);
+    const posts = await getPosts(b.db, row.name, { limit: 500, markRead: false });
+    return { postId: sent.id, timeout: false, reply: posts.posts.find((x) => x.id === env.id) ?? null };
   },
   /**
    * Sign an arbitrary short message with the wallet identity key (BSM).

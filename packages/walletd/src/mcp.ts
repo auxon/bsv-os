@@ -154,6 +154,63 @@ const TOOLS = [
     },
   },
   {
+    name: "board_post",
+    description: "Post to a bsvOS board: a signed, encrypted, replicated agent-to-agent log. Online members get it over the p2p channel in milliseconds; offline members receive it via the relay and file it on sync. Use kind request + board_wait to ask another agent and block for the reply.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        board: { type: "string", description: "board name (2-32 lowercase letters, digits, hyphens)" },
+        text: { type: "string", description: "post body, up to 8 KB" },
+        kind: { type: "string", description: "note (default), request, result, or artifact" },
+        refs: { type: "array", items: { type: "string" }, description: "small references: hashes, outpoints, torrent infohashes, agent:<name> mentions" },
+        reply_to: { type: "string", description: "post id this replies to" },
+      },
+      required: ["board", "text"],
+    },
+  },
+  {
+    name: "board_get",
+    description: "Read a board's posts (decrypted locally, newest read cursor advanced). Use --remote to catch up from a peer first.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        board: { type: "string", description: "board name" },
+        since: { type: "number", description: "only posts with ts greater than this (unix ms)" },
+        limit: { type: "number", description: "max posts (default 100, cap 500)" },
+        remote: { type: "string", description: "@name or identity key of a peer to catch up from" },
+      },
+      required: ["board"],
+    },
+  },
+  {
+    name: "board_reply",
+    description: "Reply to a board post (same as board_post with reply_to set).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "post id to reply to" },
+        text: { type: "string", description: "reply body" },
+      },
+      required: ["id", "text"],
+    },
+  },
+  {
+    name: "board_wait",
+    description: "Block until a matching board post arrives (or timeout): the request/response primitive for agents. Filter by reply_to (answer to a post), from, agent (posting agent name), or mention (agent:<name> in refs).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        board: { type: "string", description: "board name" },
+        timeout_seconds: { type: "number", description: "max wait in seconds (default 30, cap 120)" },
+        reply_to: { type: "string", description: "only posts replying to this post id" },
+        from: { type: "string", description: "@name or identity key of the sender" },
+        agent: { type: "string", description: "only posts by this agent label" },
+        mention: { type: "string", description: "only posts whose refs mention agent:<name>" },
+      },
+      required: ["board"],
+    },
+  },
+  {
     name: "market_sync",
     description: "Reconcile a completed buy with the market when the immediate post failed (indexers lag fresh broadcasts): posts the buy (+settle for atomic swaps) for a txid that already exists. Idempotent when the listing already recorded that txid.",
     inputSchema: {
@@ -291,6 +348,47 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             ...(typeof args.title === "string" && args.title ? { title: args.title } : {}),
           }));
         }
+        case "board_post": {
+          if (typeof args.board !== "string" || !args.board) {
+            throw new McpError(ErrorCode.InvalidParams, "board is required");
+          }
+          if (typeof args.text !== "string" || !args.text) {
+            throw new McpError(ErrorCode.InvalidParams, "text is required");
+          }
+          return text(await callDaemon("boardPost", {
+            board: args.board,
+            text: args.text,
+            ...(typeof args.kind === "string" ? { kind: args.kind } : {}),
+            ...(Array.isArray(args.refs) ? { refs: args.refs.map((r) => String(r)) } : {}),
+            ...(typeof args.reply_to === "string" ? { replyTo: args.reply_to } : {}),
+            agent, origin: agent,
+          }));
+        }
+        case "board_get":
+          return text(await callDaemon("boardGet", {
+            board: args.board,
+            ...(Number.isFinite(Number(args.since)) ? { since: Number(args.since) } : {}),
+            ...(Number.isFinite(Number(args.limit)) ? { limit: Number(args.limit) } : {}),
+            ...(typeof args.remote === "string" ? { remote: args.remote } : {}),
+          }));
+        case "board_reply": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          if (typeof args.text !== "string" || !args.text) {
+            throw new McpError(ErrorCode.InvalidParams, "text is required");
+          }
+          return text(await callDaemon("boardReply", { id: args.id, text: args.text, agent, origin: agent }));
+        }
+        case "board_wait":
+          return text(await callDaemon("boardWait", {
+            board: args.board,
+            timeoutMs: Math.min(120_000, Math.max(1000, Math.floor(Number(args.timeout_seconds) || 30) * 1000)),
+            ...(typeof args.reply_to === "string" ? { replyTo: args.reply_to } : {}),
+            ...(typeof args.from === "string" ? { from: args.from } : {}),
+            ...(typeof args.agent === "string" ? { agent: args.agent } : {}),
+            ...(typeof args.mention === "string" ? { mention: args.mention } : {}),
+          }));
         case "market_sync": {
           if (typeof args.listing !== "string" || !args.listing) {
             throw new McpError(ErrorCode.InvalidParams, "listing (asset outpoint) is required");

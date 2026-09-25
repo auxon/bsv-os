@@ -19,6 +19,7 @@ import { dataDir, migrate, openDb } from "./storage.ts";
 import { P2PNode, P2P_DEFAULT_PORT, P2P_DISCOVERY_PORT, custodyP2PCrypto } from "./p2p.ts";
 import { TorrentService } from "./torrents.ts";
 import { storeInboundEnvelope } from "./msgs.ts";
+import { ingestPost, onBoardPost } from "./boards.ts";
 import { selfAddress } from "./custody.ts";
 import { announcedName, learnAddress, profileName, rememberAnnouncedName } from "./people.ts";
 import { createBrc100Wallet, type Brc100Context } from "./brc100.ts";
@@ -396,7 +397,13 @@ export async function main(): Promise<void> {
   } catch {
     /* ignore */
   }
-  const unix = net.createServer((socket) => {    let buf = "";
+  const unix = net.createServer((socket) => {
+    let buf = "";
+    const unsubs = new Map<string, () => void>();
+    socket.on("close", () => {
+      for (const off of unsubs.values()) off();
+      unsubs.clear();
+    });
     socket.on("data", (chunk) => {
       buf += chunk.toString("utf8");
       let idx: number;
@@ -406,10 +413,35 @@ export async function main(): Promise<void> {
         const line = buf.slice(0, idx).trim();
         buf = buf.slice(idx + 1);
         if (!line) continue;
+        type SocketFrame = { id?: unknown; method?: unknown; params?: { boards?: unknown } };
+        let parsed: SocketFrame | null = null;
+        try {
+          parsed = JSON.parse(line) as SocketFrame;
+        } catch {
+          socket.write(`${JSON.stringify({ error: { code: "PARSE", message: "invalid JSON" }, id: null })}\n`);
+          continue;
+        }
+        // Streaming: boardSubscribe keeps the socket open and pushes events.
+        if (parsed?.method === "boardSubscribe") {
+          const boards = Array.isArray(parsed.params?.boards)
+            ? (parsed.params?.boards as unknown[]).filter((b): b is string => typeof b === "string")
+            : [];
+          const key = String(parsed.id ?? "1");
+          unsubs.get(key)?.();
+          unsubs.set(
+            key,
+            onBoardPost((env) => {
+              if (!boards.includes(env.board)) return;
+              socket.write(`${JSON.stringify({ event: "board-post", post: env })}\n`);
+            }),
+          );
+          socket.write(`${JSON.stringify({ id: parsed.id ?? null, result: { subscribed: boards } })}\n`);
+          continue;
+        }
         jobs.push(
           (async () => {
             try {
-              socket.write(`${JSON.stringify(await dispatch(JSON.parse(line)))}\n`);
+              socket.write(`${JSON.stringify(await dispatch(parsed))}\n`);
             } catch {
               socket.write(`${JSON.stringify({ error: { code: "PARSE", message: "invalid JSON" }, id: null })}\n`);
             }
@@ -435,6 +467,17 @@ export async function main(): Promise<void> {
 
     // F6.3 files: BitTorrent listener + torrent registry. Discovery rides
     // the P2P channel (beacon bt port + authenticated "who has it").
+    let knownBoards: string[] = [];
+    const refreshBoards = async (): Promise<void> => {
+      try {
+        const rows = (await db("boards").select("name")) as Array<{ name: string }>;
+        knownBoards = rows.map((r) => r.name);
+      } catch {
+        /* pre-migration or transient */
+      }
+    };
+    await refreshBoards();
+    setInterval(() => void refreshBoards(), 10_000).unref?.();
     let p2pRef: P2PNode | null = null;
     let torrentService: TorrentService | null = null;
     if (process.env.BSV_TORRENT !== "0") {
@@ -465,6 +508,7 @@ export async function main(): Promise<void> {
         seeds: process.env.BSV_P2P_PEERS,
         btPort: torrentService?.btPort ?? undefined,
         onTorrents: () => torrentService?.cachedHashes() ?? [],
+        boardList: () => knownBoards,
         card: () => {
           try {
             return { payTo: selfAddress(), name: announcedName() };
@@ -474,6 +518,16 @@ export async function main(): Promise<void> {
         },
         onCard: (identityKey, card) => void learnAddress(db, identityKey, card.payTo).catch(() => {}),
         onDm: (id, envelope) => storeInboundEnvelope(db, id, envelope, "p2p"),
+        onBoard: async (envelope) => {
+          const stored = await ingestPost(db, envelope);
+          const env = envelope as { id?: unknown; board?: unknown };
+          // eslint-disable-next-line no-console
+          console.log(`board: ${String(env.board)} ${String(env.id).slice(0, 12)} ${stored?.fresh ? "stored" : "ignored"}`);
+        },
+        onBoardQuery: async (board, since) => {
+          const rows = (await db("board_posts").where({ board }).where("ts", ">", since).orderBy("ts").limit(200)) as Array<{ envelope: string }>;
+          return rows.map((r) => JSON.parse(r.envelope) as unknown);
+        },
       });
       try {
         await p2p.start();

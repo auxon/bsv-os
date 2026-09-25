@@ -406,6 +406,7 @@ interface Session {
   pending: Map<string, () => void>;
   payTo: string;
   name: string;
+  boardSubs: Set<string>;
 }
 
 export interface P2PStatus {
@@ -428,6 +429,12 @@ export interface P2PChannel {
   meet?(identityKey: string): Promise<{ payTo: string; name: string } | null>;
   /** Ask a peer which torrents it is seeding (null when it did not answer). */
   torrentsOf?(identityKey: string): Promise<string[] | null>;
+  /** Push a board post to every subscribed session; returns the peers written to. */
+  boardPost?(envelope: unknown): Promise<string[]>;
+  /** Ask a peer for board posts since a cursor (null when it did not answer). */
+  boardGet?(identityKey: string, board: string, since: number): Promise<unknown[] | null>;
+  /** Subscribe this daemon's session with a peer to a set of boards. */
+  boardSub?(identityKey: string, boards: string[]): Promise<boolean>;
   peers(): PeerInfo[];
   status(): P2PStatus;
 }
@@ -441,6 +448,12 @@ export interface P2PNodeOptions {
   onCard?: (identityKey: string, card: { payTo: string; name: string }) => void;
   /** Answer "which torrents do you seed?" for authenticated peers. */
   onTorrents?: () => string[];
+  /** Accept a board post from an authenticated peer (resolve before ack). */
+  onBoard?: (envelope: unknown) => unknown | Promise<unknown>;
+  /** Answer a board catch-up query: posts since a cursor. */
+  onBoardQuery?: (board: string, since: number) => unknown[] | Promise<unknown[]>;
+  /** Boards this daemon wants peers to fan out to it (sync; refreshed on the tick). */
+  boardList?: () => string[];
   /** Our BitTorrent listener port, advertised in the beacon. */
   btPort?: number;
   port?: number;
@@ -470,6 +483,9 @@ export class P2PNode implements P2PChannel {
   private readonly opts: P2PNodeOptions;
   private readonly staticPeers = new Map<string, PeerSeed>();
   private readonly torrentWaiters = new Map<string, (hashes: string[] | null) => void>();
+  private readonly boardWaiters = new Map<string, (posts: unknown[] | null) => void>();
+  private autoBoards: string[] = [];
+  private autoBoardsSent = "";
 
   constructor(opts: P2PNodeOptions) {
     this.opts = opts;
@@ -529,6 +545,10 @@ export class P2PNode implements P2PChannel {
       this.torrentWaiters.delete(q);
       resolve(null);
     }
+    for (const [q, resolve] of this.boardWaiters) {
+      this.boardWaiters.delete(q);
+      resolve(null);
+    }
     const server = this.server;
     this.server = null;
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -560,6 +580,93 @@ export class P2PNode implements P2PChannel {
     } catch {
       return null;
     }
+  }
+
+  /** Live session for a peer, connecting via registry or a static seed. */
+  private async sessionFor(key: string): Promise<Session | null> {
+    const existing = this.sessions.get(key);
+    if (existing) return existing;
+    let peer = this.registry.get(key);
+    if (!peer || !peer.online) {
+      const seed = this.staticPeers.get(key);
+      if (seed) {
+        peer = {
+          identityKey: key, address: seed.address, port: seed.port, lastSeen: (this.opts.now ?? Date.now)(),
+          online: true, name: "", payTo: "", nameVerified: false, btPort: 0,
+        };
+      }
+    }
+    if (!peer) return null;
+    try {
+      return await this.connectTo(peer);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Push a board post to every session subscribed to that board. */
+  async boardPost(envelope: unknown): Promise<string[]> {
+    const board = envelope && typeof envelope === "object" ? (envelope as { board?: unknown }).board : "";
+    if (typeof board !== "string") return [];
+    const peers: string[] = [];
+    for (const [key, session] of this.sessions) {
+      if (!session.boardSubs.has(board)) continue;
+      if (session.channel.write({ t: "board", op: "post", env: envelope })) peers.push(key);
+    }
+    return peers;
+  }
+
+  /** Catch up on a board from a peer: posts since a cursor, or null. */
+  async boardGet(identityKey: string, board: string, since = 0): Promise<unknown[] | null> {
+    const key = identityKey.toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(board) || !KEY_RE.test(key) || !this.opts.crypto.available()) return null;
+    const session = await this.sessionFor(key);
+    if (!session) return null;
+    const q = randomBytes(8).toString("hex");
+    const timeoutMs = this.opts.ackTimeoutMs ?? ACK_TIMEOUT_MS;
+    return new Promise<unknown[] | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.boardWaiters.delete(q);
+        resolve(null);
+      }, timeoutMs);
+      timer.unref?.();
+      this.boardWaiters.set(q, (posts) => {
+        clearTimeout(timer);
+        resolve(posts);
+      });
+      if (!session.channel.write({ t: "board", op: "get", q, board, since })) {
+        clearTimeout(timer);
+        this.boardWaiters.delete(q);
+        resolve(null);
+      }
+    });
+  }
+
+  /** Ask a peer's daemon to forward board posts to this session. */
+  async boardSub(identityKey: string, boards: string[]): Promise<boolean> {
+    const key = identityKey.toLowerCase();
+    const names = boards.filter((b) => typeof b === "string" && /^[a-z0-9][a-z0-9-]{1,31}$/.test(b));
+    if (!names.length || !KEY_RE.test(key) || !this.opts.crypto.available()) return false;
+    const session = await this.sessionFor(key);
+    if (!session) return false;
+    const q = randomBytes(8).toString("hex");
+    const timeoutMs = this.opts.ackTimeoutMs ?? ACK_TIMEOUT_MS;
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.boardWaiters.delete(q);
+        resolve(false);
+      }, timeoutMs);
+      timer.unref?.();
+      this.boardWaiters.set(q, () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+      if (!session.channel.write({ t: "board", op: "sub", q, boards: names })) {
+        clearTimeout(timer);
+        this.boardWaiters.delete(q);
+        resolve(false);
+      }
+    });
   }
 
   /** Ask a peer which torrents it seeds. Null when it cannot be reached. */
@@ -699,6 +806,20 @@ export class P2PNode implements P2PChannel {
   // ── discovery ──────────────────────────────────────────────────────────
 
   private tick(): void {
+    try {
+      this.autoBoards = (this.opts.boardList?.() ?? []).filter((b) => /^[a-z0-9][a-z0-9-]{1,31}$/.test(b));
+    } catch {
+      this.autoBoards = [];
+    }
+    const fingerprint = this.autoBoards.join(",");
+    if (fingerprint !== this.autoBoardsSent) {
+      this.autoBoardsSent = fingerprint;
+      if (this.autoBoards.length > 0) {
+        for (const session of this.sessions.values()) {
+          session.channel.write({ t: "board", op: "sub", q: "auto", boards: this.autoBoards });
+        }
+      }
+    }
     this.registry.prune();
     const cut = (this.opts.now ?? Date.now)() - (this.opts.idleTimeoutMs ?? IDLE_TIMEOUT_MS);
     for (const [key, s] of this.sessions) {
@@ -891,9 +1012,15 @@ export class P2PNode implements P2PChannel {
       pending: new Map(),
       payTo: card.payTo,
       name: card.name,
+      boardSubs: new Set(),
     };
     this.sessions.set(peer, session);
     channel.setHandler((msg) => void this.onFrame(session, msg));
+    // Tell the peer which boards we want pushed to us, so both directions
+    // fan out without a manual subscribe on either side.
+    if (this.autoBoards.length > 0) {
+      channel.write({ t: "board", op: "sub", q: "auto", boards: this.autoBoards });
+    }
     socket.on("close", () => {
       if (this.sessions.get(peer) === session) this.sessions.delete(peer);
     });
@@ -931,6 +1058,51 @@ export class P2PNode implements P2PChannel {
       }
     } else if (m.t === "ping") {
       session.channel.write({ t: "pong" });
+    } else if (m.t === "board") {
+      const op = typeof m.op === "string" ? m.op : "";
+      const q = typeof m.q === "string" ? m.q : "";
+      if (op === "post") {
+        if (!this.rateOk(session)) {
+          session.socket.destroy();
+          return;
+        }
+        const env = m.env as Record<string, unknown> | undefined;
+        const id = env && typeof env.id === "string" ? env.id : "";
+        if (!id) return;
+        try {
+          await this.opts.onBoard?.(env);
+        } catch {
+          // no ack: the sender keeps the relay copy as the durable path
+          return;
+        }
+        session.channel.write({ t: "board", op: "ack", ids: [id] });
+      } else if (op === "get" && q) {
+        const board = typeof m.board === "string" ? m.board : "";
+        const since = Math.floor(Number(m.since) || 0);
+        let posts: unknown[] = [];
+        try {
+          posts = (await this.opts.onBoardQuery?.(board, since)) ?? [];
+        } catch {
+          posts = [];
+        }
+        session.channel.write({ t: "board", op: "posts", q, posts });
+      } else if (op === "sub" && q) {
+        const boards = Array.isArray(m.boards) ? m.boards.filter((b): b is string => typeof b === "string" && /^[a-z0-9][a-z0-9-]{1,31}$/.test(b)) : [];
+        session.boardSubs = new Set(boards);
+        session.channel.write({ t: "board", op: "sub-ok", q, boards });
+      } else if (op === "posts" && q) {
+        const resolve = this.boardWaiters.get(q);
+        if (resolve) {
+          this.boardWaiters.delete(q);
+          resolve(Array.isArray(m.posts) ? m.posts : []);
+        }
+      } else if (op === "sub-ok" && q) {
+        const resolve = this.boardWaiters.get(q);
+        if (resolve) {
+          this.boardWaiters.delete(q);
+          resolve([]);
+        }
+      }
     } else if (m.t === "torrents") {
       const q = typeof m.q === "string" ? m.q : "";
       if (!q) return;

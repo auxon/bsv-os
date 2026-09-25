@@ -412,3 +412,56 @@ test("torrentsOf asks an authenticated peer; garbage hashes are dropped", async 
     await b.stop();
   }
 });
+
+test("board frames: subscribe, broadcast to subscribers, catch-up query", async () => {
+  const hub = new MemoryHub();
+  const received = [];
+  const a = new P2PNode({
+    crypto: fakeCrypto(PrivateKey.fromRandom()),
+    discovery: true,
+    transport: hub.transport(),
+    port: 0,
+    onBoardQuery: async (board, since) => [{ id: "p1", board, ts: since + 1 }],
+    connectTimeoutMs: 1000,
+    handshakeTimeoutMs: 1000,
+    ackTimeoutMs: 1500,
+  });
+  const b = new P2PNode({
+    crypto: fakeCrypto(PrivateKey.fromRandom()),
+    discovery: true,
+    transport: hub.transport(),
+    port: 0,
+    onBoard: (env) => {
+      received.push(env);
+    },
+    connectTimeoutMs: 1000,
+    handshakeTimeoutMs: 1000,
+    ackTimeoutMs: 1500,
+  });
+  await a.start();
+  await b.start();
+  try {
+    a.announce();
+    const aKey = a.status().identityKey;
+    const bKey = b.status().identityKey;
+    await waitFor(() => b.registry.online(aKey));
+
+    assert.equal(await b.boardSub(aKey, ["ops"]), true);
+    const peers = await a.boardPost({ v: 1, id: "x1", board: "ops", from: bKey, agent: "t", ts: 1, ct: "00", sig: "s" });
+    assert.deepEqual(peers, [bKey]);
+    await waitFor(() => received.length === 1);
+    assert.equal(received[0].id, "x1");
+
+    // Unsubscribed boards are not fanned out.
+    assert.deepEqual(await a.boardPost({ v: 1, id: "y1", board: "other" }), []);
+
+    // Catch-up query answers through the authenticated channel.
+    const posts = await b.boardGet(aKey, "ops", 5);
+    assert.equal(posts?.[0]?.id, "p1");
+    assert.equal(posts?.[0]?.board, "ops");
+    assert.equal(await b.boardGet(aKey, "not a board", 0), null);
+  } finally {
+    await a.stop();
+    await b.stop();
+  }
+});

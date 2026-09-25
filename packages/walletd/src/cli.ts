@@ -131,6 +131,62 @@ function flag(rest: string[], name: string): string | undefined {
   return undefined;
 }
 
+/** All values of a repeatable flag: --member a --member b, or --member=a. */
+function flags(rest: string[], name: string): string[] {
+  const out: string[] = [];
+  rest.forEach((a, i) => {
+    if (a.startsWith(`--${name}=`)) out.push(a.slice(name.length + 3));
+    else if (a === `--${name}` && i + 1 < rest.length) out.push(rest[i + 1]);
+  });
+  return out;
+}
+
+/** Wait durations: 250ms, 30s, 2m, or a bare number of seconds. */
+function waitMs(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const m = /^(\d+)(ms|s|m)?$/.exec(raw.trim());
+  if (!m) return fallback;
+  const n = Number(m[1]);
+  const unit = m[2] ?? "s";
+  return unit === "ms" ? n : unit === "m" ? n * 60_000 : n * 1000;
+}
+
+/** `bsv board subscribe`: stream board posts as JSON lines until Ctrl-C. */
+async function boardSubscribe(boards: string[]): Promise<void> {
+  const body = JSON.stringify({ method: "boardSubscribe", params: { boards }, id: 1 });
+  if (HTTPS_URL) {
+    console.error("board subscribe needs the daemon socket (unset BSV_WALLETD_URL)");
+    process.exitCode = 2;
+    return;
+  }
+  const sock = net.createConnection(SOCK, () => {
+    sock.write(`${body}\n`);
+  });
+  let buf = "";
+  sock.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (line) process.stdout.write(`${line}\n`);
+    }
+  });
+  sock.on("error", (e) => {
+    console.error(`daemon unreachable (${SOCK}): ${e.message}`);
+    process.exitCode = 1;
+  });
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      sock.destroy();
+      resolve();
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    sock.on("close", () => resolve());
+  });
+}
+
 /** requestList without per-row codes (long; `request code <id>` fetches one). */
 async function requestListForCli(): Promise<unknown> {
   const res = (await call("requestList")) as {
@@ -936,6 +992,90 @@ async function main(): Promise<void> {
         break;
       }
       print(await call("signMessage", { message: msg }));
+      break;
+    }
+    case "board": {
+      const [bSub, ...bRest] = rest;
+      const arg = bRest.find((a) => !a.startsWith("--"));
+      const text = flag(bRest, "text") ?? flag(bRest, "message");
+      if (bSub === "list" || bSub === undefined) {
+        print(await call("boardList"));
+      } else if (bSub === "create" && arg) {
+        const members = flags(bRest, "member");
+        const posters = flags(bRest, "poster");
+        print(await call("boardCreate", {
+          name: arg,
+          mode: bRest.includes("--open") ? "open" : "members",
+          members,
+          posters,
+        }));
+      } else if (bSub === "remove" && arg) {
+        print(await call("boardRemove", { name: arg }));
+      } else if (bSub === "join" && arg) {
+        print(await call("boardJoin", { code: arg }));
+      } else if (bSub === "key" && arg) {
+        print(await call("boardKey", { name: arg }));
+      } else if (bSub === "invite" && arg) {
+        const who = bRest.filter((a) => !a.startsWith("--"))[1];
+        if (!who) {
+          console.error("usage: bsv board invite <board> <@name|identityKey>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("boardInvite", { board: arg, to: who }));
+      } else if (bSub === "post" && arg && text) {
+        print(await call("boardPost", {
+          board: arg,
+          text,
+          ...(flag(bRest, "kind") !== undefined ? { kind: flag(bRest, "kind") } : {}),
+          ...(flags(bRest, "ref").length ? { refs: flags(bRest, "ref") } : {}),
+          ...(flag(bRest, "reply") !== undefined ? { replyTo: flag(bRest, "reply") } : {}),
+          ...(flag(bRest, "agent") !== undefined ? { agent: flag(bRest, "agent") } : {}),
+        }));
+      } else if (bSub === "get" && arg) {
+        print(await call("boardGet", {
+          board: arg,
+          ...(flag(bRest, "since") !== undefined ? { since: Number(flag(bRest, "since")) } : {}),
+          ...(flag(bRest, "limit") !== undefined ? { limit: Number(flag(bRest, "limit")) } : {}),
+          ...(flag(bRest, "remote") !== undefined ? { remote: flag(bRest, "remote") } : {}),
+        }));
+      } else if (bSub === "reply" && arg && text) {
+        print(await call("boardReply", {
+          id: arg,
+          text,
+          ...(flag(bRest, "agent") !== undefined ? { agent: flag(bRest, "agent") } : {}),
+        }));
+      } else if (bSub === "wait" && arg) {
+        print(await call("boardWait", {
+          board: arg,
+          timeoutMs: waitMs(flag(bRest, "timeout"), 30000),
+          ...(flag(bRest, "reply") !== undefined ? { replyTo: flag(bRest, "reply") } : {}),
+          ...(flag(bRest, "from") !== undefined ? { from: flag(bRest, "from") } : {}),
+          ...(flag(bRest, "agent") !== undefined ? { agent: flag(bRest, "agent") } : {}),
+          ...(flag(bRest, "mention") !== undefined ? { mention: flag(bRest, "mention") } : {}),
+        }));
+      } else if (bSub === "ask" && arg && text) {
+        print(await call("boardAsk", {
+          board: arg,
+          text,
+          waitMs: waitMs(flag(bRest, "wait"), 30000),
+          ...(flag(bRest, "to") !== undefined ? { to: flag(bRest, "to") } : {}),
+          ...(flag(bRest, "agent") !== undefined ? { agent: flag(bRest, "agent") } : {}),
+        }));
+      } else if (bSub === "subscribe") {
+        const boards = [arg, ...flags(bRest, "board")].filter((b): b is string => Boolean(b));
+        if (!boards.length) {
+          console.error("usage: bsv board subscribe <board>[,<board2>…]");
+          process.exitCode = 2;
+          break;
+        }
+        await boardSubscribe(boards.flatMap((b) => b.split(",").filter(Boolean)));
+      } else {
+        console.error(
+          'usage: bsv board <list|create <name> [--open] [--member @who]… [--poster agent]|remove <name>|join <keyCode>|key <name>|invite <board> <who>|post <board> --text "…" [--kind note|request|result|artifact] [--ref …]… [--reply <id>]|get <board> [--since ms] [--limit n] [--remote <who>]|reply <id> --text "…"|wait <board> [--timeout 30s] [--reply <id>] [--from <who>] [--mention agent]|ask <board> --text "…" [--to <agent>] [--wait 30s]|subscribe <board>[,<board2>]>',
+        );
+        process.exitCode = 2;
+      }
       break;
     }
     case "ord": {
