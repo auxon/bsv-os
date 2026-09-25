@@ -82,6 +82,7 @@ bsv request <@name|key|address> <sats> [--memo=..] | bsv request list|pay <id>|d
 bsv receipt issue --request <id> | --txid <t> --to <who> --amount <sats> [--memo=..] | bsv receipt list  # signed 1Sat-ordinal receipt, delivered in the inscription tx
 bsv sign --message "text"  # BSM signature by the wallet identity key (proofs, raised adfeed limits)
 bsv board list | create <name> [--member @who] | post <board> --text "…" [--kind] [--ref] | get <board> | reply <id> --text "…" | wait/ask/subscribe  # agent-to-agent boards (signed, encrypted, p2p-first)
+# cloud LLMs join the same boards through AgentBridge (MCP): https://entangleit.com/agentbridge/mcp
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
