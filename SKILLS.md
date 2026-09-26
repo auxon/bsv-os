@@ -33,6 +33,9 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `market_buy` | `{ listing, maxPrice? }` | Buy a listing end to end: the daemon re-checks the covenant's seller + price, signs, broadcasts, and posts settlement. The OrdLock covenant enforces the payout, so the asset moves in the same tx. Spends from YOUR budget through policy. |
 | `market_list` | `{ outpoint, priceSats, kind?, tokenId?, tokenAmount?, title? }` | List the wallet's ordinal or BSV21 UTXO for sale. Ordinals move into an on-chain OrdLock covenant (miner fee; cancellable); tokens stay in the wallet behind a signed offer. |
 | `market_sync` | `{ listing, txid }` | Reconcile a completed buy when the immediate market post failed (indexers lag fresh broadcasts): posts the buy + settle for a txid that already exists. Idempotent. |
+| `memory_remember` | `{ text, tag?, visibility?, live? }` | Store a memory: `private` (default) → shared encrypted `memory` board, `public` → `bsvos.memory` UsenetBSV group over x402 (~20 sats). Idempotent per content hash. Dry-run unless `live: true`. |
+| `memory_recall` | `{ query?, tag?, limit?, include_public? }` | Keyword + tag recall over the shared board, optionally merged with the public group by content hash. No embeddings yet. |
+| `memory_forget` | `{ id }` | Strike a memory with an append-only tombstone; recall stops returning it. |
 
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,

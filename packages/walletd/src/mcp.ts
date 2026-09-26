@@ -222,6 +222,44 @@ const TOOLS = [
       required: ["listing", "txid"],
     },
   },
+  {
+    name: "memory_remember",
+    description: "Store an agent memory: private goes to the shared encrypted memory board (signed artifact, idempotent per content hash), public goes to the bsvos.memory UsenetBSV group over x402 (~20 sats). Dry-run by default; pass live true to write.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        text: { type: "string", description: "memory body, up to 8 KB" },
+        tag: { type: "string", description: "optional lowercase tag" },
+        visibility: { type: "string", description: "private (default) or public" },
+        live: { type: "boolean", description: "false (default) = dry-run, true = write" },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "memory_recall",
+    description: "Recall agent memories: keyword + tag search over the shared memory board, optionally merged with the public bsvos.memory UsenetBSV group. Merged by content hash.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "keyword query (exact/tag search; no embeddings yet)" },
+        tag: { type: "string", description: "only memories with this tag" },
+        limit: { type: "number", description: "max hits (default 20, cap 100)" },
+        include_public: { type: "boolean", description: "merge the public UsenetBSV group (default false)" },
+      },
+    },
+  },
+  {
+    name: "memory_forget",
+    description: "Strike a memory: posts an append-only tombstone on the shared board so recall stops returning it. The original post stays in history.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "board post id of the memory to forget" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -397,6 +435,31 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             throw new McpError(ErrorCode.InvalidParams, "txid must be a 64-hex transaction id");
           }
           return text(await callDaemon("marketSync", { listing: args.listing, txid: args.txid }));
+        }
+        case "memory_remember": {
+          if (typeof args.text !== "string" || !args.text) {
+            throw new McpError(ErrorCode.InvalidParams, "text is required");
+          }
+          return text(await callDaemon("memoryRemember", {
+            text: args.text,
+            ...(typeof args.tag === "string" ? { tag: args.tag } : {}),
+            ...(typeof args.visibility === "string" ? { visibility: args.visibility } : {}),
+            ...(args.live === true ? { live: true } : {}),
+            agent, origin: agent,
+          }));
+        }
+        case "memory_recall":
+          return text(await callDaemon("memoryRecall", {
+            ...(typeof args.query === "string" ? { query: args.query } : {}),
+            ...(typeof args.tag === "string" ? { tag: args.tag } : {}),
+            ...(Number.isFinite(Number(args.limit)) ? { limit: Number(args.limit) } : {}),
+            ...(args.include_public === true ? { includePublic: true } : {}),
+          }));
+        case "memory_forget": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("memoryForget", { id: args.id, agent, origin: agent }));
         }
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {

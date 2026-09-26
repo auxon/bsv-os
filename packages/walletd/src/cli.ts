@@ -1088,6 +1088,39 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "memory": {
+      const [mSub, ...mRest] = rest;
+      const mText = flag(mRest, "text") ?? flag(mRest, "message");
+      if (mSub === "remember" && mText) {
+        print(await call("memoryRemember", {
+          text: mText,
+          ...(flag(mRest, "tag") !== undefined ? { tag: flag(mRest, "tag") } : {}),
+          ...(flag(mRest, "visibility") !== undefined ? { visibility: flag(mRest, "visibility") } : {}),
+          ...(mRest.includes("--live") ? { live: true } : {}),
+          ...(flag(mRest, "agent") !== undefined ? { agent: flag(mRest, "agent") } : {}),
+        }));
+      } else if (mSub === "recall") {
+        print(await call("memoryRecall", {
+          ...(flag(mRest, "query") !== undefined ? { query: flag(mRest, "query") } : {}),
+          ...(flag(mRest, "tag") !== undefined ? { tag: flag(mRest, "tag") } : {}),
+          ...(flag(mRest, "limit") !== undefined ? { limit: Number(flag(mRest, "limit")) } : {}),
+          ...(mRest.includes("--include-public") ? { includePublic: true } : {}),
+        }));
+      } else if (mSub === "forget" && mRest.find((a) => !a.startsWith("--"))) {
+        print(await call("memoryForget", { id: mRest.find((a) => !a.startsWith("--")) }));
+      } else if (mSub === "init") {
+        print(await call("memoryInit", {
+          ...(mRest.includes("--live") ? { live: true } : {}),
+          ...(flag(mRest, "pay-to") !== undefined ? { payTo: flag(mRest, "pay-to") } : {}),
+        }));
+      } else {
+        console.error(
+          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|public] [--live]|recall [--query q] [--tag t] [--limit n] [--include-public]|forget <id>|init [--live [--pay-to <addr>]]>',
+        );
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

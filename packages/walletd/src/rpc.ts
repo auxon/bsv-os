@@ -49,6 +49,10 @@ import {
   removeBoard, removeMember, rotateBoardKey, postContent, markRead,
   ingestPost, listBoards, parseBoardKey, publishPost, scanBoardInbox, waitForPost, type BoardRow, type PostKind,
 } from "./boards.ts";
+import {
+  MEMORY_BOARD, USENET_BASE, USENET_GROUP, cleanTag, contentHash, forgetRefs, memoryRefs,
+  mergeUsenetHits, normalizeMemoryText, recallFromPosts, refHash, usenetPayload,
+} from "./memory.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -1358,6 +1362,153 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     await ingestPost(b.db, env).catch(() => null);
     const posts = await getPosts(b.db, row.name, { limit: 500, markRead: false });
     return { postId: sent.id, timeout: false, reply: posts.posts.find((x) => x.id === env.id) ?? null };
+  },
+  /**
+   * Agent memory on the shared board + UsenetBSV. Private posts are signed
+   * and encrypted board artifacts; public posts are x402-paid usenet
+   * articles in the shared group, idempotent per content hash. Dry-run is
+   * the default; live writes need `live: true`.
+   */
+  memoryRemember: async (params) => {
+    const b = needBackend();
+    const { text, tag, visibility, live, agent, origin } = p(params) as {
+      text?: unknown; tag?: unknown; visibility?: unknown; live?: unknown; agent?: unknown; origin?: unknown;
+    };
+    const clean = normalizeMemoryText(text);
+    if (!clean) throw Object.assign(new Error("text required"), { code: "BAD_PARAM" });
+    const ctag = cleanTag(tag);
+    const hash = contentHash(clean);
+    const vis = visibility === "public" ? "public" : "private";
+    let row = await getBoard(b.db, MEMORY_BOARD);
+    if (!row) row = await createBoard(b.db, { name: MEMORY_BOARD, mode: "members" });
+    const known = await getPosts(b.db, MEMORY_BOARD, { limit: 500, markRead: false });
+    const dup = known.posts.find((x) => x.refs.includes(`sha256:${hash}`) && x.refs.includes("#memory"));
+    if (dup) return { duplicate: true, hash, id: dup.id, board: MEMORY_BOARD, visibility: vis };
+    const refs = memoryRefs(hash, ctag);
+    if (live !== true) {
+      return { dryRun: true, hash, board: MEMORY_BOARD, visibility: vis, refs, tag: ctag, text: clean };
+    }
+    const originStr = typeof origin === "string" && origin ? origin : "memory";
+    if (vis === "private") {
+      const sent = await boardPublish(b, row, { text: clean, kind: "artifact", refs, agent, origin: originStr });
+      return { duplicate: false, hash, id: sent.id, board: MEMORY_BOARD, visibility: vis, tag: ctag };
+    }
+    const payload = usenetPayload(clean, ctag, hash);
+    const paid = await x402Pay({
+      db: b.db, chain: b.chain,
+      url: `${USENET_BASE}/api/groups/${USENET_GROUP}/post`,
+      method: "POST", body: payload, origin: originStr,
+    });
+    const article = (paid.data ?? {}) as { id?: unknown; messageId?: unknown; createdTx?: unknown };
+    return {
+      duplicate: false, hash, board: MEMORY_BOARD, visibility: vis, tag: ctag,
+      articleId: typeof article.id === "string" ? article.id : null,
+      createdTx: typeof article.createdTx === "string" ? article.createdTx : null,
+      txid: paid.receipt?.txid ?? null,
+    };
+  },
+  memoryRecall: async (params) => {
+    const b = needBackend();
+    const { query, tag, limit, includePublic } = p(params) as {
+      query?: unknown; tag?: unknown; limit?: unknown; includePublic?: unknown;
+    };
+    const row = await getBoard(b.db, MEMORY_BOARD);
+    const known = row ? await getPosts(b.db, MEMORY_BOARD, { limit: 500, markRead: false }) : { posts: [] };
+    const board = recallFromPosts(
+      known.posts.map((x) => ({ id: x.id, text: x.text, refs: x.refs, replyTo: x.replyTo, ts: x.ts, from: x.from, locked: x.locked })),
+      {
+        ...(typeof query === "string" ? { query } : {}),
+        ...(typeof tag === "string" ? { tag } : {}),
+        ...(Number.isFinite(Number(limit)) ? { limit: Number(limit) } : {}),
+      },
+    );
+    if (includePublic !== true) return { board: MEMORY_BOARD, hits: board, usenet: false };
+    let articles: Array<{ id: string; body: string; subject: string; from: string; createdAt: number }> = [];
+    let degraded = false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 20000);
+      try {
+        const res = await fetch(`${USENET_BASE}/api/groups/${USENET_GROUP}/feed`, {
+          headers: { accept: "application/json" }, signal: ctrl.signal,
+        });
+        if (res.ok) {
+          const feed = (await res.json().catch(() => null)) as { articles?: Array<Record<string, unknown>> } | null;
+          for (const a of feed?.articles ?? []) {
+            if (typeof a.id !== "string") continue;
+            let body = typeof a.body === "string" ? a.body : "";
+            if (!body) {
+              const full = await fetch(`${USENET_BASE}/api/article/${a.id}`, {
+                headers: { accept: "application/json" }, signal: ctrl.signal,
+              }).then((r) => (r.ok ? r.json().catch(() => null) : null)).catch(() => null) as { body?: unknown } | null;
+              if (typeof full?.body === "string") body = full.body;
+            }
+            if (!body) continue;
+            articles.push({
+              id: a.id, body,
+              subject: typeof a.subject === "string" ? a.subject : "",
+              from: typeof a.from === "string" ? a.from : "",
+              createdAt: Math.floor(Number(a.createdAt) || 0),
+            });
+          }
+        } else {
+          degraded = true;
+        }
+      } finally {
+        clearTimeout(t);
+      }
+    } catch {
+      degraded = true;
+    }
+    const hits = mergeUsenetHits(board, articles, {
+      ...(typeof query === "string" ? { query } : {}),
+      ...(typeof tag === "string" ? { tag } : {}),
+      ...(Number.isFinite(Number(limit)) ? { limit: Number(limit) } : {}),
+    });
+    return { board: MEMORY_BOARD, hits, usenet: true, ...(degraded ? { degraded: true } : {}) };
+  },
+  memoryForget: async (params) => {
+    const b = needBackend();
+    const { id, agent, origin } = p(params) as { id?: unknown; agent?: unknown; origin?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const row = await getBoard(b.db, MEMORY_BOARD);
+    if (!row) throw Object.assign(new Error("no memory board yet"), { code: "NOT_FOUND" });
+    const known = await getPosts(b.db, MEMORY_BOARD, { limit: 500, markRead: false });
+    const target = known.posts.find((x) => x.id === id);
+    if (!target) throw Object.assign(new Error(`no memory ${id}`), { code: "NOT_FOUND" });
+    const hash = refHash(target.refs);
+    if (!hash) throw Object.assign(new Error("not a memory post"), { code: "BAD_PARAM" });
+    const struck = known.posts.some((x) => x.refs.includes("#memory-forget") && x.replyTo === id);
+    if (struck) return { forgotten: true, duplicate: true, id, hash };
+    const originStr = typeof origin === "string" && origin ? origin : "memory";
+    const sent = await boardPublish(b, row, {
+      text: `forget ${id}`, kind: "artifact", refs: forgetRefs(hash), replyTo: id, agent, origin: originStr,
+    });
+    return { forgotten: true, duplicate: false, id, hash, tombstone: sent.id };
+  },
+  /** Ensure the shared board exists; dry-run the usenet group create unless live. */
+  memoryInit: async (params) => {
+    const b = needBackend();
+    const { live, payTo, origin } = p(params) as { live?: unknown; payTo?: unknown; origin?: unknown };
+    let row = await getBoard(b.db, MEMORY_BOARD);
+    if (!row) row = await createBoard(b.db, { name: MEMORY_BOARD, mode: "members" });
+    const to = typeof payTo === "string" && payTo ? payTo : selfAddress();
+    const payload = {
+      name: USENET_GROUP,
+      description: "Shared agent memory for bsvOS wallets: content-hash idempotent public memories.",
+      postPriceSats: 20,
+      readPriceDefault: 0,
+      payTo: to,
+    };
+    if (live !== true) {
+      return { board: row.name, group: USENET_GROUP, dryRun: true, payload, createPriceSats: 500 };
+    }
+    const originStr = typeof origin === "string" && origin ? origin : "memory";
+    const paid = await x402Pay({
+      db: b.db, chain: b.chain, url: `${USENET_BASE}/api/groups`,
+      method: "POST", body: payload, origin: originStr,
+    });
+    return { board: row.name, group: USENET_GROUP, dryRun: false, txid: paid.receipt?.txid ?? null, data: paid.data };
   },
   /**
    * Sign an arbitrary short message with the wallet identity key (BSM).
