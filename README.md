@@ -88,7 +88,7 @@ bsv stream start <addr> --rate <sats/min> --every <60s|5m|1h> --max <total> --bo
 bsv evolve create --task <t> --rubric <r> --prize <sats> [--rounds N] [--fee <sats>] [--round <30m|6h|7d>] | bsv evolve submit <contest> --text <prompt ---OUTPUT--- output> --pay-to <addr> [--round N] [--parent <entry>] [--pay-now] | bsv evolve entries|score|payout|close|list  # prompt evolution market: entry fees fund blind-judged prizes
 bsv capsule lock --amount <sats> --unlock-at <height|ISO date|+blocks> [--to <addr>] [--message <text>] | bsv capsule claim <id>|cancel <id>|list  # post-dated cheques: reserved funding auto-pays at maturity
 bsv x402 serve|price <method> [--price N]|sales  # sell this wallet's answers: Jev decisions + memory recall over x402 (buyers: POST /v1/serve/<method> with PAYMENT-SIGNATURE)
-bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>] [--media <http(s) audio/video/.m3u8>] [--live] | bsv cast play <episode> --rate <sats/min> --max <total> [--every <60s|5m>] | bsv cast stop <session>|episodes|sessions  # value-for-value: pay creators per minute, split with guests (player: https://localhost:2121/cast/)
+bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>] [--media <http(s) audio/video/.m3u8>] [--live] | bsv cast play <episode> --rate <sats/min> --max <total> [--every <60s|5m>] | bsv cast stop <session>|episodes|sessions|live-start <episode>|live-stop <id>|live-list  # value-for-value: pay creators per minute, split with guests (player: https://localhost:2121/cast/)
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore

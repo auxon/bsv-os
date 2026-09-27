@@ -127,8 +127,7 @@ test("episodes carry media URL + live flag", async () => {
   }
 });
 
-test("player app bundle: served files, no remote code", async () => {
-  const fs = await import("node:fs");
+test("player app bundle: served files, no remote code", async () => {  const fs = await import("node:fs");
   const dir = new URL("../../runner/apps/cast/", import.meta.url);
   for (const f of ["index.html", "app.js", "styles.css", "manifest.json", "hls.min.js"]) {
     assert.ok(fs.existsSync(new URL(f, dir)), f);
@@ -145,4 +144,69 @@ test("player app bundle: served files, no remote code", async () => {
   }
   const manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", dir), "utf8"));
   assert.equal(manifest.start_url, "https://localhost:2121/cast/");
+});
+
+test("live ingest: ids, playlist shape, validators", async () => {
+  const { default: cast } = await import("../src/cast.ts").catch(() => ({}));
+  void cast;
+  const {
+    bumpLiveSegments, endLive, getLive, listLive, liveFileValid, liveIdValid,
+    livePlaylist, mediaExt, mediaFileValid, newLiveId, newMediaId, startLive,
+  } = await import("../src/cast.ts");
+  // validators accept only server-shaped names
+  assert.equal(liveIdValid("abc123"), true);
+  assert.equal(liveIdValid("../x"), false);
+  assert.equal(liveIdValid("ABC"), false);
+  assert.equal(liveFileValid("index.m3u8"), true);
+  assert.equal(liveFileValid("init.mp4"), true);
+  assert.equal(liveFileValid("seg-12.m4s"), true);
+  assert.equal(liveFileValid("seg-12.mp4"), false);
+  assert.equal(liveFileValid("../../etc/passwd"), false);
+  assert.equal(mediaFileValid("abcdefghijkl.mp4"), true);
+  assert.equal(mediaFileValid("abc.mp4"), false);
+  assert.equal(mediaExt("video/mp4"), ".mp4");
+  assert.equal(mediaExt("video/mp4;codecs=avc1"), ".mp4");
+  assert.equal(mediaExt("application/x-sh"), null);
+  assert.match(newMediaId(), /^[a-z0-9]{12}$/);
+  assert.match(newLiveId(), /^[a-z0-9]{12}$/);
+  // playlist: windowed live, full + ENDLIST on stop
+  const live = livePlaylist(25, false);
+  assert.ok(live.includes("#EXT-X-MEDIA-SEQUENCE:5"));
+  assert.ok(live.includes("seg-24.m4s"));
+  assert.ok(!live.includes("seg-4.m4s"));
+  assert.ok(!live.includes("ENDLIST"));
+  const vod = livePlaylist(3, true);
+  assert.ok(vod.includes("#EXT-X-MEDIA-SEQUENCE:0"));
+  assert.ok(vod.includes("seg-2.m4s"));
+  assert.ok(vod.includes("#EXT-X-ENDLIST"));
+
+  const db = await memdb();
+  try {
+    const ep = await addEpisode(db, { title: "Live", splits: [{ address: A1, pct: 100 }] });
+    const s = await startLive(db, ep.id, 1000);
+    assert.match(s.id, /^[a-z0-9]{12}$/);
+    assert.equal(s.status, "live");
+    assert.equal((await getLive(db, s.id)).episode, ep.id);
+    assert.equal(await bumpLiveSegments(db, s.id), 0);
+    assert.equal(await bumpLiveSegments(db, s.id), 1);
+    assert.equal((await listLive(db)).length, 1);
+    const ended = await endLive(db, s.id, 2000);
+    assert.equal(ended.status, "ended");
+    assert.equal(ended.stoppedAt, 2000);
+    await assert.rejects(bumpLiveSegments(db, s.id), /ended/);
+    await assert.rejects(startLive(db, "ep_missing"), /no episode/);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("recorder UI talks to loopback ingest +observed beats only", async () => {
+  const fs = await import("node:fs");
+  const dir = new URL("../../runner/apps/cast/", import.meta.url);
+  const js = fs.readFileSync(new URL("app.js", dir), "utf8");
+  for (const token of ["getUserMedia", "MediaRecorder", "/cast/media", "/cast/live/", "castLiveStart", "castLiveStop", "castSetMedia", "?init=1"]) {
+    assert.ok(js.includes(token), token);
+  }
+  // upload endpoint is same-origin relative — never a remote host
+  assert.ok(!/fetch\("https?:\/\/(?!localhost|127\.0\.0\.1)/.test(js.replace(/fetch\("\/cast\//g, "")), "remote POST");
 });

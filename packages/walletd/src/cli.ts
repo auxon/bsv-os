@@ -1297,12 +1297,18 @@ async function main(): Promise<void> {
         }));
       } else if ((castSub === "stop" || castSub === "close") && castArg) {
         print(await call("castStop", { id: castArg }));
+      } else if (castSub === "live-start" && castArg) {
+        print(await call("castLiveStart", { episode: castArg }));
+      } else if (castSub === "live-stop" && castArg) {
+        print(await call("castLiveStop", { id: castArg }));
+      } else if (castSub === "live-list") {
+        print(await call("castLiveList"));
       } else if (castSub === "episodes") {
         print(await call("castEpisodes"));
       } else if (castSub === "sessions" || castSub === "list" || castSub === undefined) {
         print(await call("castList"));
       } else {
-        console.error("usage: bsv cast <add|play <episode>|stop <session>|episodes|sessions>");
+        console.error("usage: bsv cast <add|play <episode>|stop <session>|episodes|sessions|live-start <episode>|live-stop <id>|live-list>");
         process.exitCode = 2;
       }
       break;

@@ -134,6 +134,7 @@ async function loadEpisodes() {
   try {
     const res = await rpc("castEpisodes");
     renderEpisodes(res?.episodes ?? []);
+    await refreshLiveEpisodes();
   } catch (e) {
     $("episodes").textContent = "";
     const p = document.createElement("p");
@@ -314,6 +315,241 @@ $("add-form").addEventListener("submit", async (e) => {
     st.className = "status warn";
     st.textContent = err instanceof Error ? err.message : String(err);
   }
+});
+
+// ── record (camera/mic → file → wallet → episode) ────────────────────────
+
+const rec = {
+  stream: null,
+  recorder: null,
+  chunks: [],
+  mime: "",
+  startedAt: 0,
+  clockTimer: null,
+  blob: null,
+  blobUrl: "",
+  uploadedUrl: "",
+  liveId: null,
+  liveEpisode: null,
+  liveCount: 0,
+};
+
+function pickMime(live) {
+  const cands = live
+    ? ["video/mp4", 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"']
+    : ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm", "audio/webm"];
+  if ($("r-miconly").checked) return "audio/webm";
+  for (const c of cands) {
+    try {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+    } catch { /* ignore */ }
+  }
+  return "";
+}
+
+async function recPreview() {
+  const btn = $("r-preview-btn");
+  btn.disabled = true;
+  try {
+    if (rec.stream) rec.stream.getTracks().forEach((t) => t.stop());
+    const micOnly = $("r-miconly").checked;
+    rec.stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: micOnly ? false : { facingMode: $("r-camera").value },
+    });
+    const pv = $("rec-preview");
+    pv.classList.remove("hidden");
+    pv.srcObject = rec.stream;
+    await pv.play().catch(() => {});
+    $("r-record").disabled = false;
+    setStatus("camera ready", "ok");
+  } catch (e) {
+    setStatus(`camera blocked: ${e instanceof Error ? e.message : e}`, "warn");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function recClock() {
+  const s = Math.floor((Date.now() - rec.startedAt) / 1000);
+  $("r-clock").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function recStart(live) {
+  if (!rec.stream) return false;
+  rec.mime = pickMime(live);
+  if (!rec.mime) {
+    setStatus(live ? "live needs mp4 recording (Chrome) — record a file instead" : "recording unsupported here", "warn");
+    return false;
+  }
+  rec.chunks = [];
+  rec.blob = null;
+  rec.recorder = new MediaRecorder(rec.stream, { mimeType: rec.mime, videoBitsPerSecond: 2_500_000 });
+  rec.recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size) {
+      if (live) void liveChunk(e.data);
+      else rec.chunks.push(e.data);
+    }
+  };
+  rec.recorder.onstop = () => {
+    if (!live && rec.chunks.length) {
+      rec.blob = new Blob(rec.chunks, { type: rec.mime });
+      if (rec.blobUrl) URL.revokeObjectURL(rec.blobUrl);
+      rec.blobUrl = URL.createObjectURL(rec.blob);
+      const pb = $("r-playback");
+      pb.src = rec.blobUrl;
+      const dl = $("r-download");
+      dl.href = rec.blobUrl;
+      dl.download = `cast-${Date.now()}.${rec.mime.includes("mp4") ? "mp4" : "webm"}`;
+      $("r-done").classList.remove("hidden");
+    }
+    clearInterval(rec.clockTimer);
+    $("r-record").disabled = false;
+    $("r-stop").disabled = true;
+  };
+  rec.startedAt = Date.now();
+  rec.recorder.start(live ? 4000 : 1000);
+  rec.clockTimer = setInterval(recClock, 500);
+  $("r-record").disabled = true;
+  $("r-stop").disabled = false;
+  return true;
+}
+
+$("r-preview-btn").addEventListener("click", () => void recPreview());
+$("r-record").addEventListener("click", () => void recStart(false));
+$("r-stop").addEventListener("click", () => {
+  try {
+    rec.recorder && rec.recorder.state !== "inactive" && rec.recorder.stop();
+  } catch { /* ignore */ }
+});
+
+$("r-download").addEventListener("click", () => {
+  setStatus("downloaded — host it anywhere, or upload it to the wallet below", "");
+});
+
+$("r-upload").addEventListener("click", async () => {
+  const st = $("r-up-status");
+  if (!rec.blob) return;
+  st.className = "status";
+  st.textContent = "uploading…";
+  try {
+    const res = await fetch("/cast/media", {
+      method: "POST",
+      headers: { "content-type": rec.blob.type || "video/webm" },
+      body: rec.blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error?.message || data?.error || `upload ${res.status}`);
+    rec.uploadedUrl = data.url;
+    st.className = "status ok";
+    st.textContent = `stored · ${data.bytes} bytes`;
+    $("r-publish").classList.remove("hidden");
+    $("r-title").value = $("r-title").value || `Recording ${new Date().toLocaleString()}`;
+  } catch (e) {
+    st.className = "status warn";
+    st.textContent = e instanceof Error ? e.message : String(e);
+  }
+});
+
+$("r-add-ep").addEventListener("click", async () => {
+  const st = $("r-ep-status");
+  st.className = "status";
+  st.textContent = "adding…";
+  try {
+    const splits = prompt("Value splits (address:pct,address:pct — must sum to 100):", "");
+    if (!splits) {
+      st.textContent = "";
+      return;
+    }
+    const res = await rpc("castAdd", { title: $("r-title").value.trim(), media: rec.uploadedUrl, splits });
+    st.className = "status ok";
+    st.textContent = `episode ${res.id}`;
+    await loadEpisodes();
+    await refreshLiveEpisodes();
+  } catch (e) {
+    st.className = "status warn";
+    st.textContent = e instanceof Error ? e.message : String(e);
+  }
+});
+
+// ── go live (segments → HLS playlist → viewers pay) ───────────────────────
+
+async function refreshLiveEpisodes() {
+  const sel = $("r-live-ep");
+  sel.textContent = "";
+  try {
+    const res = await rpc("castEpisodes");
+    for (const ep of res?.episodes ?? []) {
+      const o = document.createElement("option");
+      o.value = ep.id;
+      o.textContent = `${ep.live ? "● " : ""}${ep.title}`;
+      sel.append(o);
+    }
+    $("r-golive").disabled = !sel.value;
+  } catch { /* keep */ }
+}
+
+async function liveChunk(blob) {
+  if (!rec.liveId) return;
+  const first = rec.liveCount === 0;
+  try {
+    const res = await fetch(`/cast/live/${rec.liveId}/segment${first ? "?init=1" : ""}`, {
+      method: "POST",
+      headers: { "content-type": "video/mp4" },
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`segment ${res.status}`);
+    rec.liveCount++;
+    $("r-live-status").textContent = `broadcasting · ${rec.liveCount} chunks · viewers: ${location.origin}/#${rec.liveId} — open the episode to watch + pay`;
+  } catch (e) {
+    $("r-live-status").textContent = `upload stalled: ${e instanceof Error ? e.message : e}`;
+  }
+}
+
+$("r-golive").addEventListener("click", async () => {
+  const epId = $("r-live-ep").value;
+  if (!epId || !rec.stream) {
+    $("r-live-status").textContent = !epId ? "pick an episode" : "preview the camera first";
+    return;
+  }
+  if (!pickMime(true)) {
+    $("r-live-status").textContent = "live needs mp4 recording (Chrome) — record a file instead";
+    return;
+  }
+  $("r-golive").disabled = true;
+  try {
+    const live = await rpc("castLiveStart", { episode: epId });
+    rec.liveId = live.id;
+    rec.liveCount = 0;
+    await rpc("castSetMedia", { episode: epId, mediaUrl: `${location.origin}/cast/live/${live.id}/index.m3u8` });
+    await loadEpisodes();
+    if (!recStart(true)) throw new Error("recorder failed to start");
+    $("r-endlive").disabled = false;
+    $("r-live-status").textContent = "broadcasting…";
+  } catch (e) {
+    $("r-live-status").textContent = e instanceof Error ? e.message : String(e);
+    $("r-golive").disabled = false;
+  }
+});
+
+$("r-endlive").addEventListener("click", async () => {
+  try {
+    rec.recorder && rec.recorder.state !== "inactive" && rec.recorder.stop();
+  } catch { /* ignore */ }
+  // let the final chunk flush before closing the playlist
+  await new Promise((r) => setTimeout(r, 1500));
+  if (rec.liveId) {
+    try {
+      await rpc("castLiveStop", { id: rec.liveId });
+      $("r-live-status").textContent = "broadcast ended — replay saved as the episode media";
+    } catch (e) {
+      $("r-live-status").textContent = e instanceof Error ? e.message : String(e);
+    }
+    rec.liveId = null;
+  }
+  $("r-endlive").disabled = true;
+  $("r-golive").disabled = false;
+  await loadEpisodes();
 });
 
 // RPC note: castAdd takes the same "addr:pct,…" split string as the CLI;

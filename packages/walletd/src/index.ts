@@ -32,7 +32,7 @@ import { tickOrders } from "./nightshift.ts";
 import { buildPost, getBoard, getPosts, publishPost } from "./boards.ts";
 import { identityPubkeyHex } from "./custody.ts";
 import { liveRelay } from "./msgs.ts";
-import { CAST_BOARD, sessionBeats, sessionsDue } from "./cast.ts";
+import { CAST_BOARD, MAX_SEGMENT_BYTES, MAX_UPLOAD_BYTES, bumpLiveSegments, getLive, liveDir, liveFileValid, liveIdValid, livePlaylist, mediaExt, mediaFileValid, mediaRoot, newMediaId, sessionBeats, sessionsDue } from "./cast.ts";
 import { spendTo } from "./engine.ts";
 import { streamBeatRef, tickStreams } from "./streams.ts";
 import { tickCapsules } from "./capsule.ts";
@@ -84,6 +84,145 @@ export function setWireBackend(b: { db: Knex; chain: ChainProvider } | null): vo
 function isLoopbackPeer(req: IncomingMessage): boolean {
   const a = req.socket.remoteAddress ?? "";
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+}
+
+/** POST /cast/media — store one recording, return its playback URL. */
+async function castUploadHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const json = (status: number, body: unknown): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  };
+  const ext = mediaExt(req.headers["content-type"] ?? "");
+  if (!ext) return json(415, { error: { code: "BAD_TYPE", message: "recording must be video/webm, video/mp4, audio/webm, audio/mp4, audio/mpeg, or audio/ogg" } });
+  const announced = Number(req.headers["content-length"] || 0);
+  if (Number.isFinite(announced) && announced > MAX_UPLOAD_BYTES) {
+    return json(413, { error: { code: "TOO_BIG", message: "recording exceeds 256 MiB" } });
+  }
+  const buf = await readBytes(req);
+  if (buf.length === 0) return json(400, { error: { code: "BAD_PARAM", message: "empty body" } });
+  if (buf.length > MAX_UPLOAD_BYTES) return json(413, { error: { code: "TOO_BIG", message: "recording exceeds 256 MiB" } });
+  const name = `${newMediaId()}${ext}`;
+  try {
+    fs.mkdirSync(mediaRoot(), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(mediaRoot(), name), buf, { mode: 0o600 });
+  } catch {
+    return json(500, { error: { code: "STORE", message: "could not store recording" } });
+  }
+  json(200, { id: name, url: `/cast/media/${name}`, bytes: buf.length, mime: (req.headers["content-type"] ?? "").split(";")[0] });
+}
+
+/** GET /cast/media/<file> — playback with range support for seeking. */
+function castMediaHttp(req: IncomingMessage, res: ServerResponse, name: string): void {
+  const fail = (status: number, message: string): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: message }));
+  };
+  if (!mediaFileValid(name)) return fail(404, "not found");
+  const file = path.join(mediaRoot(), name);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file);
+    if (!stat.isFile()) return fail(404, "not found");
+  } catch {
+    return fail(404, "not found");
+  }
+  const mime = name.endsWith(".mp4") ? "video/mp4" : name.endsWith(".webm") ? "video/webm" : name.endsWith(".m4a") ? "audio/mp4" : name.endsWith(".mp3") ? "audio/mpeg" : "audio/ogg";
+  const range = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? "");
+  if (!range) {
+    res.writeHead(200, { "content-type": mime, "content-length": stat.size, "accept-ranges": "bytes", "cache-control": "no-store" });
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+  const start = range[1] ? Number(range[1]) : 0;
+  const end = range[2] ? Math.min(Number(range[2]), stat.size - 1) : stat.size - 1;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start > end || start >= stat.size) {
+    res.writeHead(416, { "content-range": `bytes */${stat.size}` });
+    res.end();
+    return;
+  }
+  res.writeHead(206, {
+    "content-type": mime, "content-length": end - start + 1,
+    "content-range": `bytes ${start}-${end}/${stat.size}`,
+    "accept-ranges": "bytes", "cache-control": "no-store",
+  });
+  fs.createReadStream(file, { start, end }).pipe(res);
+}
+
+/** POST /cast/live/<id>/segment[?init=1] — append one ingest chunk. */
+async function castSegmentHttp(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  const json = (status: number, body: unknown): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  };
+  if (!wireBackend) return json(503, { error: "wallet engine offline" });
+  if (!liveIdValid(id)) return json(404, { error: "not found" });
+  let live;
+  try {
+    live = await getLive(wireBackend.db, id);
+  } catch {
+    return json(404, { error: "not found" });
+  }
+  if (live.status !== "live") return json(409, { error: { code: "BAD_STATE", message: "broadcast ended" } });
+  const url = new URL(req.url ?? "/", "https://wallet");
+  const isInit = url.searchParams.get("init") === "1";
+  const announced = Number(req.headers["content-length"] || 0);
+  if (Number.isFinite(announced) && announced > MAX_SEGMENT_BYTES) {
+    return json(413, { error: { code: "TOO_BIG", message: "segment exceeds 8 MiB" } });
+  }
+  const buf = await readBytes(req);
+  if (buf.length === 0 || buf.length > MAX_SEGMENT_BYTES) {
+    return json(buf.length === 0 ? 400 : 413, { error: { code: "BAD_PARAM", message: "bad segment" } });
+  }
+  const dir = liveDir(id);
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (isInit) {
+      fs.writeFileSync(path.join(dir, "init.mp4"), buf, { mode: 0o600 });
+      return json(200, { segment: "init.mp4", bytes: buf.length });
+    }
+    const n = await bumpLiveSegments(wireBackend.db, id);
+    fs.writeFileSync(path.join(dir, `seg-${n}.m4s`), buf, { mode: 0o600 });
+    json(200, { segment: `seg-${n}.m4s`, bytes: buf.length });
+  } catch (e) {
+    json(500, { error: e instanceof Error ? e.message : "store failed" });
+  }
+}
+
+/** GET /cast/live/<id>/<file> — rolling playlist, init, or one segment. */
+function castLiveFileHttp(req: IncomingMessage, res: ServerResponse, id: string, file: string): void {
+  const fail = (status: number, message: string): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: message }));
+  };
+  if (!wireBackend) return fail(503, "wallet engine offline");
+  if (!liveIdValid(id) || !liveFileValid(file)) return fail(404, "not found");
+  void (async () => {
+    try {
+      const live = await getLive(wireBackend!.db, id);
+      if (file === "index.m3u8") {
+        const body = livePlaylist(live.segments, live.status === "ended");
+        res.writeHead(200, {
+          "content-type": "application/vnd.apple.mpegurl", "content-length": Buffer.byteLength(body),
+          "cache-control": "no-store",
+        });
+        res.end(body);
+        return;
+      }
+      const fp = path.join(liveDir(id), file);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fp);
+        if (!stat.isFile()) return fail(404, "not found");
+      } catch {
+        return fail(404, "not found");
+      }
+      const mime = file.endsWith(".m4s") ? "video/iso.segment" : "video/mp4";
+      res.writeHead(200, { "content-type": mime, "content-length": stat.size, "cache-control": "no-store" });
+      fs.createReadStream(fp).pipe(res);
+    } catch {
+      fail(404, "not found");
+    }
+  })();
 }
 
 /**
@@ -396,6 +535,35 @@ function handler() {
       res.writeHead(403, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { code: "FORBIDDEN", message: "wallet RPC is loopback-only; remote buyers use /v1/serve/<method>" } }));
       return;
+    }
+    // Cast media store: recordings upload here, live segments append here,
+    // playback streams back with range support. Loopback-only by the gate
+    // above — the browser recorder and the player are local.
+    const castRoute = typeof req.url === "string" ? req.url.split("?")[0]! : "";
+    if (castRoute === "/cast/media" && req.method === "POST") {
+      await castUploadHttp(req, res);
+      return;
+    }
+    {
+      const m = /^\/cast\/media\/([A-Za-z0-9._-]+)$/.exec(castRoute);
+      if (m && req.method === "GET") {
+        castMediaHttp(req, res, m[1]!);
+        return;
+      }
+    }
+    {
+      const m = /^\/cast\/live\/([A-Za-z0-9-]+)\/segment$/.exec(castRoute);
+      if (m && req.method === "POST") {
+        await castSegmentHttp(req, res, m[1]!);
+        return;
+      }
+    }
+    {
+      const m = /^\/cast\/live\/([A-Za-z0-9-]+)\/([^/]+)$/.exec(castRoute);
+      if (m && req.method === "GET") {
+        castLiveFileHttp(req, res, m[1]!, m[2]!);
+        return;
+      }
     }
     // Bundled Twetch companion app: static files served from the daemon's
     // own HTTPS origin, so the page's JSON-RPC calls are same-origin and

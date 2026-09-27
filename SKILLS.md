@@ -111,6 +111,15 @@ code), and element events drive money — play starts/resumes, pause pauses
 every split stream, ended/unload stops. Pay buttons stay explicit (rate +
 cap reviewed before sats move); the meter polls per-split ticks live.
 
+The player also records: camera/mic (or mic-only) via getUserMedia,
+MediaRecorder to file (download, or upload to the wallet's media store and
+one-click "add as episode"), and Go Live — mp4 chunks POST every 4s to
+`/cast/live/<id>/segment` (init then fragments), served as a rolling HLS
+playlist viewers play + pay in the same player. Stop appends ENDLIST so the
+broadcast persists as a replayable file. Live needs mp4 recording support
+(Chrome); ingest is loopback-only, ids server-generated, segments capped
+(8 MiB / 500 per broadcast).
+
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
 `bsv import`) — an agent that could re-home the wallet could be tricked into

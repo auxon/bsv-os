@@ -15,6 +15,8 @@
  */
 import type { Knex } from "knex";
 import { randomBytes } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { createStream, setStreamStatus } from "./streams.ts";
 
 export const CAST_BOARD = "cast";
@@ -84,8 +86,7 @@ export function parseSplits(raw: unknown, p2pkhValid: (addr: string) => boolean)
   return splits;
 }
 
-export async function migrateCast(db: Knex): Promise<void> {
-  if (!(await db.schema.hasTable("cast_episodes"))) {
+export async function migrateCast(db: Knex): Promise<void> {  if (!(await db.schema.hasTable("cast_episodes"))) {
     await db.schema.createTable("cast_episodes", (t) => {
       t.string("id", 16).primary();
       t.string("title", 120).notNullable();
@@ -121,6 +122,7 @@ export async function migrateCast(db: Knex): Promise<void> {
       t.integer("stopped_at").nullable();
     });
   }
+  await migrateCastLive(db);
 }
 
 interface EpisodeRow { id: string; title: string; feed: string; media_url: string; is_live: number; splits: string; created_at: number }
@@ -241,11 +243,160 @@ export async function sessionsDue(db: Knex): Promise<CastSession[]> {
   return rows.map(toSession);
 }
 
-/** Beat payloads for one session: one per stream so every split keeps flowing. */
-export function sessionBeats(s: CastSession, elapsedMin: number): Array<{ streamId: string; text: string; refs: string[] }> {
+/** Beat payloads for one session: one per stream so every split keeps flowing. */export function sessionBeats(s: CastSession, elapsedMin: number): Array<{ streamId: string; text: string; refs: string[] }> {
   return s.streamIds.map((sid) => ({
     streamId: sid,
     text: `playing ${s.title} +${Math.floor(elapsedMin)}m`,
     refs: [`stream:${sid}`],
   }));
+}
+
+// ── live ingest (browser → HLS) ──────────────────────────────────────────
+// The browser's MediaRecorder (video/mp4) emits an init chunk (ftyp+moov)
+// then one fmp4 fragment per timeslice. We store init.mp4 + seg-N.m4s and
+// serve a rolling-window playlist; hls.js plays it live, and stop appends
+// ENDLIST so the broadcast persists as a VOD recording. No ffmpeg, no
+// transmuxing — the browser already encodes; the daemon only files.
+
+export interface LiveSession {
+  id: string;
+  episode: string;
+  status: "live" | "ended";
+  segments: number;
+  startedAt: number;
+  stoppedAt: number | null;
+}
+
+export const LIVE_WINDOW = 20;
+export const MAX_LIVE_SEGMENTS = 500;
+export const MAX_SEGMENT_BYTES = 8 * 1024 * 1024;
+
+export function liveIdValid(id: unknown): id is string {
+  return typeof id === "string" && /^[a-z0-9]{6,16}$/.test(id);
+}
+
+export function liveFileValid(name: unknown): name is "index.m3u8" | "init.mp4" | string {
+  if (typeof name !== "string") return false;
+  if (name === "index.m3u8" || name === "init.mp4") return true;
+  const m = /^seg-(\d{1,6})\.m4s$/.exec(name);
+  if (!m) return false;
+  const n = Number(m[1]);
+  return Number.isInteger(n) && n >= 0 && n < MAX_LIVE_SEGMENTS;
+}
+
+/** Rolling HLS playlist over [0, segments): windowed while live, full + ENDLIST when ended. */
+export function livePlaylist(segments: number, ended: boolean, targetDuration = 6): string {
+  const start = ended ? 0 : Math.max(0, segments - LIVE_WINDOW);
+  const out = ["#EXTM3U", "#EXT-X-VERSION:7", `#EXT-X-TARGETDURATION:${targetDuration}`, `#EXT-X-MEDIA-SEQUENCE:${start}`, '#EXT-X-MAP:URI="init.mp4"'];
+  for (let i = start; i < segments; i++) {
+    out.push(`#EXTINF:${targetDuration}.0,`, `seg-${i}.m4s`);
+  }
+  if (ended) out.push("#EXT-X-ENDLIST");
+  return out.join("\n") + "\n";
+}
+
+export async function migrateCastLive(db: Knex): Promise<void> {
+  if (await db.schema.hasTable("cast_live")) return;
+  await db.schema.createTable("cast_live", (t) => {
+    t.string("id", 16).primary();
+    t.string("episode", 16).notNullable();
+    t.string("status").notNullable().defaultTo("live");
+    t.integer("segments").notNullable().defaultTo(0);
+    t.integer("started_at").notNullable();
+    t.integer("stopped_at").nullable();
+  });
+}
+
+interface LiveRow { id: string; episode: string; status: string; segments: number; started_at: number; stopped_at: number | null }
+
+function toLive(r: LiveRow): LiveSession {
+  return {
+    id: r.id, episode: r.episode, status: r.status === "ended" ? "ended" : "live",
+    segments: r.segments, startedAt: r.started_at, stoppedAt: r.stopped_at,
+  };
+}
+
+export function newLiveId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  const bytes = randomBytes(12);
+  for (const b of bytes) id += chars[b % chars.length];
+  return id;
+}
+
+export async function startLive(db: Knex, episodeId: string, now = Date.now()): Promise<LiveSession> {
+  const row = (await db("cast_episodes").where({ id: episodeId }).first()) as EpisodeRow | undefined;
+  if (!row) fail("NOT_FOUND", `no episode: ${String(episodeId).slice(0, 16)}`);
+  const live: LiveRow = { id: newLiveId(), episode: episodeId, status: "live", segments: 0, started_at: now, stopped_at: null };
+  await db("cast_live").insert(live);
+  await db("cast_episodes").where({ id: episodeId }).update({ is_live: 1 });
+  return toLive(live);
+}
+
+export async function getLive(db: Knex, id: string): Promise<LiveSession> {
+  if (!liveIdValid(id)) fail("BAD_PARAM", "bad live id");
+  const row = (await db("cast_live").where({ id }).first()) as LiveRow | undefined;
+  if (!row) fail("NOT_FOUND", `no live session: ${id}`);
+  return toLive(row);
+}
+
+export async function bumpLiveSegments(db: Knex, id: string): Promise<number> {
+  const s = await getLive(db, id);
+  if (s.status !== "live") fail("BAD_STATE", "live session ended");
+  if (s.segments >= MAX_LIVE_SEGMENTS) fail("BAD_STATE", "segment cap reached — stop and start a new broadcast");
+  await db("cast_live").where({ id }).update({ segments: s.segments + 1 });
+  return s.segments;
+}
+
+export async function endLive(db: Knex, id: string, now = Date.now()): Promise<LiveSession> {
+  const s = await getLive(db, id);
+  if (s.status === "ended") return s;
+  await db("cast_live").where({ id }).update({ status: "ended", stopped_at: now });
+  await db("cast_episodes").where({ id: s.episode }).update({ is_live: 0 });
+  return getLive(db, id);
+}
+
+export async function listLive(db: Knex): Promise<LiveSession[]> {
+  const rows = (await db("cast_live").select().orderBy("started_at", "desc").limit(50)) as LiveRow[];
+  return rows.map(toLive);
+}
+
+// ── media store (recordings + live segments on local disk) ───────────────
+// Loopback-only HTTP writes here; ids are server-generated, extensions come
+// from a content-type allowlist — no client-controlled paths, ever.
+
+export const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+
+const MEDIA_EXT: Record<string, string> = {
+  "video/webm": ".webm",
+  "video/mp4": ".mp4",
+  "audio/webm": ".webm",
+  "audio/mp4": ".m4a",
+  "audio/mpeg": ".mp3",
+  "audio/ogg": ".ogg",
+};
+
+export function mediaRoot(): string {
+  const base = process.env.BSV_WALLETD_DATA ?? path.join(os.homedir(), ".local/share/bsv-os");
+  return path.join(base, "cast-media");
+}
+
+export function mediaExt(mime: string): string | null {
+  return MEDIA_EXT[mime.split(";")[0]!.trim().toLowerCase()] ?? null;
+}
+
+export function newMediaId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  const bytes = randomBytes(12);
+  for (const b of bytes) id += chars[b % chars.length];
+  return id;
+}
+
+export function mediaFileValid(name: unknown): boolean {
+  return typeof name === "string" && /^[a-z0-9]{12}\.(webm|mp4|m4a|mp3|ogg)$/.test(name);
+}
+
+export function liveDir(id: string): string {
+  return path.join(mediaRoot(), `live-${id}`);
 }

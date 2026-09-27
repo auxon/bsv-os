@@ -62,8 +62,8 @@ import {
   lockCapsule, remaining, tickCapsules,
 } from "./capsule.ts";
 import {
-  CAST_BOARD, addEpisode, listEpisodes, listSessions,
-  parseSplits, startSession, stopSession,
+  CAST_BOARD, addEpisode, endLive, getLive, listEpisodes, listLive, listSessions,
+  parseSplits, startLive, startSession, stopSession,
 } from "./cast.ts";
 import { serveMenu, serveSales, serveSetPrice } from "./serve.ts";
 import {
@@ -1813,6 +1813,42 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   castList: async () => {
     const b = needBackend();
     return { sessions: await listSessions(b.db) };
+  },
+  castLiveStart: async (params) => {
+    const b = needBackend();
+    const { episode } = p(params) as { episode?: unknown };
+    if (typeof episode !== "string" || !episode) throw Object.assign(new Error("episode required"), { code: "BAD_PARAM" });
+    const live = await startLive(b.db, episode);
+    return { ...live, playlist: `/cast/live/${live.id}/index.m3u8` };
+  },
+  castLiveStop: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return endLive(b.db, id);
+  },
+  castLiveList: async () => {
+    const b = needBackend();
+    return { live: await listLive(b.db) };
+  },
+  castLiveGet: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return getLive(b.db, id);
+  },
+  castSetMedia: async (params) => {
+    const b = needBackend();
+    const { episode, mediaUrl } = p(params) as { episode?: unknown; mediaUrl?: unknown };
+    if (typeof episode !== "string" || !episode) throw Object.assign(new Error("episode required"), { code: "BAD_PARAM" });
+    const url = typeof mediaUrl === "string" ? mediaUrl.trim().slice(0, 500) : "";
+    if (url && !/^https?:\/\//i.test(url) && !url.startsWith("/")) {
+      throw Object.assign(new Error("media must be an http(s) URL or site path"), { code: "BAD_PARAM" });
+    }
+    const row = await b.db("cast_episodes").where({ id: episode }).first();
+    if (!row) throw Object.assign(new Error(`no episode ${episode}`), { code: "NOT_FOUND" });
+    await b.db("cast_episodes").where({ id: episode }).update({ media_url: url });
+    return { episode, mediaUrl: url };
   },
   /** x402 seller surface: price list, repricing, sales ledger. */
   serveMenu: async () => {

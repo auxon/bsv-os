@@ -34,6 +34,52 @@
     </section>
 
     <section>
+      <h2>Record</h2>
+      <p class="hint">Camera + mic in this browser. Record a file to upload, or go live (HLS, needs mp4 recording support).</p>
+      <div class="row">
+        <label>camera
+          <select id="r-camera">
+            <option value="user">front</option>
+            <option value="environment">rear</option>
+          </select>
+        </label>
+        <label class="row"><input id="r-miconly" type="checkbox" /> mic only</label>
+        <button id="r-preview-btn" type="button">Preview</button>
+      </div>
+      <video id="rec-preview" muted playsinline class="hidden"></video>
+      <div class="row">
+        <button id="r-record" type="button" disabled>● Record</button>
+        <button id="r-stop" type="button" disabled>Stop</button>
+        <span id="r-clock" class="meter"></span>
+      </div>
+      <div id="r-done" class="hidden">
+        <video id="r-playback" controls playsinline></video>
+        <div class="row">
+          <a id="r-download" class="btn" download="cast-recording">Download</a>
+          <button id="r-upload" type="button">Upload to wallet</button>
+          <span id="r-up-status" class="status"></span>
+        </div>
+        <div id="r-publish" class="hidden">
+          <label>title <input id="r-title" maxlength="120" /></label>
+          <button id="r-add-ep" type="button">Add as episode</button>
+          <span id="r-ep-status" class="status"></span>
+        </div>
+      </div>
+      <div id="r-live-box" class="card">
+        <h3>Go live</h3>
+        <label>episode
+          <select id="r-live-ep"></select>
+        </label>
+        <div class="row">
+          <button id="r-golive" type="button" disabled>Start broadcast</button>
+          <button id="r-endlive" type="button" disabled>End broadcast</button>
+        </div>
+        <p id="r-live-status" class="status"></p>
+        <p class="hint" id="r-live-hint">Viewers open the episode and press play + Start paying. Recording chunks upload every 4s; stop appends ENDLIST so the broadcast replays as a file.</p>
+      </div>
+    </section>
+
+    <section>
       <h2>Add episode</h2>
       <form id="add-form">
         <label>title <input id="f-title" required maxlength="120" /></label>
