@@ -41,6 +41,30 @@ test("bsvos app: served by the daemon", () => {
   assert.ok(names.includes("bsvos"), "bsvos is served by the daemon");
 });
 
+test("a long-lived shell window notices when its build changes underneath it", () => {
+  // The page imports its modules once and runs them for as long as it stays
+  // open, so a git pull + daemon restart left it serving the previous build
+  // with the nav quietly missing. This is the guard against that.
+  const app = read("app.js");
+  assert.ok(app.includes("loadedEtag"), "captures an ETag at load");
+  assert.ok(app.includes("if-none-match"), "revalidates with a conditional GET");
+  assert.ok(app.includes("stale-banner"), "shows a banner when the build moves");
+  assert.ok(app.includes("location.reload()"), "offers a reload");
+  assert.ok(app.includes("document.hidden"), "does not nag a hidden window");
+  assert.ok(app.includes("getVersion"), "footer version is read from the daemon");
+  // The daemon side has to actually send one, and it has to move when the
+  // file does — a static ETag would never fire.
+  const src = fs.readFileSync(path.resolve(here, "../src/index.ts"), "utf8");
+  const at = src.indexOf("const etag =");
+  assert.ok(at > 0, "app assets compute an ETag");
+  const block = src.slice(at, src.indexOf("res.end(body);", at));
+  assert.ok(block.includes("etag,"), "the ETag is sent as a header");
+  assert.ok(block.includes("stat.mtimeMs"), "the ETag moves when the file changes");
+  // ...and the nav the user could not see must still be wired.
+  assert.ok(app.includes('"Twetch"'), "Twetch group is in GROUP_ORDER");
+  assert.ok(app.includes("twetchViews"), "twetch views are registered");
+});
+
 test("bsvos app: every module parses and nothing loads remotely", () => {
   const files = [
     "app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js",

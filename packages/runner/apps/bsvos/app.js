@@ -38,6 +38,7 @@ const state = {
   params: {},
   auth: null,
   requestCount: 0,
+  daemonVersion: null,
 };
 
 // ── context handed to every view ─────────────────────────────────────────
@@ -110,6 +111,10 @@ function markActive() {
 async function refreshStatus() {
   const auth = await tryRpc("isAuthenticated");
   state.auth = auth.ok ? auth.value : null;
+  if (!state.daemonVersion) {
+    const v = await tryRpc("getVersion");
+    if (v.ok) state.daemonVersion = v.value?.version ?? null;
+  }
 
   const line = await statusLine();
   const pill = $("#pill");
@@ -226,7 +231,53 @@ function wire() {
     }
   });
 
-  $("#build-tag").textContent = `${state.auth?.hasWallet ? "" : ""}loopback only`;
+  // Shown so a screenshot or a bug report carries which build was running.
+  $("#build-tag").textContent = `bsvOS · v${state.daemonVersion ?? "?"} · loopback only`;
+}
+
+/**
+ * Notice when the daemon is serving a different build of this app than the one
+ * currently loaded. Cheap: one conditional GET of app.js, no body read.
+ */
+async function watchForNewBuild() {
+  const stamp = async () => {
+    const res = await fetch("app.js", { method: "GET", cache: "no-store", headers: { "if-none-match": loadedEtag ?? "" } });
+    return res.headers.get("etag");
+  };
+  try {
+    loadedEtag = await stamp();
+  } catch {
+    return; // no ETag support here; stay quiet rather than nag
+  }
+  if (!loadedEtag) return;
+
+  setInterval(async () => {
+    if (staleShown || document.hidden) return;
+    try {
+      const current = await stamp();
+      if (current && current !== loadedEtag) showStaleBanner();
+    } catch {
+      /* daemon restarting; try again next tick */
+    }
+  }, 20000);
+}
+
+let loadedEtag = null;
+let staleShown = false;
+
+function showStaleBanner() {
+  staleShown = true;
+  if ($("#stale-banner")) return;
+  const bar = document.createElement("div");
+  bar.id = "stale-banner";
+  bar.className = "stale-banner";
+  bar.innerHTML =
+    `<span>A newer version of bsvOS is installed. This window is running the previous build, so new views and fixes are missing.</span>` +
+    `<button class="btn tiny primary" id="stale-reload">Reload</button>` +
+    `<button class="btn tiny" id="stale-dismiss">Dismiss</button>`;
+  document.body.appendChild(bar);
+  $("#stale-reload").addEventListener("click", () => location.reload());
+  $("#stale-dismiss").addEventListener("click", () => bar.remove());
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────
@@ -265,6 +316,12 @@ async function boot() {
   setInterval(() => {
     if (!document.hidden) void loadView(state.viewId, true);
   }, 15000);
+
+  // Staleness check. This window imports its modules once and then runs them
+  // for as long as it stays open, so a `git pull` + daemon restart leaves it
+  // quietly serving the previous build — the nav goes missing and there is no
+  // clue why. Compare the entry point's ETag and offer a reload when it moves.
+  watchForNewBuild();
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) void ctx.reload();

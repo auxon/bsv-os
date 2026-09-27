@@ -596,7 +596,18 @@ function handler() {
       }
       try {
         const body = fs.readFileSync(asset.file);
-        res.writeHead(200, { "content-type": asset.mime, "cache-control": "no-store" });
+        // An ETag from mtime+size lets a long-lived runner window notice that
+        // the bundle changed under it. The shell is a single page that imports
+        // its modules once, so after `git pull` + daemon restart it would
+        // otherwise keep running the old code with no sign anything is wrong.
+        const stat = fs.statSync(asset.file);
+        const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+        res.writeHead(200, {
+          "content-type": asset.mime,
+          "cache-control": "no-store",
+          etag,
+          "last-modified": stat.mtime.toUTCString(),
+        });
         res.end(body);
       } catch {
         res.writeHead(500, { "content-type": "text/plain" });
