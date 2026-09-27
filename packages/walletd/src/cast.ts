@@ -156,7 +156,9 @@ export async function addEpisode(
   if (!title) fail("BAD_PARAM", "title required");
   if (!opts.splits.length) fail("BAD_PARAM", "splits required");
   const mediaUrl = (opts.mediaUrl ?? "").trim().slice(0, 500);
-  if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) fail("BAD_PARAM", "media must be an http(s) URL");
+  if (mediaUrl && !/^https?:\/\//i.test(mediaUrl) && !mediaUrl.startsWith("/")) {
+    fail("BAD_PARAM", "media must be an http(s) URL or site path");
+  }
   const row: EpisodeRow = {
     id: newId("ep"), title, feed: (opts.feed ?? "").trim().slice(0, 500),
     media_url: mediaUrl, is_live: opts.live === true ? 1 : 0,

@@ -118,6 +118,11 @@ test("episodes carry media URL + live flag", async () => {
     assert.equal(file.live, false);
     const bare = await addEpisode(db, { title: "Pay only", splits: [{ address: A1, pct: 100 }] });
     assert.equal(bare.mediaUrl, "");
+    const local = await addEpisode(db, {
+      title: "Local upload", mediaUrl: "/cast/media/abcdefghijkl.webm",
+      splits: [{ address: A1, pct: 100 }],
+    });
+    assert.equal(local.mediaUrl, "/cast/media/abcdefghijkl.webm");
     await assert.rejects(
       addEpisode(db, { title: "Bad", mediaUrl: "ftp://example.com/x.mp3", splits: [{ address: A1, pct: 100 }] }),
       /http\(s\)/,
