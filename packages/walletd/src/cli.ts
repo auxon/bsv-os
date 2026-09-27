@@ -1266,6 +1266,45 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "cast": {
+      const [castSub, ...castRest] = rest;
+      const castArg = castRest.find((a) => !a.startsWith("--"));
+      if (castSub === "add") {
+        const title = flag(rest, "title") ?? castArg;
+        const splits = flag(rest, "splits");
+        if (!title || !splits) {
+          console.error('usage: bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>]');
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("castAdd", {
+          title, splits,
+          ...(flag(rest, "feed") ? { feed: flag(rest, "feed") } : {}),
+        }));
+      } else if (castSub === "play" && castArg) {
+        const rate = flag(rest, "rate");
+        const max = flag(rest, "max");
+        if (!rate || !max) {
+          console.error("usage: bsv cast play <episode> --rate <sats/min> --max <total sats> [--every <60s|5m|1h>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("castPlay", {
+          episode: castArg, rate: Number(rate), max: Number(max),
+          ...(flag(rest, "every") ? { every: flag(rest, "every") } : {}),
+        }));
+      } else if ((castSub === "stop" || castSub === "close") && castArg) {
+        print(await call("castStop", { id: castArg }));
+      } else if (castSub === "episodes") {
+        print(await call("castEpisodes"));
+      } else if (castSub === "sessions" || castSub === "list" || castSub === undefined) {
+        print(await call("castList"));
+      } else {
+        console.error("usage: bsv cast <add|play <episode>|stop <session>|episodes|sessions>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

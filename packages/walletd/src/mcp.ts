@@ -414,6 +414,36 @@ const TOOLS = [
       required: ["id"],
     },
   },
+  {
+    name: "cast_play",
+    description: "Play an episode value-for-value: opens one sats-stream per value split, posts playback beats while open. Stop with cast_stop — beats are self-attested until a real player integrates.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        episode: { type: "string", description: "episode id (ep_…)" },
+        rate: { type: "number", description: "total sats per minute across all splits" },
+        every: { type: "string", description: "tick interval 60s..24h (default 5m)" },
+        max: { type: "number", description: "cap in total sats (min 1000)" },
+      },
+      required: ["episode", "rate", "max"],
+    },
+  },
+  {
+    name: "cast_stop",
+    description: "Stop a listening session: closes every split stream. Paid money stays paid.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "session id (cs_…)" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "cast_list",
+    description: "Listening sessions and registered episodes with value splits.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
 ];
 
 function text(value: unknown) {
@@ -742,6 +772,30 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
           }
           return text(await callDaemon("capsuleCancel", { id: args.id }));
         }
+        case "cast_play": {
+          if (typeof args.episode !== "string" || !args.episode) {
+            throw new McpError(ErrorCode.InvalidParams, "episode is required");
+          }
+          if (!(Number(args.rate) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "rate must be positive sats/min");
+          }
+          if (!(Number(args.max) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "max must be positive total sats");
+          }
+          return text(await callDaemon("castPlay", {
+            episode: args.episode, rate: Number(args.rate), max: Number(args.max),
+            ...(typeof args.every === "string" ? { every: args.every } : {}),
+            agent, origin: agent,
+          }));
+        }
+        case "cast_stop": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("castStop", { id: args.id }));
+        }
+        case "cast_list":
+          return text(await callDaemon("castList"));
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {
             throw new McpError(ErrorCode.InvalidParams, "action is required");

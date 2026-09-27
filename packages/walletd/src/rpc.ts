@@ -61,9 +61,13 @@ import {
   cancelCapsule, claimCapsule, fetchChainTip, listCapsules,
   lockCapsule, remaining, tickCapsules,
 } from "./capsule.ts";
+import {
+  CAST_BOARD, addEpisode, listEpisodes, listSessions,
+  parseSplits, startSession, stopSession,
+} from "./cast.ts";
 import { serveMenu, serveSales, serveSetPrice } from "./serve.ts";
 import {
-  createStream, getStream, listStreams, listTicks, setStreamStatus, streamBeatRef, tickStreams,
+  createStream, getStream, listStreams, listTicks, parseTick, setStreamStatus, streamBeatRef, tickStreams,
 } from "./streams.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
@@ -1750,6 +1754,63 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { id } = p(params) as { id?: unknown };
     if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
     return cancelCapsule(b.db, id);
+  },
+  /**
+   * Value-for-value creator streaming. Episodes carry value splits;
+   * play opens one sats-stream per recipient and the minutely loop posts
+   * playback beats while the session is open. v1 trusts the stop button.
+   */
+  castAdd: async (params) => {
+    const b = needBackend();
+    const { title, feed, splits } = p(params) as { title?: unknown; feed?: unknown; splits?: unknown };
+    const { p2pkhScript } = await import("./tx.ts");
+    const parsed = parseSplits(splits, (a) => {
+      try {
+        p2pkhScript(a);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    return addEpisode(b.db, {
+      title: typeof title === "string" ? title : "",
+      ...(typeof feed === "string" ? { feed } : {}),
+      splits: parsed,
+    });
+  },
+  castEpisodes: async () => {
+    const b = needBackend();
+    return { episodes: await listEpisodes(b.db) };
+  },
+  castPlay: async (params) => {
+    const b = needBackend();
+    const { episode, rate, every, max, agent, origin } = p(params) as {
+      episode?: unknown; rate?: unknown; every?: unknown; max?: unknown; agent?: unknown; origin?: unknown;
+    };
+    if (typeof episode !== "string" || !episode) throw Object.assign(new Error("episode required"), { code: "BAD_PARAM" });
+    let board = await getBoard(b.db, CAST_BOARD);
+    if (!board) board = await createBoard(b.db, { name: CAST_BOARD, mode: "members" });
+    void board;
+    const session = await startSession(b.db, { createStream }, {
+      episode,
+      ratePerMin: Math.floor(Number(rate) || 0),
+      every: every ?? "5m",
+      maxTotal: Math.floor(Number(max) || 0),
+      tickSecs: (e) => Math.floor(parseTick(e) / 1000),
+    });
+    void agent;
+    void origin;
+    return { ...session, board: CAST_BOARD, approve: "bsv allow stream <cap sats>" };
+  },
+  castStop: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return stopSession(b.db, id);
+  },
+  castList: async () => {
+    const b = needBackend();
+    return { sessions: await listSessions(b.db) };
   },
   /** x402 seller surface: price list, repricing, sales ledger. */
   serveMenu: async () => {

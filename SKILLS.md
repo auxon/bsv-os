@@ -94,6 +94,16 @@ money is real before anything is served. Loopback by default; set
 BSV_WALLETD_BIND=0.0.0.0 for LAN/VPN buyers — the wallet JSON-RPC stays
 loopback-only regardless, only /health + /v1/serve/* answer remotely.
 
+## Value-for-value casting (player that pays)
+
+Episodes carry value splits (`bsv cast add --splits addr:pct,…`, must sum
+to 100). `cast_play` opens one sats-stream per recipient at rate × share;
+the minutely loop posts playback beats while the session is open and
+`cast_stop` closes every split stream. Splits settle automatically — the
+host never touches guest money. v1 trusts the stop button: beats prove the
+session is open, not that ears are present. Tools: `cast_play`,
+`cast_stop`, `cast_list`.
+
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
 `bsv import`) — an agent that could re-home the wallet could be tricked into

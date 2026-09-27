@@ -29,7 +29,10 @@ import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { tick } from "./monitor.ts";
 import { tickOrders } from "./nightshift.ts";
-import { getBoard, getPosts } from "./boards.ts";
+import { buildPost, getBoard, getPosts, publishPost } from "./boards.ts";
+import { identityPubkeyHex } from "./custody.ts";
+import { liveRelay } from "./msgs.ts";
+import { CAST_BOARD, sessionBeats, sessionsDue } from "./cast.ts";
 import { spendTo } from "./engine.ts";
 import { streamBeatRef, tickStreams } from "./streams.ts";
 import { tickCapsules } from "./capsule.ts";
@@ -760,6 +763,40 @@ export async function main(): Promise<void> {
     };
     void capsuleLoop();
     setInterval(() => void capsuleLoop(), 60_000).unref?.();
+
+    // Cast: playback beats for open listening sessions, minutely. Beats
+    // are local (the streams read the local board); p2p fan-out is skipped.
+    const castLoop = async (): Promise<void> => {
+      try {
+        for (const s of await sessionsDue(db)) {
+          const row = await getBoard(db, CAST_BOARD);
+          if (!row) continue;
+          const elapsedMin = (Date.now() - s.startedAt) / 60_000;
+          for (const beat of sessionBeats(s, elapsedMin)) {
+            try {
+              const env = buildPost({
+                board: CAST_BOARD,
+                from: identityPubkeyHex(),
+                agent: "cast-player",
+                keyHex: row.keyHex,
+                epoch: row.epoch,
+                text: beat.text,
+                kind: "artifact",
+                refs: beat.refs,
+              });
+              await publishPost(db, liveRelay(), null, env);
+            } catch {
+              /* one bad beat never stops the session */
+            }
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("cast tick failed:", err instanceof Error ? err.message : err);
+      }
+    };
+    void castLoop();
+    setInterval(() => void castLoop(), 60_000).unref?.();
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("monitor disabled:", err instanceof Error ? err.message : err);
