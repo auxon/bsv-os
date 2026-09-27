@@ -3,8 +3,8 @@
   "apps": [
     {
       "domain": "127.0.0.1",
-      "name": "bsvOS Launcher",
-      "blurb": "The system app list: installed apps, the catalog, and one-click open. Ships with the daemon at https://127.0.0.1:2121/launcher/ and owns the 127.0.0.1 slot, so it never collides with the bundled feature apps on localhost."
+      "name": "bsvOS",
+      "blurb": "The system shell: wallet, approvals, policy, messaging, apps and work boards — the macOS replacement for the Quickshell panel. Ships with the daemon at https://127.0.0.1:2121/bsvos/ and owns the 127.0.0.1 slot, so it never collides with the bundled feature apps on localhost."
     },
     {
       "domain": "entangleit.com",

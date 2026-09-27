@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bsvOS</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="logo">◈</span>
+      <div>
+        <div class="brand-name">bsvOS</div>
+        <div class="brand-sub">this machine</div>
+      </div>
+    </div>
+
+    <div class="pill" id="pill">
+      <span class="pill-dot" id="pill-dot"></span>
+      <span class="pill-text" id="pill-text">connecting…</span>
+    </div>
+    <div class="pill-actions">
+      <button class="btn tiny" id="btn-unlock" hidden>Unlock</button>
+      <button class="btn tiny" id="btn-lock" hidden>Lock</button>
+      <button class="btn tiny" id="btn-notify" title="macOS notifications for spend requests">Alerts</button>
+    </div>
+
+    <div class="nav" id="nav"><!-- built by app.js --></div>
+
+    <div class="sidebar-foot">
+      <button class="btn tiny" id="btn-refresh">Refresh</button>
+      <span class="dim" id="build-tag"></span>
+    </div>
+  </nav>
+
+  <main class="main">
+    <header class="topbar">
+      <h1 id="view-title">Overview</h1>
+      <div class="topbar-right">
+        <span id="view-note" class="dim"></span>
+      </div>
+    </header>
+    <div class="view" id="view"></div>
+  </main>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

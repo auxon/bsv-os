@@ -1,0 +1,13 @@
+{
+  "name": "bsvOS",
+  "short_name": "bsvOS",
+  "start_url": "https://127.0.0.1:2121/bsvos/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "The bsvOS shell: wallet, policy console, approvals, messaging, app store and work boards. This is the operator surface — the same trust level as the bsv CLI and the old Quickshell panel, not a sandboxed third-party app. Every spend still goes through the daemon's policy engine and is recorded with an audit trail.",
+      "spendingAuthorization": { "amount": 0, "description": "operator surface — spends are policy-gated by the daemon, this manifest grants no blanket cap" }
+    }
+  }
+}
