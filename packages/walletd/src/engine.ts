@@ -4,9 +4,9 @@
  * hash in, OP_RETURN out, tracked to confirmation.
  */
 import type { Knex } from "knex";
-import { p2pkhUnlockHook, selfAddress } from "./custody.ts";
+import { p2pkhUnlockHook, selfAddress, sweepSigner } from "./custody.ts";
 import { Script, Transaction } from "@bsv/sdk";
-import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
+import { buildTx, MIN_MINER_FEE, p2pkhScript, signTx, type BuiltTx, type SpendableUtxo, type UnlockHook } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
 import { labelOutputs, resolveBasketForOrigin, unavailableUtxos } from "./baskets.ts";
@@ -251,6 +251,217 @@ export async function spendTo(opts: {
       .map((o) => ({ vout: o.vout, value: o.value, basket })),
   );
   return { txid: res.txid, fee: built.fee, hex };
+}
+
+/**
+ * Fee convergence for a sweep.
+ *
+ * A sweep has no predetermined amount: it sends `total - fee`, but the fee
+ * depends on the input set and output count, which depend on the amount. So
+ * build, read the fee, and rebuild with the remainder until no change output
+ * survives (buildTx folds sub-DUST change back into the fee, so this
+ * terminates in a couple of passes and `amount + fee === total`).
+ *
+ * All sweep UTXOs are pinned with keepOrder + requiredInputs so buildTx
+ * cannot quietly leave value behind by picking a subset.
+ */
+function buildSweep(opts: {
+  utxos: SpendableUtxo[];
+  unlockFor: (u: SpendableUtxo) => UnlockHook;
+  to: string;
+  changeScriptHex: string;
+  memo?: string[];
+}): { built: BuiltTx; amount: number } {
+  const total = opts.utxos.reduce((a, u) => a + u.value, 0);
+  // Start with a deliberately GENEROUS fee reserve and walk it down. Guessing
+  // low is fatal: buildTx throws "insufficient funds for fee" before we ever
+  // learn the real fee. A P2PKH input is ~148 bytes and the builder charges
+  // ~1 sat/byte, so 200 sats per input is a safe over-estimate that guarantees
+  // a first pass which succeeds and reports the true fee.
+  let reserve = MIN_MINER_FEE + 200 * opts.utxos.length + (opts.memo?.length ? 200 : 0);
+  let built: BuiltTx | null = null;
+  for (let pass = 0; pass < 6; pass++) {
+    const amount = total - reserve;
+    if (amount <= 0) {
+      fail(
+        "INSUFFICIENT",
+        `miner fees (~${reserve} sats for ${opts.utxos.length} input(s)) exceed the ${total} sats on offer — nothing left to sweep`,
+      );
+    }
+    built = buildTx({
+      utxos: opts.utxos,
+      unlockFor: opts.unlockFor,
+      keepOrder: true,
+      requiredInputs: opts.utxos.length,
+      payments: [{ address: opts.to, sats: amount }],
+      opReturn: opts.memo?.length ? opts.memo : undefined,
+      changeScriptHex: opts.changeScriptHex,
+    });
+    // No change output means buildTx folded the remainder into the fee, so
+    // amount + fee === total exactly. That is the fixed point.
+    if (built.changeVout === -1) return { built, amount };
+    // Change came back, so our reserve was too big. Adopt the measured fee and
+    // go again; this converges in one or two more passes.
+    reserve = built.fee;
+  }
+  return { built: built!, amount: total - reserve };
+}
+
+/** Gather plain (non-inscribed) UTXOs at an address, plus what was skipped. */
+async function sweepCandidates(opts: {
+  chain: ChainProvider;
+  db: Knex;
+  address: string;
+  fetchFn: typeof fetch;
+  /** Wallet's own in-flight outpoints to avoid; omit for a foreign address. */
+  skip?: Set<string>;
+}): Promise<{ funding: SpendableUtxo[]; inscribed: number; unreadable: number; total: number }> {
+  const u = await opts.chain.utxos(opts.address);
+  const candidates = u.utxos
+    .filter((x) => x.value > 1)
+    .filter((x) => !opts.skip?.has(`${x.txid.toLowerCase()}:${x.vout}`))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 30); // buildTx's own ceiling
+  const scripts = await Promise.all(
+    candidates.map((x) => lockingScriptOf(x.txid, x.vout, opts.fetchFn).catch(() => null)),
+  );
+  const funding: SpendableUtxo[] = [];
+  let inscribed = 0;
+  let unreadable = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const sc = scripts[i];
+    if (!sc) {
+      unreadable++;
+      continue;
+    }
+    // Inscribed UTXOs are hands off, exactly as in spendTo: a sweep would
+    // push the ordinal into fees or a plain output, destroying it.
+    if (hasOrdEnvelope(sc.scriptHex)) {
+      inscribed++;
+      continue;
+    }
+    const c = candidates[i]!;
+    funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: sc.scriptHex });
+  }
+  return { funding, inscribed, unreadable, total: funding.reduce((a, x) => a + x.value, 0) };
+}
+
+function sweepFailure(counts: { funding: number; inscribed: number; unreadable: number; total: number }): never {
+  if (counts.unreadable > 0 && counts.funding === 0 && counts.inscribed === 0) {
+    fail("RAILS", `funding scripts unreadable for ${counts.unreadable} UTXO(s) — indexer throttled? retry shortly`);
+  }
+  if (counts.funding === 0 && counts.inscribed > 0) {
+    fail("INSUFFICIENT", `nothing plain to sweep — ${counts.inscribed} inscribed UTXO(s) held back`);
+  }
+  fail("INSUFFICIENT", "no spendable UTXOs at that address");
+}
+
+/**
+ * Sweep OUT: empty this wallet into one address, amount = balance - fee.
+ *
+ * Policy-gated on the full outflow, because these are the wallet's own sats
+ * leaving — same treatment as a normal send.
+ */
+export async function sweepOut(opts: {
+  db: Knex;
+  chain: ChainProvider;
+  origin: string;
+  to: string;
+  memo?: string[];
+  label?: string;
+  description?: string;
+  fetchFn?: typeof fetch;
+  jev?: JevDecide;
+}): Promise<{ txid: string; fee: number; sats: number; hex: string }> {
+  try {
+    p2pkhScript(opts.to);
+  } catch {
+    fail("BAD_PARAM", "destination must be a valid P2PKH address");
+  }
+  const memo = checkMemo(opts.memo);
+  const fetchFn = opts.fetchFn ?? fetch;
+  const address = selfAddress();
+  const lock = p2pkhScript(address);
+  const skip = await unavailableUtxos(opts.db);
+  const found = await sweepCandidates({ chain: opts.chain, db: opts.db, address, fetchFn, skip });
+  if (!found.funding.length) sweepFailure({ ...found, funding: found.funding.length });
+
+  const { built, amount } = buildSweep({
+    utxos: found.funding,
+    unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),
+    to: opts.to,
+    changeScriptHex: lock.toHex(),
+    memo,
+  });
+  const gate = await check(opts.db, opts.origin, amount + built.fee, "app-spend", {
+    context: {
+      label: opts.label ?? "sweep out",
+      to: opts.to,
+      ...(opts.description ? { description: opts.description } : {}),
+    },
+    ...(opts.jev ? { jev: opts.jev } : {}),
+  });
+  if (gate.verdict !== "allow") fail("POLICY_DENY", `denied: ${gate.reason}`);
+  const { hex } = await signTx(built.tx);
+  const res = await opts.chain.broadcast(hex);
+  await track(opts.db, res.txid, opts.label ?? `sweep out ${amount} sats (${found.funding.length} utxos)`, hex);
+  await recordSpend(opts.db, opts.origin, amount + built.fee);
+  return { txid: res.txid, fee: built.fee, sats: amount, hex };
+}
+
+/**
+ * Sweep IN: move everything at a foreign key into this wallet.
+ *
+ * Not policy-gated, deliberately: policy governs this wallet's sats leaving,
+ * and here nothing leaves — the funds arrive. There is also nothing to
+ * approve, because `sweepSigner` fixes the destination to `selfAddress()`.
+ * The daemon can only ever pay itself with a swept key.
+ */
+export async function sweepIn(opts: {
+  db: Knex;
+  chain: ChainProvider;
+  wif: string;
+  label?: string;
+  fetchFn?: typeof fetch;
+}): Promise<{
+  txid: string;
+  fee: number;
+  sats: number;
+  from: string;
+  to: string;
+  hex: string;
+  inscribedSkipped: number;
+}> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const signer = sweepSigner(opts.wif);
+  const destination = selfAddress();
+  const lock = p2pkhScript(destination);
+  const found = await sweepCandidates({ chain: opts.chain, db: opts.db, address: signer.address, fetchFn });
+  if (!found.funding.length) sweepFailure({ ...found, funding: found.funding.length });
+
+  const { built, amount } = buildSweep({
+    utxos: found.funding,
+    unlockFor: (x) => signer.unlockFor(x.value, Script.fromHex(x.scriptHex!)),
+    to: destination,
+    changeScriptHex: lock.toHex(),
+  });
+  const { hex } = await signTx(built.tx);
+  const res = await opts.chain.broadcast(hex);
+  await track(
+    opts.db,
+    res.txid,
+    opts.label ?? `sweep in ${amount} sats from ${signer.address.slice(0, 8)}…`,
+    hex,
+  );
+  return {
+    txid: res.txid,
+    fee: built.fee,
+    sats: amount,
+    from: signer.address,
+    to: destination,
+    hex,
+    inscribedSkipped: found.inscribed,
+  };
 }
 
 /**

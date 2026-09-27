@@ -89,6 +89,17 @@ messaging, Twetch, the app store, and work boards. From then on the **Apps**
 view can open everything else. `bsv app open` blocks for the window's
 lifetime by design — background it (`&`) or use **Apps → Open** instead.
 
+**Sweeping.** `bsv sweep out <address>` empties this wallet into one address,
+computing the amount as balance-minus-fee so there is no number to work out;
+the shell's Send view offers the same as "Send everything". `bsv sweep in`
+moves everything at an external private key (an old single-key or paper
+wallet) into this wallet. That direction takes a WIF, so it is terminal-only
+with hidden input — a key must never pass through a page — and the sweep
+always pays *this* wallet: the daemon has no way to express any other
+destination, so a pasted key cannot be redirected. Inscriptions at the old
+address are held back rather than swept, because a sweep would put them into
+fees. Sweep-in is not policy-gated: nothing leaves this wallet.
+
 **A machine with no wallet lands on the Setup wizard**, which walks the
 remaining steps: unlock, name yourself, claim starter sats, pick a first
 app, and connect Twetch. Progress is read from the daemon on every visit, so
@@ -194,6 +205,9 @@ bsv unlock | bsv lock
 bsv balance                 # live chain lookup
 bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
 bsv share <file>            # hash + anchor a file (label + explorer link)
+bsv send <address> <sats>   # exact-amount send (policy-gated)
+bsv sweep out <address>     # empty this wallet to an address: balance minus fee
+bsv sweep in                # move a WIF's funds INTO this wallet (hidden prompt)
 bsv allow <origin> [cap] [--auto] | bsv deny <origin> | bsv requests | bsv policies
 bsv jev status              # advisor on/off, model, auto-approval thresholds
 bsv jev decide --state <json|text|@file> --questions <json|@file>  # one calibrated decision

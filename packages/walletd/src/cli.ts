@@ -249,6 +249,35 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "sweep": {
+      // Sweep IN is the one place besides import/recovery that touches key
+      // material, so the WIF is read from a hidden prompt — never argv, never
+      // a shell history, never a browser.
+      const [sub, ...sweepRest] = rest;
+      if (sub === "in") {
+        const wif = await readSecret("Private key to sweep (WIF, hidden): ");
+        if (!wif.trim()) {
+          console.error("empty key — aborted");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("sweepIn", { wif, ...(flag(sweepRest, "label") ? { label: flag(sweepRest, "label") } : {}) }));
+      } else if (sub === "out" && sweepRest.find((a) => !a.startsWith("--"))) {
+        const to = sweepRest.find((a) => !a.startsWith("--"))!;
+        print(await call("sweepOut", {
+          to,
+          ...(flag(sweepRest, "memo") !== undefined ? { memo: [flag(sweepRest, "memo")!] } : {}),
+          ...(flag(sweepRest, "label") !== undefined ? { label: flag(sweepRest, "label")! } : {}),
+        }));
+      } else {
+        console.error(
+          "usage: bsv sweep in [--label=<text>]            # move a WIF's funds into this wallet (hidden prompt)\n" +
+          "       bsv sweep out <address> [--memo=<text>]  # empty this wallet to an address",
+        );
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "anchor": {
       const sha256 = rest.find((a) => !a.startsWith("--"));
       const originFlag = rest.find((a) => a.startsWith("--origin="));
@@ -1850,7 +1879,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

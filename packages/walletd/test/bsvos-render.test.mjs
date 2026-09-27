@@ -321,6 +321,30 @@ test("meme tiles use the media URL, never the twetch.com page URL", async () => 
   assert.ok(/meme-fallback/.test(none), "missing media shows a placeholder");
 });
 
+test("the shell can sweep out but never handles a sweep-in key", async () => {
+  // Sweep out is the wallet's own funds leaving and needs no secret, so it
+  // belongs in the UI. Sweep in takes a WIF, so the UI must point at the
+  // terminal instead of offering a field — the same boundary as seed phrases.
+  const src = readApp("views/money.js");
+  assert.ok(src.includes('rpc("sweepOut"'), "the shell can sweep out");
+  assert.ok(src.includes("Send everything"), "and offers it in plain words");
+  assert.ok(!/sweepIn/.test(src), "the shell never calls sweepIn");
+  assert.ok(!/\bwif\b/i.test(src) || /never pass through a page|stays in the terminal/.test(src), "no WIF field, and the reason is stated");
+  assert.ok(src.includes("bsv sweep in"), "sweep in is documented as a terminal command");
+
+  const views = await loadViews();
+  const send = views.find((v) => v.id === "send");
+  const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const html = send.render({ ...base, data: { balance: { confirmed: 25000, unconfirmed: 0 } } });
+  assert.ok(/Send everything/.test(html), "renders the sweep-out control");
+  assert.ok(/bsv sweep in/.test(html), "renders the terminal pointer for sweep-in");
+  assert.ok(!html.includes("undefined") && !html.includes("NaN"), "clean render");
+  // After a sweep the result is shown with the real amount and fee.
+  const done = send.render({ ...base, data: { balance: { confirmed: 0 }, swept: { txid: "ab".repeat(32), sats: 24000, fee: 275 } } });
+  assert.ok(/Swept/.test(done), "shows the sweep result");
+  assert.ok(/24,000 sats/.test(done), "with the amount the daemon actually sent");
+});
+
 test("twetchUser is called with the key the handler actually reads", async () => {
   // The handler is `const id = Math.floor(Number(raw.id) || 0)` — it reads `id`,
   // but its error message says "userId required". Sending the key the error

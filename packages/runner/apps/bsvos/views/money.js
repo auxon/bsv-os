@@ -49,6 +49,7 @@ export const send = {
   async load(ctx) {
     const b = await tryRpc("balance");
     ctx.data.balance = b.ok ? b.value : null;
+    ctx.data.swept = null;
   },
   render(ctx) {
     const bal = ctx.data.balance;
@@ -64,14 +65,56 @@ export const send = {
           `<label class="field"><span>Note (local label only, not sent on chain)</span><input name="label" placeholder="optional"></label>` +
           `<div class="card-actions"><button class="btn primary" type="submit">Send</button></div>` +
         `</form>` +
+        `<h3 style="margin-top:18px">Send everything</h3>` +
+        `<p class="dim">Empties this wallet into one address — the amount is the balance minus the network fee, so there is no exact number to work out.</p>` +
+        `<form data-form="sweepout">` +
+          `<label class="field"><span>Destination address</span><input name="to" placeholder="1… address" autocomplete="off" spellcheck="false" required></label>` +
+          `<div class="card-actions"><button class="btn" type="submit">Send everything</button></div>` +
+        `</form>` +
+        (ctx.data.swept
+          ? `<div class="notice ok" style="margin-top:12px">Swept <b>${fmtSats(ctx.data.swept.sats ?? 0)}</b> · fee ${fmtSats(
+              ctx.data.swept.fee ?? 0,
+            )}<div class="card-sub mono" style="margin-top:4px">${esc(ctx.data.swept.txid ?? "")}</div>` +
+            `<div class="card-actions"><button class="btn tiny" data-copy="${esc(ctx.data.swept.txid ?? "")}">Copy txid</button></div></div>`
+          : "") +
+        `<h3 style="margin-top:18px">Sweep in from another wallet</h3>` +
+        `<p class="dim">Moving funds in from an old single-key wallet or a paper wallet takes a private key, so it stays in the terminal — a key must never pass through a page.</p>` +
+        `<pre class="code">bsv sweep in</pre>` +
+        `<p class="dim">It prompts with hidden input, derives the address, and pays everything to this wallet minus the fee. Inscriptions at the old address are held back rather than swept, so they cannot be burned into fees.</p>` +
       `</div>`
     );
   },
   bind(root, ctx) {
     root.addEventListener("submit", async (e) => {
+      if (!e.target.closest('[data-form="send"], [data-form="sweepout"]')) return;
+      e.preventDefault();
+      const sweep = e.target.closest('[data-form="sweepout"]');
+      if (sweep) {
+        e.preventDefault();
+        const to = sweep.to.value.trim();
+        if (!to) return ctx.fail(new Error("destination address required"));
+        const bal = (ctx.data.balance?.confirmed ?? 0) + (ctx.data.balance?.unconfirmed ?? 0);
+        if (
+          !(await confirmDialog(
+            "Send everything",
+            `Empty this wallet into ${short(to, 14)}? The full balance of ${fmtSats(
+              bal,
+            )} minus the network fee will be sent, leaving nothing behind.`,
+            "Send everything",
+          ))
+        )
+          return;
+        try {
+          // Amount comes from the daemon: it owns the fee arithmetic.
+          ctx.data.swept = await rpc("sweepOut", { to });
+          ctx.toast(`Swept ${fmtSats(ctx.data.swept?.sats ?? 0)}`);
+          sweep.reset();
+          await ctx.reload();
+        } catch (err) { ctx.fail(err); }
+        return;
+      }
       const form = e.target.closest('[data-form="send"]');
       if (!form) return;
-      e.preventDefault();
       const to = form.to.value.trim();
       const sats = intOr(form.sats.value, 0);
       if (!to) return ctx.fail(new Error("destination address required"));

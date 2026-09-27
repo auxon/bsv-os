@@ -487,6 +487,47 @@ export function p2pkhUnlockHook(path: string, satoshis: number, lockingScript: S
   };
 }
 
+/**
+ * A foreign key being swept into this wallet — an old single-key wallet or a
+ * paper wallet, supplied as a WIF.
+ *
+ * Lives here because raw key material may only exist inside custody.ts (CI
+ * enforces it), and because the destination is deliberately NOT a parameter:
+ * the sweep always pays `selfAddress()`. A "spend from an arbitrary key to an
+ * arbitrary address" primitive would be a key-exfiltration tool — trick
+ * someone into pasting a WIF and their funds leave. Callers cannot express
+ * that here, so they cannot be confused into it.
+ *
+ * The PrivateKey never escapes the returned closure; the caller gets an
+ * address and a hook factory.
+ */
+export function sweepSigner(wif: string): {
+  address: string;
+  publicKey: string;
+  unlockFor(satoshis: number, lockingScript: Script): UnlockHook;
+} {
+  const trimmed = String(wif ?? "").trim();
+  if (!trimmed) throw new CustodyError("BAD_WIF", "private key required");
+  let key: PrivateKey;
+  try {
+    key = PrivateKey.fromWif(trimmed);
+  } catch {
+    throw new CustodyError("BAD_WIF", "that is not a valid private key (WIF)");
+  }
+  return {
+    address: key.toPublicKey().toAddress(),
+    publicKey: key.toPublicKey().toString(),
+    unlockFor(satoshis: number, lockingScript: Script): UnlockHook {
+      const template = new P2PKH().unlock(key, "all", false, satoshis, lockingScript);
+      return {
+        sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
+          return template.sign(tx, inputIndex);
+        },
+      };
+    },
+  };
+}
+
 // ── Twetch account key ────────────────────────────────────────────────
 //
 // The Twetch wallet key is external (owned by the user's Twetch account,
