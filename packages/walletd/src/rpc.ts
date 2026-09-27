@@ -51,7 +51,7 @@ import {
 } from "./boards.ts";
 import {
   MEMORY_BOARD, USENET_BASE, USENET_GROUP, cleanTag, contentHash, forgetRefs, memoryRefs,
-  mergeUsenetHits, normalizeMemoryText, recallFromPosts, refHash, usenetPayload,
+  normalizeMemoryText, recallMemories, refHash, usenetPayload,
 } from "./memory.ts";
 import {
   EVOLVE_BOARD, SCORE_LEVELS, contestRef, createContest, getContest,
@@ -61,6 +61,7 @@ import {
   cancelCapsule, claimCapsule, fetchChainTip, listCapsules,
   lockCapsule, remaining, tickCapsules,
 } from "./capsule.ts";
+import { serveMenu, serveSales, serveSetPrice } from "./serve.ts";
 import {
   createStream, getStream, listStreams, listTicks, setStreamStatus, streamBeatRef, tickStreams,
 } from "./streams.ts";
@@ -1423,60 +1424,12 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { query, tag, limit, includePublic } = p(params) as {
       query?: unknown; tag?: unknown; limit?: unknown; includePublic?: unknown;
     };
-    const row = await getBoard(b.db, MEMORY_BOARD);
-    const known = row ? await getPosts(b.db, MEMORY_BOARD, { limit: 500, markRead: false }) : { posts: [] };
-    const board = recallFromPosts(
-      known.posts.map((x) => ({ id: x.id, text: x.text, refs: x.refs, replyTo: x.replyTo, ts: x.ts, from: x.from, locked: x.locked })),
-      {
-        ...(typeof query === "string" ? { query } : {}),
-        ...(typeof tag === "string" ? { tag } : {}),
-        ...(Number.isFinite(Number(limit)) ? { limit: Number(limit) } : {}),
-      },
-    );
-    if (includePublic !== true) return { board: MEMORY_BOARD, hits: board, usenet: false };
-    let articles: Array<{ id: string; body: string; subject: string; from: string; createdAt: number }> = [];
-    let degraded = false;
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 20000);
-      try {
-        const res = await fetch(`${USENET_BASE}/api/groups/${USENET_GROUP}/feed`, {
-          headers: { accept: "application/json" }, signal: ctrl.signal,
-        });
-        if (res.ok) {
-          const feed = (await res.json().catch(() => null)) as { articles?: Array<Record<string, unknown>> } | null;
-          for (const a of feed?.articles ?? []) {
-            if (typeof a.id !== "string") continue;
-            let body = typeof a.body === "string" ? a.body : "";
-            if (!body) {
-              const full = await fetch(`${USENET_BASE}/api/article/${a.id}`, {
-                headers: { accept: "application/json" }, signal: ctrl.signal,
-              }).then((r) => (r.ok ? r.json().catch(() => null) : null)).catch(() => null) as { body?: unknown } | null;
-              if (typeof full?.body === "string") body = full.body;
-            }
-            if (!body) continue;
-            articles.push({
-              id: a.id, body,
-              subject: typeof a.subject === "string" ? a.subject : "",
-              from: typeof a.from === "string" ? a.from : "",
-              createdAt: Math.floor(Number(a.createdAt) || 0),
-            });
-          }
-        } else {
-          degraded = true;
-        }
-      } finally {
-        clearTimeout(t);
-      }
-    } catch {
-      degraded = true;
-    }
-    const hits = mergeUsenetHits(board, articles, {
+    return recallMemories(b.db, fetch, {
       ...(typeof query === "string" ? { query } : {}),
       ...(typeof tag === "string" ? { tag } : {}),
       ...(Number.isFinite(Number(limit)) ? { limit: Number(limit) } : {}),
+      ...(includePublic === true ? { includePublic: true as const } : {}),
     });
-    return { board: MEMORY_BOARD, hits, usenet: true, ...(degraded ? { degraded: true } : {}) };
   },
   memoryForget: async (params) => {
     const b = needBackend();
@@ -1797,6 +1750,28 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { id } = p(params) as { id?: unknown };
     if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
     return cancelCapsule(b.db, id);
+  },
+  /** x402 seller surface: price list, repricing, sales ledger. */
+  serveMenu: async () => {
+    const b = needBackend();
+    return { menu: await serveMenu(b.db) };
+  },
+  servePrice: async (params) => {
+    const b = needBackend();
+    const { method, price } = p(params) as { method?: unknown; price?: unknown };
+    if (typeof method !== "string" || !method) throw Object.assign(new Error("method required"), { code: "BAD_PARAM" });
+    if (price === undefined) {
+      const menu = await serveMenu(b.db);
+      const item = menu.find((m) => m.method === method);
+      if (!item) throw Object.assign(new Error(`not for sale: ${method}`), { code: "NOT_FOUND" });
+      return item;
+    }
+    return serveSetPrice(b.db, method, Number(price));
+  },
+  serveSales: async (params) => {
+    const b = needBackend();
+    const { limit } = p(params) as { limit?: unknown };
+    return { sales: await serveSales(b.db, Number.isFinite(Number(limit)) ? Number(limit) : 50) };
   },
   /**
    * Sign an arbitrary short message with the wallet identity key (BSM).

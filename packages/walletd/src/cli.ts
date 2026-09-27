@@ -828,8 +828,21 @@ async function main(): Promise<void> {
           days: Number(flag(rest, "days") ?? 30),
           verifier: flag(rest, "to"),
         }));
+      } else if (xSub === "serve" || xSub === "menu") {
+        print(await call("serveMenu"));
+      } else if (xSub === "price" && xArg) {
+        const price = flag(rest, "price") ?? xRest.filter((a) => !a.startsWith("--"))[1];
+        if (price === undefined) {
+          print(await call("servePrice", { method: xArg }));
+        } else {
+          print(await call("servePrice", { method: xArg, price: Number(price) }));
+        }
+      } else if (xSub === "sales") {
+        print(await call("serveSales", {
+          ...(flag(rest, "limit") ? { limit: Number(flag(rest, "limit")) } : {}),
+        }));
       } else {
-        console.error("usage: bsv x402 <pay <url> [--method=M] [--data=JSON] [--origin=name]|receipts|attest [--days=N] [--to=<key>]>");
+        console.error("usage: bsv x402 <pay <url> [--method=M] [--data=JSON] [--origin=name]|receipts|attest [--days=N] [--to=<key>]|serve|price <method> [--price N]|sales>");
         process.exitCode = 2;
       }
       break;

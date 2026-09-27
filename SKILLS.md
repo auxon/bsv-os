@@ -81,6 +81,19 @@ the winner from the sponsor budget. Lineage (`parent`) tracks descent across
 rounds. Trust model: the sponsor holds the pot — run contests from a wallet
 you trust.
 
+## Selling answers (x402 server mode)
+
+This wallet charges for its own compute. `bsv x402 serve` lists the menu
+(`jevDecide` 50 sats, `memoryRecall` 20 sats — reprice with
+`bsv x402 price <method> --price N`, 0 unlists); `bsv x402 sales` is the
+revenue ledger. Buyers POST JSON params to `/v1/serve/<method>`: no proof
+gets a 402 quote, a PAYMENT-SIGNATURE with a tx paying payTo ≥ price gets
+the answer + receipt (same envelope you already use as a buyer). One txid
+buys exactly one call; the daemon broadcasts the payment itself, so the
+money is real before anything is served. Loopback by default; set
+BSV_WALLETD_BIND=0.0.0.0 for LAN/VPN buyers — the wallet JSON-RPC stays
+loopback-only regardless, only /health + /v1/serve/* answer remotely.
+
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
 `bsv import`) — an agent that could re-home the wallet could be tricked into

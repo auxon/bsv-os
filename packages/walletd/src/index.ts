@@ -77,6 +77,65 @@ export function setWireBackend(b: { db: Knex; chain: ChainProvider } | null): vo
   wireBackend = b;
 }
 
+/** Loopback peers (incl. IPv4-mapped IPv6) may use the wallet RPC; anyone else is a buyer. */
+function isLoopbackPeer(req: IncomingMessage): boolean {
+  const a = req.socket.remoteAddress ?? "";
+  return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+}
+
+/**
+ * Paid method dispatch for remote buyers. No proof → 402 + quote headers.
+ * PAYMENT-SIGNATURE proof → verify/broadcast/serve. Errors that mean "not
+ * paid" stay 402 (no money moved or claim recorded); method failures are
+ * 400/500 only after a claim is recorded.
+ */
+async function serveHttp(req: IncomingMessage, res: ServerResponse, method: string): Promise<void> {
+  const json = (status: number, body: unknown, extra: Record<string, string> = {}): void => {
+    res.writeHead(status, { "content-type": "application/json", ...extra });
+    res.end(JSON.stringify(body));
+  };
+  if (!wireBackend) return json(503, { error: { code: "NO_BACKEND", message: "wallet engine offline" } });
+  let body: unknown = {};
+  try {
+    body = await readJson(req);
+  } catch {
+    return json(400, { error: { code: "PARSE", message: "invalid JSON" } });
+  }
+  const { serveMenu, servePrice, serveCall, serveRequirement, b64json, parseProof } = await import("./serve.ts");
+  const menu = await serveMenu(wireBackend.db).catch(() => null);
+  const item = menu?.find((m) => m.method === method);
+  if (!item) return json(404, { error: { code: "NOT_FOR_SALE", message: `not for sale: ${method}` } });
+  const resource = `https://wallet/v1/serve/${method}`;
+  const quote = async (): Promise<void> => {
+    const q = await servePrice(wireBackend!.db, method);
+    json(402, { error: "payment_required", priceSats: q.priceSats, payTo: q.payTo, network: "bsv:mainnet" }, {
+      "payment-required": b64json(serveRequirement(method, q.priceSats, q.payTo, resource)),
+    });
+  };
+  const sig = req.headers["payment-signature"];
+  if (typeof sig !== "string" || !sig) return quote();
+  let txHex: string;
+  try {
+    txHex = parseProof(sig);
+  } catch (e) {
+    return json(402, { error: { code: (e as { code?: string })?.code ?? "BAD_PROOF", message: e instanceof Error ? e.message : "bad proof" } });
+  }
+  try {
+    const out = await serveCall({ db: wireBackend.db, chain: wireBackend.chain }, method, body, txHex);
+    json(200, { data: out.data, receipt: out.receipt }, {
+      "payment-response": b64json({ success: true, ...out.receipt }),
+    });
+  } catch (e) {
+    const code = (e as { code?: string })?.code ?? "INTERNAL";
+    if (code === "BAD_PROOF" || code === "REPLAY" || code === "UNPAID") {
+      return json(402, { error: { code, message: e instanceof Error ? e.message : code } });
+    }
+    json(code === "BAD_PARAM" || code === "BAD_METHOD" || code === "NOT_FOUND" ? 400 : 500, {
+      error: { code, message: code === "INTERNAL" ? "serve failed" : (e instanceof Error ? e.message : code) },
+    });
+  }
+}
+
 function corsHeaders(origin: string | undefined): Record<string, string> {
   return {
     "access-control-allow-origin": origin ?? "*",
@@ -278,6 +337,24 @@ function handler() {
       res.end(JSON.stringify({ ok: true, version: VERSION }));
       return;
     }
+    // x402 seller surface: POST /v1/serve/<method> with a JSON body.
+    // No proof → 402 + payment-required quote. PAYMENT-SIGNATURE proof →
+    // verify, broadcast, serve. Payment is the only auth here, so this
+    // route stays open to non-loopback peers (see gating below) while the
+    // wallet JSON-RPC never leaves loopback.
+    const serveMatch =
+      req.method === "POST" && typeof req.url === "string"
+        ? /^\/v1\/serve\/([A-Za-z0-9_]+)(\?[^?]*)?$/.exec(req.url.split("?")[0]!)
+        : null;
+    if (serveMatch) {
+      await serveHttp(req, res, serveMatch[1]!);
+      return;
+    }
+    if (!isLoopbackPeer(req)) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "FORBIDDEN", message: "wallet RPC is loopback-only; remote buyers use /v1/serve/<method>" } }));
+      return;
+    }
     // Bundled Twetch companion app: static files served from the daemon's
     // own HTTPS origin, so the page's JSON-RPC calls are same-origin and
     // the pinned loopback cert already covers it. Domain "localhost" keys
@@ -380,12 +457,16 @@ export async function main(): Promise<void> {
   const serve = handler();
 
   const tlsServer = https.createServer(options, serve);
+  // Loopback by default. Set BSV_WALLETD_BIND=0.0.0.0 (LAN/VPN) to sell
+  // x402 methods to remote buyers — the wallet JSON-RPC stays loopback-only
+  // regardless (see isLoopbackPeer); only /health + /v1/serve/* answer remotely.
+  const bindHost = process.env.BSV_WALLETD_BIND ?? "127.0.0.1";
   await new Promise<void>((resolve, reject) => {
     tlsServer.once("error", reject);
-    tlsServer.listen(PORT, "127.0.0.1", resolve);
+    tlsServer.listen(PORT, bindHost, resolve);
   });
   // eslint-disable-next-line no-console
-  console.log(`bsv-walletd ${VERSION} https on 127.0.0.1:${PORT}`);
+  console.log(`bsv-walletd ${VERSION} https on ${bindHost}:${PORT}`);
 
   try {
     await listenJsonApi();
