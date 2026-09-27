@@ -346,51 +346,194 @@ export const memes = {
   id: "twetch-memes",
   title: "Memes",
   group: "Twetch",
-  note: "The community meme library.",
+  note: "The community meme library. Search, sort and format filters run on the server; the tag filter runs on what is loaded, because the upstream API has no tag filter.",
   async load(ctx) {
-    const [f, m] = await Promise.all([tryRpc("twetchMemeFolders"), tryRpc("twetchMemes", { limit: 60 })]);
-    ctx.data.folders = f.ok ? f.value?.folders ?? [] : [];
-    ctx.data.memes = m.ok ? m.value?.memes ?? m.value?.items ?? [] : [];
-    ctx.data.folder = ctx.data.folder ?? null;
-    if (!ctx.data.folder && ctx.data.folders.length) ctx.data.folder = ctx.data.folders[0].slug;
+    const d = ctx.data;
+    // This is the whole ballgame. The old handler fetched a filtered list and
+    // then called ctx.reload(), which re-ran this function with NO folder — so
+    // the unfiltered results overwrote the filtered ones and the buttons looked
+    // inert. load() is now the single source of truth for the query.
+    d.folder ??= "";
+    d.q ??= "";
+    d.format ??= "";
+    d.sort ??= "";
+    d.tag ??= "";
+    const [f, m] = await Promise.all([
+      tryRpc("twetchMemeFolders"),
+      tryRpc("twetchMemes", {
+        limit: 60,
+        ...(d.folder ? { folder: d.folder } : {}),
+        ...(d.q ? { q: d.q } : {}),
+        ...(d.format ? { format: d.format } : {}),
+        ...(d.sort ? { sort: d.sort } : {}),
+      }),
+    ]);
+    d.folders = f.ok ? f.value?.folders ?? [] : [];
+    const res = m.ok ? m.value : null;
+    d.items = res?.items ?? [];
+    d.nextCursor = res?.nextCursor ?? null;
+    d.total = res?.total ?? 0;
+    d.loadError = m.ok ? null : m.error;
+    d.tags = harvestTags(d.items);
   },
   render(ctx) {
-    const folders = ctx.data.folders ?? [];
-    const list = ctx.data.memes ?? [];
+    const d = ctx.data;
+    if (d.loadError) return `<div class="error-box">${esc(String(d.loadError.message ?? ""))}</div>`;
+    const folders = d.folders ?? [];
+    const tags = d.tags ?? [];
+    // Tag filtering is client-side: the upstream /v1/dank-rares `tag` param
+    // means a CATEGORY and 400s on a real tag, and `q` is a fuzzy text search
+    // that ignores tags entirely (q=awkward returns 341 hits, none tagged
+    // awkward). So the chips filter the loaded page, and the count says so.
+    const all = d.items ?? [];
+    const shown = d.tag ? all.filter((m) => (m.tags ?? []).includes(d.tag)) : all;
+
     return (
-      (folders.length
-        ? `<div class="card-actions" style="margin-bottom:12px;flex-wrap:wrap">` +
-          folders
-            .map(
-              (f) =>
-                `<button class="btn tiny ${f.slug === ctx.data.folder ? "primary" : ""}" data-folder="${esc(f.slug)}">${esc(
-                  f.label ?? f.name ?? f.slug,
-                )} <span class="dim">${fmtInt(f.count ?? 0)}</span></button>`,
-            )
-            .join("") +
-          `</div>`
+      `<div class="card" style="max-width:760px;margin-bottom:12px">` +
+        `<form data-form="memesearch">` +
+          `<div class="form-row">` +
+            `<label class="field"><span>Search</span><input name="q" value="${esc(d.q ?? "")}" placeholder="title or text"></label>` +
+            `<label class="field"><span>Format</span><select name="format">` +
+              [["", "any"], ["gif", "gif"], ["png", "png"], ["jpg", "jpg"], ["mp4", "mp4"], ["webm", "webm"]]
+                .map(([v, l]) => `<option value="${v}"${(d.format ?? "") === v ? " selected" : ""}>${l}</option>`)
+                .join("") +
+            `</select></label>` +
+            `<label class="field"><span>Sort</span><select name="sort">` +
+              [["", "default"], ["recent", "recent"], ["oldest", "oldest"], ["popular", "popular"]]
+                .map(([v, l]) => `<option value="${v}"${(d.sort ?? "") === v ? " selected" : ""}>${l}</option>`)
+                .join("") +
+            `</select></label>` +
+            `<button class="btn primary" type="submit">Apply</button>` +
+          `</div>` +
+        `</form>` +
+        (folders.length
+          ? `<div class="card-actions" style="margin-top:10px;flex-wrap:wrap">` +
+            `<button class="btn tiny ${!d.folder ? "primary" : ""}" data-folder="">All folders</button>` +
+            folders
+              .map(
+                (f) =>
+                  `<button class="btn tiny ${f.slug === d.folder ? "primary" : ""}" data-folder="${esc(f.slug)}">${esc(
+                    f.label ?? f.name ?? f.slug,
+                  )} <span class="dim">${fmtInt(f.count ?? 0)}</span></button>`,
+              )
+              .join("") +
+            `</div>`
+          : "") +
+      `</div>` +
+
+      (tags.length
+        ? `<div class="card" style="max-width:760px;margin-bottom:12px">` +
+          `<div class="card-sub" style="margin-bottom:7px">Tags in the ${all.length} loaded memes — this filter is local, the others are server-side.</div>` +
+          `<div class="card-actions" style="flex-wrap:wrap">` +
+            `<button class="btn tiny ${!d.tag ? "primary" : ""}" data-tag="">any tag</button>` +
+            tags
+              .map(
+                (t) =>
+                  `<button class="btn tiny ${t.name === d.tag ? "primary" : ""}" data-tag="${esc(t.name)}">${esc(t.name)} <span class="dim">${t.count}</span></button>`,
+              )
+              .join("") +
+          `</div>` +
+        `</div>`
         : "") +
-      (list.length
-        ? `<div class="memes">` + list.map(memeTile).join("") + `</div>`
-        : empty("No memes in this folder."))
+
+      `<div class="card-sub" style="max-width:760px;margin-bottom:10px">` +
+        `Showing ${shown.length} of ${fmtInt(d.total ?? 0)}` +
+        (d.tag ? ` tagged “${esc(d.tag)}”` : "") +
+        (d.nextCursor ? ` · more available` : "") +
+      `</div>` +
+      (shown.length
+        ? `<div class="memes">` + shown.map(memeTile).join("") + `</div>`
+        : empty(d.tag ? `No loaded memes carry the tag “${d.tag}”.` : "No memes match.")) +
+      (d.nextCursor
+        ? `<div class="card-actions" style="margin-top:12px"><button class="btn" data-more ${d.busy ? "disabled" : ""}>${
+            d.busy ? "Loading…" : "Load more"
+          }</button></div>`
+        : "")
     );
   },
   bind(root, ctx) {
-    root.addEventListener("click", (e) => {
+    const repaint = () => {
+      root.innerHTML = memes.render(ctx);
+      memes.bind(root, ctx);
+    };
+
+    root.addEventListener("click", async (e) => {
       const f = e.target.closest("[data-folder]");
       if (f) {
         ctx.data.folder = f.dataset.folder;
+        ctx.data.tag = ""; // tags are harvested from the new result set
         return ctx.run(async () => {
-          const m = await rpc("twetchMemes", { folder: f.dataset.folder, limit: 60 });
-          ctx.data.memes = m?.memes ?? m?.items ?? [];
-          ctx.reload();
+          await memes.load(ctx);
+          repaint();
+        });
+      }
+      const t = e.target.closest("[data-tag]");
+      if (t) {
+        // Local, instant, no refetch: this is the one filter the API has no
+        // support for.
+        ctx.data.tag = t.dataset.tag;
+        return repaint();
+      }
+      const more = e.target.closest("[data-more]");
+      if (more) {
+        ctx.data.busy = true;
+        repaint();
+        return ctx.run(async () => {
+          const m = await tryRpc("twetchMemes", {
+            limit: 60,
+            cursor: ctx.data.nextCursor,
+            ...(ctx.data.folder ? { folder: ctx.data.folder } : {}),
+            ...(ctx.data.q ? { q: ctx.data.q } : {}),
+            ...(ctx.data.format ? { format: ctx.data.format } : {}),
+            ...(ctx.data.sort ? { sort: ctx.data.sort } : {}),
+          });
+          if (m.ok) {
+            const more2 = m.value?.items ?? [];
+            ctx.data.items = [...(ctx.data.items ?? []), ...more2];
+            ctx.data.nextCursor = m.value?.nextCursor ?? null;
+            ctx.data.tags = harvestTags(ctx.data.items);
+          } else {
+            ctx.fail(m.error);
+          }
+          ctx.data.busy = false;
+          repaint();
         });
       }
       const x = e.target.closest("[data-ext]");
-      if (x?.dataset.ext) ctx.openExternal(x.dataset.ext);
+      if (x?.dataset.ext) return ctx.openExternal(x.dataset.ext);
+    });
+
+    root.addEventListener("submit", async (e) => {
+      const form = e.target.closest('[data-form="memesearch"]');
+      if (!form) return;
+      e.preventDefault();
+      ctx.data.q = form.q.value.trim();
+      ctx.data.format = form.format.value;
+      ctx.data.sort = form.sort.value;
+      ctx.data.tag = "";
+      return ctx.run(async () => {
+        await memes.load(ctx);
+        repaint();
+      });
     });
   },
 };
+
+/** Tag chips from the loaded page, most common first. */
+function harvestTags(items) {
+  const counts = new Map();
+  for (const m of items ?? []) {
+    for (const t of m.tags ?? []) {
+      const name = String(t).trim();
+      if (!name) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, 24);
+}
 
 /**
  * One meme tile.
@@ -407,7 +550,11 @@ const VIDEO_FORMATS = new Set(["mp4", "webm", "mov", "m4v"]);
 function memeTile(m) {
   const format = String(m?.format ?? "").toLowerCase();
   const isVideo = VIDEO_FORMATS.has(format);
-  const src = isVideo ? mediaUrl(m.mediaUrl) : format === "gif" ? mediaUrl(m.mediaUrl) : mediaUrl(m.previewUrl) ?? mediaUrl(m.mediaUrl);
+  const src = isVideo
+    ? mediaUrl(m.mediaUrl)
+    : format === "gif"
+      ? mediaUrl(m.mediaUrl)
+      : mediaUrl(m.previewUrl) ?? mediaUrl(m.mediaUrl);
   const page = m.url ?? `https://twetch.com/meme-library/meme/${m.sha256 ?? ""}`;
   let media;
   if (!src) {

@@ -146,7 +146,7 @@ function fixtures() {
     },
     "twetch-memes": {
       folders: [{ slug: "laugh", label: "Laugh", count: 467 }, { slug: "reaction-memes", label: "Reaction Memes", count: 2880 }],
-      memes: [
+      items: [
         {
           id: `${"3b".repeat(32)}:b://${"00".repeat(32)}@0`,
           title: "Monkey Looking Awkwardly",
@@ -286,9 +286,9 @@ test("meme tiles use the media URL, never the twetch.com page URL", async () => 
   const memes = views.find((v) => v.id === "twetch-memes");
   const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
   const data = {
-    folder: "reaction-memes",
+    folder: "reaction-memes", q: "", format: "", sort: "", tag: "", nextCursor: null, total: 2880, tags: [],
     folders: [{ slug: "reaction-memes", label: "Reaction Memes", count: 2880 }],
-    memes: [{
+    items: [{
       title: "Monkey", folder: "Reaction Memes", format: "gif",
       mediaUrl: "https://api.twetch.com/v1/media/abc-o0.jpg?v=3",
       previewUrl: "https://api.twetch.com/v1/media/abc-o0.jpg?v=3",
@@ -314,11 +314,64 @@ test("meme tiles use the media URL, never the twetch.com page URL", async () => 
   assert.ok(/Monkey/.test(html), "title is shown");
   assert.ok(/Reaction Memes/.test(html), "folder is shown");
   // Video formats need <video>, not <img>.
-  const vid = memes.render({ ...base, data: { ...data, memes: [{ ...data.memes[0], format: "mp4", mediaUrl: "https://api.twetch.com/v1/media/clip.mp4" }] } });
+  const vid = memes.render({ ...base, data: { ...data, items: [{ ...data.items[0], format: "mp4", mediaUrl: "https://api.twetch.com/v1/media/clip.mp4" }] } });
   assert.ok(/<video /.test(vid), "mp4 renders as <video>");
   // A folder with no usable media still renders a labelled placeholder.
-  const none = memes.render({ ...base, data: { ...data, memes: [{ title: "Broken", url: "https://twetch.com/x" }] } });
+  const none = memes.render({ ...base, data: { ...data, items: [{ title: "Broken", url: "https://twetch.com/x" }] } });
   assert.ok(/meme-fallback/.test(none), "missing media shows a placeholder");
+});
+
+test("meme filters survive a reload instead of being overwritten", async () => {
+  // The reported bug: clicking a folder fetched a filtered list and then
+  // called ctx.reload(), which re-ran load() with NO folder — so the
+  // unfiltered results overwrote the filtered ones and the button looked
+  // inert. load() must build its query from the view's own state.
+  const views = await loadViews();
+  const memes = views.find((v) => v.id === "twetch-memes");
+  const src = readApp("views/twetch.js");
+  const loadBody = memes.load.toString();
+  for (const key of ["folder", "q", "format", "sort"]) {
+    assert.ok(loadBody.includes(key), `load() honours ${key}`);
+  }
+  assert.ok(loadBody.includes("twetchMemes"), "load() is what queries the API");
+  // The handler must not fetch and then reload — that is the bug's shape.
+  assert.ok(!/twetchMemes[\s\S]{0,200}ctx\.reload\(\)/.test(src), "no fetch-then-reload in the folder handler");
+  // Tag filtering is local by design, so it must not trigger a refetch.
+  const tagHandler = /const t = e\.target\.closest\("\[data-tag\]"\);[\s\S]*?return repaint\(\);/.test(src);
+  assert.ok(tagHandler, "the tag filter repaints locally instead of refetching");
+  assert.ok(src.includes("function harvestTags"), "tags are harvested from the loaded page");
+});
+
+test("meme tag filter is local, and says so, because the API has none", async () => {
+  // Upstream /v1/dank-rares treats `tag` as a CATEGORY and 400s on a real
+  // tag; `q` is a fuzzy text search that ignores tags (q=awkward returns 341
+  // hits, none carrying the tag). So tag filtering is client-side only and
+  // the UI must not imply otherwise.
+  const views = await loadViews();
+  const memes = views.find((v) => v.id === "twetch-memes");
+  const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const data = {
+    folder: "", q: "", format: "", sort: "", tag: "funny",
+    folders: [{ slug: "reaction-memes", label: "Reaction Memes", count: 2880 }],
+    items: [
+      { title: "A", format: "gif", tags: ["funny", "relatable"], mediaUrl: "https://api.twetch.com/v1/media/a.jpg", url: "https://twetch.com/meme-library/meme/a" },
+      { title: "B", format: "gif", tags: ["relatable"], mediaUrl: "https://api.twetch.com/v1/media/b.jpg", url: "https://twetch.com/meme-library/meme/b" },
+    ],
+    nextCursor: null, total: 10544,
+    tags: [{ name: "funny", count: 1 }, { name: "relatable", count: 2 }],
+  };
+  const html = memes.render({ ...base, data });
+  // Only the tagged item is rendered.
+  const titles = [...html.matchAll(/meme-title">([^<]*)/g)].map((m) => m[1]);
+  assert.deepEqual(titles, ["A"], "only items carrying the tag are shown");
+  assert.ok(/local/i.test(html), "the UI says the tag filter is local");
+  assert.ok(/Showing 1 of 10,544/.test(html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")), "counts are honest about the scope");
+  // With no tag selected, everything shows.
+  const all = memes.render({ ...base, data: { ...data, tag: "" } });
+  assert.equal((all.match(/meme-title/g) || []).length, 2, "no tag means no local filtering");
+  // A tag nobody has gives a helpful empty state, not a blank page.
+  const none = memes.render({ ...base, data: { ...data, tag: "zzz" } });
+  assert.ok(/No loaded memes carry the tag/.test(none), "explains an empty local result");
 });
 
 test("twetch market only offers Buy when swapBuyFor would accept it", async () => {
