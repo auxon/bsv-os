@@ -21,6 +21,7 @@ test("lists the wallet tools", async () => {
     "capsule_cancel", "capsule_claim", "capsule_list", "capsule_lock",
     "cast_list", "cast_play", "cast_stop", "commitment_list",
     "events_poll", "evolve_create", "evolve_payout", "evolve_score", "evolve_submit",
+    "funds_attest", "funds_list", "funds_prove", "funds_verify",
     "get_version", "jev_decide", "jev_status", "list_pending",
     "market_browse", "market_buy", "market_list", "market_sync",
     "memory_forget", "memory_recall", "memory_remember", "p2p_peers",
@@ -84,6 +85,27 @@ test("watch_poll forwards the filter DSL and the cursor verbatim", async () => {
   // Bare call: no filter, no wait — a plain tail.
   await client.callTool({ name: "watch_poll", arguments: {} });
   assert.deepEqual(seen[1], { method: "watchPoll", params: {} });
+  await client.close();
+  await server.close();
+});
+
+test("funds tools validate input and forward to the daemon", async () => {
+  const seen = [];
+  const { client, server } = await pair(async (method, params) => {
+    seen.push({ method, params });
+    return { ok: true };
+  });
+  await client.callTool({ name: "funds_attest", arguments: { minSats: 1000, validFor: "2h" } });
+  assert.deepEqual(seen[0], { method: "fundsAttest", params: { origin: "test-agent", minSats: 1000, validFor: "2h" } });
+  await client.callTool({ name: "funds_verify", arguments: { attestation: '{"statement":{}}', minSats: 500 } });
+  assert.deepEqual(seen[1], { method: "fundsVerify", params: { attestation: '{"statement":{}}', minSats: 500 } });
+  await client.callTool({ name: "funds_prove", arguments: { attestation: "{}", outpoint: `${"a".repeat(64)}_0` } });
+  assert.deepEqual(seen[2], { method: "fundsProve", params: { attestation: "{}", outpoint: `${"a".repeat(64)}_0` } });
+  // Bad input is refused before anything reaches the daemon.
+  await assert.rejects(client.callTool({ name: "funds_verify", arguments: {} }), /attestation/);
+  await assert.rejects(client.callTool({ name: "funds_prove", arguments: { attestation: "{}", outpoint: "nope" } }), /outpoint/);
+  await client.callTool({ name: "funds_list", arguments: {} });
+  assert.deepEqual(seen[3], { method: "fundsList", params: {} });
   await client.close();
   await server.close();
 });

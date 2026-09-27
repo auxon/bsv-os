@@ -390,6 +390,30 @@ const SOURCES: WatchSource[] = [
     },
   },
   {
+    name: "attest",
+    maxAt: (db) => maxOf(db, "funds_attestations", "created_at"),
+    pull: async (db, fromAt, limit) => {
+      const rows = await db("funds_attestations")
+        .select("id", "address", "min_sats", "root", "created_at", "valid_until", "anchor_txid")
+        .where("created_at", ">", fromAt)
+        .orderBy("created_at")
+        .orderBy("id")
+        .limit(limit);
+      return rows.map((r) => ({
+        source: "attest",
+        type: "funds.attested",
+        at: Number(r.created_at) || 0,
+        key: String(r.id),
+        dir: "" as WatchDir,
+        // The claim is a floor, not an amount moved.
+        sats: Number(r.min_sats) || 0,
+        origin: String(r.address ?? ""),
+        status: r.anchor_txid ? "anchored" : "unanchored",
+        detail: `claims >= ${Number(r.min_sats) || 0} sats, root ${String(r.root ?? "").slice(0, 12)}, valid until ${new Date(Number(r.valid_until) || 0).toISOString()}`,
+      }));
+    },
+  },
+  {
     name: "cast",
     maxAt: async (db) => Math.max(
       await maxOf(db, "cast_sessions", "started_at"),
@@ -550,6 +574,7 @@ export async function migrateWatch(db: Knex): Promise<void> {
     ["board_posts", "received_at"],
     ["cast_sessions", "started_at"],
     ["cast_sessions", "stopped_at"],
+    ["funds_attestations", "created_at"],
   ];
   for (const [table, col] of stmts) {
     if (!(await db.schema.hasTable(table))) continue;

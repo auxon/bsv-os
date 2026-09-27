@@ -606,6 +606,135 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "funds": {
+      // Proof of funds: a signed claim bound to a UTXO-set commitment.
+      const [fSub, ...fRest] = rest;
+      const fArg = fRest.find((a) => !a.startsWith("--"));
+      if (fSub === "attest") {
+        const minSats = Number(flag(fRest, "min") ?? flag(fRest, "min-sats") ?? fArg ?? 0);
+        if (!(minSats > 0)) {
+          console.error("usage: bsv funds attest --min <sats> [--valid-for 1h] [--anchor]");
+          process.exitCode = 2;
+          break;
+        }
+        const res = (await call("fundsAttest", {
+          minSats,
+          ...(flag(fRest, "valid-for") !== undefined ? { validFor: flag(fRest, "valid-for") } : {}),
+          ...(fRest.includes("--anchor") ? { anchor: true } : {}),
+        })) as {
+          result?: {
+            id?: number; signature?: string; totalSats?: number; utxoCount?: number; anchorTxid?: string | null;
+            statement?: Record<string, unknown>;
+          };
+          error?: { code?: string; message?: string };
+        };
+        if (res.error) {
+          print(res);
+          break;
+        }
+        const st = res.result?.statement ?? {};
+        console.log(`claim: this wallet holds at least ${minSats} sats`);
+        console.log(`  key        ${String(st.key).slice(0, 24)}…`);
+        console.log(`  address    ${String(st.address)}`);
+        console.log(`  root       ${String(st.root)}  (commitment to the UTXO set)`);
+        console.log(`  valid until ${new Date(Number(st.validUntil)).toISOString()}`);
+        console.log(`  signature  ${String(res.result?.signature).slice(0, 32)}…`);
+        if (res.result?.anchorTxid) console.log(`  anchored   ${res.result.anchorTxid}`);
+        console.log("");
+        console.log(`local only (never published): ${res.result?.totalSats} sats across ${res.result?.utxoCount} UTXOs`);
+        console.log("");
+        console.log("Share this object — it carries no balance and no UTXO list:");
+        console.log(JSON.stringify({ statement: st, signature: res.result?.signature }));
+        console.log("");
+        console.log("A buyer can check it with:  bsv funds verify --file <attestation.json> [--min N]");
+        console.log("Or ask for one UTXO as a Merkle proof:  bsv funds prove --file <attestation.json> <txid_vout>");
+      } else if (fSub === "verify") {
+        const file = flag(fRest, "file");
+        const inline = fRest.find((a) => !a.startsWith("--") && a !== file && a !== flag(fRest, "min"));
+        let text: string;
+        if (file) {
+          const { readFile } = await import("node:fs/promises");
+          text = await readFile(file, "utf8");
+        } else if (inline) {
+          text = inline;
+        } else {
+          const last = await call("fundsList", { limit: 1 }) as { result?: { attestations?: Array<{ statement: string; signature: string }> } };
+          const mine = last.result?.attestations?.[0];
+          if (!mine) {
+            console.error("nothing to verify: pass --file <attestation.json> or issue one first");
+            process.exitCode = 2;
+            break;
+          }
+          text = JSON.stringify({ statement: JSON.parse(mine.statement), signature: mine.signature });
+        }
+        const res = (await call("fundsVerify", {
+          attestation: text,
+          ...(flag(fRest, "min") !== undefined ? { minSats: Number(flag(fRest, "min")) } : {}),
+        })) as {
+          result?: { ok?: boolean; checks?: Array<{ name: string; ok: boolean; detail: string }>; disclosure?: { reveals: string[]; doesNotReveal: string[] } };
+          error?: { code?: string; message?: string };
+        };
+        if (res.error) {
+          print(res);
+          break;
+        }
+        for (const c of res.result?.checks ?? []) {
+          console.log(`  ${c.ok ? "pass" : "FAIL"}  ${c.name.padEnd(11)} ${c.detail}`);
+        }
+        console.log("");
+        console.log(`verdict: ${res.result?.ok ? "valid claim" : "NOT a valid claim"}`);
+        const d = res.result?.disclosure;
+        if (d) {
+          console.log(`  reveals: ${d.reveals.join(", ")}`);
+          console.log(`  hides:   ${d.doesNotReveal.join(", ")}`);
+        }
+        if (!res.result?.ok) process.exitCode = 1;
+      } else if (fSub === "prove") {
+        const file = flag(fRest, "file");
+        // The positional is the outpoint, not the --file value.
+        const outpoint = fRest.find((a) => !a.startsWith("--") && a !== file);
+        if (!file || !outpoint) {
+          console.error("usage: bsv funds prove --file <attestation.json> <txid_vout>");
+          process.exitCode = 2;
+          break;
+        }
+        const { readFile } = await import("node:fs/promises");
+        const text = await readFile(file, "utf8");
+        const res = (await call("fundsProve", { attestation: text, outpoint })) as {
+          result?: { outpoint: string; valueSats: number; leaf: string; path: string[]; root: string; ok: boolean };
+          error?: { code?: string; message?: string };
+        };
+        if (res.error) {
+          print(res);
+          break;
+        }
+        console.log(`${res.result?.outpoint} worth ${res.result?.valueSats} sats`);
+        console.log(`  leaf ${res.result?.leaf}`);
+        for (const p of res.result?.path ?? []) console.log(`  hop  ${p}`);
+        console.log(`  root ${res.result?.root}`);
+        console.log(`  inclusion proof: ${res.result?.ok ? "verifies" : "DOES NOT VERIFY"}`);
+        if (!res.result?.ok) process.exitCode = 1;
+      } else if (fSub === "list") {
+        const res = (await call("fundsList", { limit: Number(flag(fRest, "limit") ?? 20) })) as {
+          result?: { attestations?: Array<{ id: number; minSats: number; totalSats: number; utxoCount: number; root: string; createdAt: number; validUntil: number; anchorTxid: string | null }> };
+        };
+        const rows = res.result?.attestations ?? [];
+        if (rows.length === 0) {
+          console.log("no attestations issued");
+          break;
+        }
+        for (const r of rows) {
+          console.log(
+            `#${r.id} claims >= ${r.minSats} sats (had ${r.totalSats} across ${r.utxoCount} UTXOs) ` +
+            `until ${new Date(r.validUntil).toISOString()}${r.anchorTxid ? ` anchored ${r.anchorTxid.slice(0, 12)}` : ""}`,
+          );
+        }
+      } else {
+        console.error("usage: bsv funds <attest --min <sats> [--valid-for 1h] [--anchor]|verify --file <f> [--min N]|prove --file <f> <txid_vout>|list>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "commitments": {
       // One view of every timed commitment: streams, cast sessions, capsules.
       const res = (await call("commitmentList")) as {
@@ -1721,7 +1850,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|commitments|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

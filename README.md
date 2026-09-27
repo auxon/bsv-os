@@ -227,6 +227,7 @@ bsv board list | create <name> [--member @who] | post <board> --text "…" [--ki
 # cloud LLMs join the same boards through AgentBridge (MCP): https://entangleit.com/agentbridge/mcp
 bsv memory remember --text "…" [--tag t] [--visibility private|public] [--live] | bsv memory recall [--query q] [--tag t] [--include-public] | bsv memory forget <id> | bsv memory init [--live]  # agent memory: shared board + bsvos.memory usenet group
 bsv commitments            # every timed commitment in one view: streams, cast sessions, capsules (+ total exposure)
+bsv funds attest --min <sats> [--valid-for 1h] [--anchor] | bsv funds verify --file <att.json> [--min N] | bsv funds prove --file <att.json> <txid_vout> | bsv funds list  # proof of funds: a signed claim + UTXO-set commitment, with selective disclosure
 bsv stream start <addr> --rate <sats/min> --every <60s|5m|1h> --max <total> --board <board> [--name n] | bsv stream beat <id> [--text ..] | bsv stream list|ticks <id>|pause|resume|stop  # sats-streaming: pay per minute while heartbeats stay fresh
 bsv evolve create --task <t> --rubric <r> --prize <sats> [--rounds N] [--fee <sats>] [--round <30m|6h|7d>] | bsv evolve submit <contest> --text <prompt ---OUTPUT--- output> --pay-to <addr> [--round N] [--parent <entry>] [--pay-now] | bsv evolve entries|score|payout|close|list  # prompt evolution market: entry fees fund blind-judged prizes
 bsv capsule lock --amount <sats> --unlock-at <height|ISO date|+blocks> [--to <addr>] [--message <text>] | bsv capsule claim <id>|cancel <id>|list  # post-dated cheques: reserved funding auto-pays at maturity
@@ -326,6 +327,42 @@ an external writer) are not delivered to an existing cursor — sweep with
 This is the one idea carried over from [auxon/bonsai](https://github.com/auxon/bonsai)
 (2021, C#/Qactive): query the thing, push the matches, evaluate where the
 data lives. See [docs/BONSAI.md](docs/BONSAI.md) for what survived the audit.
+
+## Proof of funds (an attestation, not a zero-knowledge proof)
+
+```bash
+bsv funds attest --min 1000000 --valid-for 1h   # sign a claim, print a shareable object
+bsv funds verify --file att.json --min 1000000  # check someone else's claim
+bsv funds prove  --file att.json <txid_vout>    # disclose ONE UTXO as a Merkle proof
+```
+
+The object is ~430 bytes and contains: the identity key, an address, the
+minimum claimed, a Merkle root over your spendable UTXO set, and an expiry.
+It does **not** contain your balance, your UTXO count, or your UTXO list —
+those stay in the local audit trail, and the daemon refuses to sign a claim
+above the spendable total it can actually see.
+
+What is cryptographically guaranteed:
+
+- the statement is ECDSA-signed by the wallet identity key (BSM), so it is
+  attributable and cannot be edited;
+- the root commits to the exact set, so the same root cannot later be
+  re-issued over a different set;
+- `bsv funds prove` gives a real Merkle inclusion proof for a single UTXO —
+  anyone can verify that coin is in the committed set, and nobody learns the
+  other coins;
+- claims expire, and the verifier names every check it ran.
+
+What is **not** guaranteed: this is a signed claim, not a zero-knowledge
+proof of the balance. A verifier cannot check "≥ N" against the root without
+the set, so it trusts the issuer's key the same way an x402 buyer trusts an
+address. The one promise is about this software: this daemon will not sign a
+claim it knows to be false. The UTXO set comes from the configured provider
+(ARC/WoC), which can answer differently between calls if it lags.
+
+Origin: the "secure multi-party computation for critical data" line in
+Bonsai's README, cut down to what is actually sound today. See
+[docs/BONSAI.md](docs/BONSAI.md).
 
 ## Jev decisions
 With `OPENROUTER_API_KEY` set in the daemon environment (see

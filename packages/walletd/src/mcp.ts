@@ -307,6 +307,48 @@ const TOOLS = [
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
+    name: "funds_attest",
+    description: "Sign a proof-of-funds claim: \"this wallet holds at least N sats\", bound to a Merkle root over the spendable UTXO set, with an expiry (default 1h). Returns a shareable ~430-byte object containing the key, address, minimum, root and validity window — and no balance, no UTXO count, no UTXO list. The daemon refuses to sign above the spendable total it can see. Set anchor=true to also timestamp the statement hash on chain (that spends sats).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        minSats: { type: "number", description: "the floor to claim, in sats" },
+        validFor: { type: "string", description: "how long the claim stays valid, e.g. 15m, 2h, 1d (default 1h, max 30d)" },
+        anchor: { type: "boolean", description: "also anchor the statement hash on chain (spends sats, policy-gated)" },
+      },
+      required: ["minSats"],
+    },
+  },
+  {
+    name: "funds_verify",
+    description: "Verify a proof-of-funds claim (yours or someone else's). Reports every check by name — shape, version, key, minSats, root, window, signature, expiry, clock — and states what the object does and does not reveal. Exits non-verdict on failure so a buyer can gate on it. This is a signed claim, not a zero-knowledge proof of the balance.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        attestation: { type: "string", description: "the attestation object, or JSON text of it" },
+        minSats: { type: "number", description: "require the claim to be at least this many sats" },
+      },
+      required: ["attestation"],
+    },
+  },
+  {
+    name: "funds_prove",
+    description: "Selective disclosure: prove that ONE UTXO is in an attestation's committed set, by Merkle inclusion path. The proof reveals that single outpoint and value and nothing about the rest of the wallet. The sound part of a funds attestation — a verifier can check it with no wallet access.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        attestation: { type: "string", description: "the attestation object, or JSON text of it" },
+        outpoint: { type: "string", description: "the UTXO to disclose, txid_vout" },
+      },
+      required: ["attestation", "outpoint"],
+    },
+  },
+  {
+    name: "funds_list",
+    description: "Issued funds attestations with the local audit trail: claimed minimum, the balance and UTXO count at the time (never published), root, expiry, and any anchor txid.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
     name: "stream_list",
     description: "List sats streams with paid totals and status.",
     inputSchema: { type: "object" as const, properties: {} },
@@ -700,6 +742,33 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             agent, origin: agent,
           }));
         }
+        case "funds_attest":
+          return text(await callDaemon("fundsAttest", {
+            origin: agent,
+            minSats: Number(args.minSats),
+            ...(typeof args.validFor === "string" && args.validFor ? { validFor: args.validFor } : {}),
+            ...(args.anchor === true ? { anchor: true } : {}),
+          }));
+        case "funds_verify": {
+          if (typeof args.attestation !== "string" || !args.attestation) {
+            throw new McpError(ErrorCode.InvalidParams, "attestation is required");
+          }
+          return text(await callDaemon("fundsVerify", {
+            attestation: args.attestation,
+            ...(Number.isFinite(Number(args.minSats)) ? { minSats: Number(args.minSats) } : {}),
+          }));
+        }
+        case "funds_prove": {
+          if (typeof args.attestation !== "string" || !args.attestation) {
+            throw new McpError(ErrorCode.InvalidParams, "attestation is required");
+          }
+          if (typeof args.outpoint !== "string" || !args.outpoint.includes("_")) {
+            throw new McpError(ErrorCode.InvalidParams, "outpoint must be txid_vout");
+          }
+          return text(await callDaemon("fundsProve", { attestation: args.attestation, outpoint: args.outpoint }));
+        }
+        case "funds_list":
+          return text(await callDaemon("fundsList", {}));
         case "commitment_list":
           return text(await callDaemon("commitmentList"));
         case "stream_list":

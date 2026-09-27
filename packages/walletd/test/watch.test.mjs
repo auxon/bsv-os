@@ -149,16 +149,21 @@ test("feed merges every source the daemon already keeps", async () => {
       id: "bp1", board: "memory", direction: "out", from_key: "02aa", agent: "opencode",
       ts: now, received_at: now, envelope: JSON.stringify({ t: "memory.remember" }), sig_ok: 1,
     });
+    await db("funds_attestations").insert({
+      key: "a".repeat(66), address: "1me", min_sats: 25_000, root: "b".repeat(64),
+      utxo_count: 7, total_sats: 90_000, created_at: now, valid_until: now + 3_600_000,
+      statement: "{}", signature: "sig", anchor_txid: "c".repeat(64),
+    });
     await db("cast_sessions").insert({
       id: "cs_1", episode: "ep_1", title: "Live set", rate_per_min: 20, every_secs: 30, max_total: 1000,
       stream_ids: "[]", status: "stopped", started_at: now, stopped_at: now + 1,
     });
 
-    assert.deepEqual(watchSourceNames(), ["policy", "stream", "receipt", "x402", "board", "cast"]);
+    assert.deepEqual(watchSourceNames(), ["policy", "stream", "receipt", "x402", "board", "attest", "cast"]);
 
     const all = await watchQuery(db, { limit: 50 });
     const types = all.events.map((e) => e.type);
-    for (const want of ["request.created", "stream.tick", "payment.received", "x402.received", "board.post", "cast.recording", "cast.recording.stopped"]) {
+    for (const want of ["request.created", "stream.tick", "payment.received", "x402.received", "board.post", "funds.attested", "cast.recording", "cast.recording.stopped"]) {
       assert.ok(types.includes(want), `expected ${want} in ${JSON.stringify(types)}`);
     }
     // Money is labelled as money, in both directions.

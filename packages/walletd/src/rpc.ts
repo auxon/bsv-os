@@ -16,6 +16,11 @@ import { qrDataUrl, qrDataUrlText } from "./qr.ts";
 import { readEvents } from "./events.ts";
 import { watchPoll, watchTailCursor, type WatchCursor } from "./watch.ts";
 import { commitmentExposure, listCommitments } from "./commitment.ts";
+import {
+  canonicalStatement, createFundsAttestation, listFundsAttestations, proveFundsUtxo,
+  recordFundsAttestation, sha256hex, verifyFundsAttestation, type FundsStatement,
+} from "./attest.ts";
+import { parseDurationMs } from "./watch.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
@@ -1561,6 +1566,68 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   streamList: async () => {
     const b = needBackend();
     return { streams: await listStreams(b.db) };
+  },
+  /**
+   * Sign a claim that this wallet holds at least `minSats`, bound to a Merkle
+   * commitment over the spendable UTXO set, with an expiry. The daemon
+   * refuses to sign above the total it can see. The published object omits
+   * the balance and UTXO count on purpose. `bsv funds attest`.
+   */
+  fundsAttest: async (params) => {
+    const b = needBackend();
+    const { minSats, validFor, anchor } = p(params) as { minSats?: unknown; validFor?: unknown; anchor?: unknown };
+    const ms = typeof validFor === "string" ? parseDurationMs(validFor) : Math.floor(Number(validFor) || 0) * 1000;
+    const att = await createFundsAttestation({ db: b.db, chain: b.chain }, { minSats: Number(minSats), validForMs: ms });
+    const id = await recordFundsAttestation(b.db, att);
+    let anchorTxid: string | null = null;
+    if (anchor === true) {
+      // Public timestamp: the statement hash in an OP_RETURN, policy-gated.
+      const digest = sha256hex(canonicalStatement(att.statement));
+      const res = await anchorTip({ db: b.db, chain: b.chain, origin: "funds", sha256: digest, label: "FUNDS-ATTEST" });
+      anchorTxid = res.txid;
+      await b.db("funds_attestations").where({ id }).update({ anchor_txid: anchorTxid });
+    }
+    return { id, ...att, anchorTxid };
+  },
+  /**
+   * Verify someone else's claim (or your own). Reports every check by name,
+   * and says what the object does and does not reveal. `bsv funds verify`.
+   */
+  fundsVerify: async (params) => {
+    const { attestation, minSats } = p(params) as { attestation?: unknown; minSats?: unknown };
+    if (attestation === undefined || attestation === null) {
+      throw Object.assign(new Error("attestation required (an object, or JSON text)") , { code: "BAD_PARAM" });
+    }
+    const parsed = typeof attestation === "string" ? JSON.parse(attestation) : attestation;
+    const res = verifyFundsAttestation(parsed);
+    const claimed = Number((parsed as { statement?: { minSats?: unknown } })?.statement?.minSats) || 0;
+    if (Number(minSats) > 0) {
+      res.checks.push({
+        name: "sufficient",
+        ok: claimed >= Number(minSats),
+        detail: `caller wanted >= ${Number(minSats)} sats, claim says ${claimed}`,
+      });
+      res.ok = res.ok && res.checks[res.checks.length - 1]!.ok;
+    }
+    return res;
+  },
+  /** Disclose one UTXO as a Merkle inclusion proof against an attestation. */
+  fundsProve: async (params) => {
+    const b = needBackend();
+    const { attestation, outpoint } = p(params) as { attestation?: unknown; outpoint?: unknown };
+    if (typeof outpoint !== "string" || !outpoint) {
+      throw Object.assign(new Error("outpoint required (txid_vout)"), { code: "BAD_PARAM" });
+    }
+    const statement = (typeof attestation === "string" ? JSON.parse(attestation) : attestation) as { statement?: FundsStatement };
+    if (!statement?.statement?.root) {
+      throw Object.assign(new Error("attestation with a statement.root is required"), { code: "BAD_PARAM" });
+    }
+    return await proveFundsUtxo({ db: b.db, chain: b.chain }, statement.statement, outpoint);
+  },
+  fundsList: async (params) => {
+    const b = needBackend();
+    const { limit } = p(params) as { limit?: unknown };
+    return { attestations: await listFundsAttestations(b.db, Number(limit) || 20) };
   },
   /**
    * Every timed commitment in one place: sats streams, cast pay-per-minute
