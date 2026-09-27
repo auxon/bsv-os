@@ -182,6 +182,51 @@ export async function sha256Hex(bytes) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Bytes -> lowercase hex. inscribeMint takes dataHex, never a path. */
+export function toHex(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
+  return out;
+}
+
+/** Readable byte size. */
+export function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/**
+ * Content type for an inscription. The browser reports file.type from the OS,
+ * which is often empty for unusual extensions, so fall back to an extension
+ * map. The daemon requires 1-128 printable ASCII with no spaces, which every
+ * value here satisfies.
+ */
+const MIME_BY_EXT = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  webp: "image/webp", svg: "image/svg+xml", avif: "image/avif", bmp: "image/bmp",
+  ico: "image/x-icon", heic: "image/heic",
+  mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
+  flac: "audio/flac", opus: "audio/opus", aac: "audio/aac",
+  mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4",
+  txt: "text/plain", md: "text/markdown", csv: "text/csv", html: "text/html",
+  css: "text/css", js: "text/javascript", json: "application/json",
+  xml: "application/xml", pdf: "application/pdf", zip: "application/zip",
+};
+
+export function contentTypeFor(file) {
+  const declared = String(file?.type ?? "").trim();
+  if (declared && !declared.includes(" ") && declared.length <= 128) return declared;
+  const ext = String(file?.name ?? "").toLowerCase().split(".").pop() ?? "";
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+/** True when the browser can render a preview for this type. */
+export function isPreviewable(contentType) {
+  return /^(image|audio|video)\//.test(String(contentType ?? ""));
+}
+
 // ── form values ─────────────────────────────────────────────────────────
 export function fieldValues(root) {
   const out = {};

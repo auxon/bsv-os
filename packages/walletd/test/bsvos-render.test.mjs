@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 // The shell's views build HTML strings. A parse gate proves the syntax; this
 // proves every view actually *renders* against realistic daemon payloads
@@ -18,7 +19,8 @@ async function loadViews() {
   const social = await import(new URL("views/social.js", appDir).href);
   const apps = await import(new URL("views/apps.js", appDir).href);
   const work = await import(new URL("views/work.js", appDir).href);
-  return [...wallet.default, ...money.default, ...social.default, ...apps.default, ...work.default];
+  const { inscribe } = await import(new URL("views/inscribe.js", appDir).href);
+  return [...wallet.default, ...money.default, inscribe, ...social.default, ...apps.default, ...work.default];
 }
 
 /** A ctx whose data is a realistic (non-empty) daemon payload for that view. */
@@ -119,6 +121,11 @@ function fixtures() {
     },
     faucet: { faucet: { funded: true, amount: 10000, claimed: false } },
     recovery: { recovery: { protected: true, sets: [{ setId: "set1", have: 2, need: 3, guardians: ["alice", "bob"] }] } },
+    inscribe: {
+      picked: { name: "cat.png", size: 4096, contentType: "image/png", sha256: "ab".repeat(32), hex: "89504e47", previewUrl: "blob:x", tooBig: false },
+      recent: [{ contentType: "image/png", contentLength: 2048, outpoint: "aa:0", contentUrl: "https://ordinals.com/x" }],
+      balance: 500000,
+    },
   };
 }
 
@@ -140,7 +147,56 @@ test("every shell view renders without throwing on realistic data", async () => 
     assert.ok(!html.includes("undefined"), `${v.id} does not render "undefined"`);
     assert.ok(!html.includes("NaN"), `${v.id} does not render NaN`);
   }
-  assert.equal(seen.size, 27, "27 views, matching the panel's section count");
+  // 27 of these mirror a Quickshell panel section; the rest are additions the
+  // panel never had (inscribe, market). The panel-parity list lives in
+  // bsvos-app.test.mjs and is a subset check.
+  assert.equal(seen.size, 28, "28 views: 27 panel sections plus inscribe");
+});
+
+test("the inscribe view never sends a file path, only hex", async () => {
+  const views = await loadViews();
+  const view = views.find((v) => v.id === "inscribe");
+  assert.ok(view, "inscribe view exists");
+  const src = fs.readFileSync(new URL("views/inscribe.js", appDir), "utf8");
+  // ordInscribe takes dataHex + contentType; a path would be un-sendable from
+  // a browser and would leak the filesystem layout.
+  assert.ok(/rpc\("ordInscribe", \{/.test(src), "uses ordInscribe");
+  assert.ok(/dataHex: picked\.hex/.test(src), "sends hex");
+  assert.ok(/contentType: picked\.contentType/.test(src), "sends a content type");
+  assert.ok(!/path:/.test(src), "never sends a path");
+  // The daemon enforces 256 KiB; the UI must not pretend otherwise.
+  assert.ok(/256 \* 1024/.test(src), "mirrors MAX_INSCRIPTION_BYTES");
+  assert.ok(/tooBig/.test(src), "oversized files are refused client-side");
+  // Irreversible and public, so it is confirmed, and warned about.
+  assert.ok(/confirmDialog\(\s*"Inscribe on chain"/.test(src), "spend is confirmed");
+  assert.ok(/permanent and public/i.test(src), "warns it is permanent and public");
+  const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const empty = view.render({ ...base, data: {} });
+  assert.ok(/not reversible|permanent/i.test(empty), "empty state warns too");
+
+  // Fee must scale with the file. A flat "about 10 sats" estimate was a real
+  // bug: the daemon prices at 1 sat/byte, so a 256 KiB file really costs
+  // ~263,510 sats. Under-promising here would burn someone's balance.
+  assert.ok(/1 sat per byte/.test(src), "explains the 1 sat/byte pricing");
+  const small = view.render({ ...base, data: { balance: 500000, picked: { name: "a.png", size: 4096, contentType: "image/png", sha256: "ab", hex: "89", tooBig: false } } });
+  const large = view.render({ ...base, data: { balance: 500000, picked: { name: "b.png", size: 200000, contentType: "image/png", sha256: "ab", hex: "89", tooBig: false } } });
+  const feeOf = (html) => Number(/~([\d,]+) sats/.exec(html)?.[1]?.replace(/,/g, "") ?? 0);
+  assert.ok(feeOf(large) > feeOf(small) * 10, "a 50x bigger file must cost far more, not a flat fee");
+  assert.ok(feeOf(small) > 0 && feeOf(large) > 150000, "large-file estimate is in the right order of magnitude");
+  // Fitted to two live daemon measurements: 8 B -> 275 sats, 256 KiB -> 263,510.
+  // A flat +2000 was 7x too high for a small file; assert the fit at both ends.
+  const tiny = view.render({ ...base, data: { balance: 500000, picked: { name: "t.png", size: 8, contentType: "image/png", sha256: "ab", hex: "89", tooBig: false } } });
+  const max = view.render({ ...base, data: { balance: 10_000_000, picked: { name: "m.png", size: 262144, contentType: "image/png", sha256: "ab", hex: "89", tooBig: false } } });
+  assert.ok(Math.abs(feeOf(tiny) - 275) / 275 < 0.5, `8 B estimate near the real 275 (got ${feeOf(tiny)})`);
+  assert.ok(Math.abs(feeOf(max) - 263510) / 263510 < 0.02, `256 KiB estimate within 2% of the real 263,510 (got ${feeOf(max)})`);
+
+  // Unaffordable files are called out before the user spends anything.
+  const broke = view.render({ ...base, data: { balance: 1000, picked: { name: "c.png", size: 200000, contentType: "image/png", sha256: "ab", hex: "89", tooBig: false } } });
+  assert.ok(/cannot afford/i.test(broke), "says so when the balance will not cover it");
+  assert.ok(/disabled/.test(broke), "the inscribe button is disabled");
+  // Too-big is still refused on size regardless of balance.
+  const huge = view.render({ ...base, data: { balance: 10_000_000, picked: { name: "d.mp4", size: 300000, contentType: "video/mp4", sha256: "ab", hex: null, tooBig: true } } });
+  assert.ok(/Too large/i.test(huge), "size ceiling is enforced");
 });
 
 test("views with no data degrade to empty states, not crashes", async () => {

@@ -15,7 +15,7 @@ test("bsvos app: bundle files exist", () => {
   for (const f of ["index.html", "app.js", "styles.css", "manifest.json", "lib/rpc.js", "lib/ui.js", "lib/notify.js"]) {
     assert.ok(exists(f), `${f} present`);
   }
-  for (const f of ["views/common.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js"]) {
+  for (const f of ["views/common.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js"]) {
     assert.ok(exists(f), `${f} present`);
   }
 });
@@ -45,7 +45,7 @@ test("bsvos app: every module parses and nothing loads remotely", () => {
   const files = [
     "app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js",
     "views/common.js", "views/wallet.js", "views/money.js",
-    "views/social.js", "views/apps.js", "views/work.js",
+    "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js",
   ];
   for (const f of files) {
     // Real parse gate. These are ES modules, so a syntax error kills the
@@ -74,7 +74,7 @@ test("bsvos app: every module parses and nothing loads remotely", () => {
 });
 
 test("bsvos app: no key material and no keychain reads", () => {
-  const files = ["app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js"];
+  const files = ["app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js"];
   for (const f of files) {
     const src = read(f);
     assert.ok(!/WIF\b|privateKey|mnemonic|seed phrase|identityKey\s*[:=]\s*["']/.test(src), `${f} has no key material`);
@@ -105,7 +105,7 @@ test("bsvos app: every daemon call is same-origin RPC", () => {
   assert.ok(/fetch\("\/"/.test(rpc), "RPC posts to the daemon's own origin");
   // The panel's biggest cost was 22 process spawns per refresh; the shell must
   // not reintroduce shelling out.
-  for (const f of ["app.js", "lib/ui.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js"]) {
+  for (const f of ["app.js", "lib/ui.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js"]) {
     assert.ok(!/child_process|execSync|spawnSync|\bexec\(/.test(read(f)), `${f} does not shell out`);
   }
 });
@@ -147,7 +147,7 @@ test("bsvos app: every import specifier resolves inside the bundle", () => {
   const files = [
     "app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js",
     "views/common.js", "views/wallet.js", "views/money.js",
-    "views/social.js", "views/apps.js", "views/work.js",
+    "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js",
   ];
   const seen = new Set();
   const queue = [...files];
@@ -172,7 +172,7 @@ test("bsvos app: every import specifier resolves inside the bundle", () => {
     }
   }
   // Everything reachable from app.js is accounted for.
-  assert.equal(seen.size, 10, `all 10 modules reachable, saw ${seen.size}`);
+  assert.equal(seen.size, 11, `all 11 modules reachable, saw ${seen.size}`);
 });
 
 test("bsvos app: the daemon serves every file the page can request", async () => {
