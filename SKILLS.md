@@ -50,6 +50,7 @@ money stays paid, unpaid accrual is never sent.
 - `stream_start` — `{ payee, rate, every?, max, board, name? }`; returns a fee-share warning when fees eat >20% of a tick.
 - `stream_beat` — `{ id, text? }`; worker heartbeat, kind `artifact` with a `stream:<id>` ref.
 - `stream_list`, `stream_ticks` — status + paid totals; per-tick ledger (paid/skipped/stale/closed with beat ids + txids).
+- `commitment_list` — every timed commitment in one call: sats streams, cast pay-per-minute sessions, and time capsules, with cap, paid, remaining, next due, status, and the condition that releases each. Use it instead of reading streams, cast sessions, and capsules separately; it returns an `exposure` summary (open count, sats still releasable).
 - `stream_stop` — close. Origin `stream` pays: `bsv allow stream <cap>`.
 
 ## Time capsules (post-dated cheques)
