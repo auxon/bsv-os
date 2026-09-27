@@ -35,7 +35,7 @@
 
     <section>
       <h2>Record</h2>
-      <p class="hint">Camera + mic in this browser. Record a file to upload, or go live (mp4 → HLS, WebM → MSE fallback).</p>
+      <p class="hint">Camera, screen, or window — record a file to upload, or go live. WebM and mp4 both play in this player.</p>
       <div class="row">
         <label>camera
           <select id="r-camera">
@@ -43,10 +43,13 @@
             <option value="environment">rear</option>
           </select>
         </label>
+        <button id="r-preview-btn" type="button">Preview camera</button>
+        <button id="r-screen-btn" type="button">Screen / window…</button>
         <label class="row"><input id="r-miconly" type="checkbox" /> mic only</label>
-        <button id="r-preview-btn" type="button">Preview</button>
+        <label class="row"><input id="r-micmix" type="checkbox" checked /> mic over screen</label>
       </div>
       <video id="rec-preview" muted playsinline class="hidden"></video>
+      <p id="r-source" class="hint"></p>
       <div class="row">
         <button id="r-record" type="button" disabled>● Record</button>
         <button id="r-stop" type="button" disabled>Stop</button>

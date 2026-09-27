@@ -558,10 +558,12 @@ $("add-form").addEventListener("submit", async (e) => {
   }
 });
 
-// ── record (camera/mic → file → wallet → episode) ────────────────────────
+// ── record (camera/screen/mic → file → wallet → episode) ─────────────────
 
 const rec = {
   stream: null,
+  raw: [],            // every raw stream to stop on switch/teardown
+  source: "camera",   // camera | screen
   recorder: null,
   chunks: [],
   mime: "",
@@ -573,14 +575,67 @@ const rec = {
   liveId: null,
   liveEpisode: null,
   liveCount: 0,
+  mixCtx: null,
 };
 
+function stopRaw() {
+  for (const s of rec.raw) {
+    try {
+      for (const t of s.getTracks()) t.stop();
+    } catch { /* ignore */ }
+  }
+  rec.raw = [];
+  try {
+    if (rec.mixCtx) void rec.mixCtx.close();
+  } catch { /* ignore */ }
+  rec.mixCtx = null;
+  rec.stream = null;
+}
+
+/** Mix mic + tab/system audio into one track (best effort). */
+async function mixedAudio(micStream, displayStream) {
+  const ctx = new AudioContext();
+  rec.mixCtx = ctx;
+  const dest = ctx.createMediaStreamDestination();
+  let any = false;
+  for (const s of [micStream, displayStream]) {
+    if (!s || !s.getAudioTracks().length) continue;
+    try {
+      const src = ctx.createMediaStreamSource(s);
+      src.connect(dest);
+      any = true;
+    } catch { /* audio from this source unavailable */ }
+  }
+  if (!any) {
+    try {
+      await ctx.close();
+    } catch { /* ignore */ }
+    rec.mixCtx = null;
+    return null;
+  }
+  return dest.stream.getAudioTracks()[0] ?? null;
+}
+
+function attachEndedWatch(stream) {
+  for (const t of stream.getVideoTracks()) {
+    t.addEventListener("ended", () => {
+      // User hit "Stop sharing" in the browser bar: end the take cleanly.
+      try {
+        if (rec.recorder && rec.recorder.state !== "inactive") rec.recorder.stop();
+      } catch { /* ignore */ }
+      if (rec.liveId) $("r-endlive").click();
+      setStatus("screen sharing stopped", "");
+    });
+  }
+}
+
 function pickMime(live) {
-  // Live prefers fmp4 (HLS-compatible); WebM falls back to MSE playback.
+  if ($("r-miconly").checked && rec.source !== "screen") return "audio/webm";
+  // Screen shares are video with (maybe) mixed audio; prefer webm for live
+  // so MSE replays exactly what the recorder produced. Files prefer mp4.
   const cands = live
-    ? ["video/mp4", 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', "video/webm;codecs=vp9,opus", "video/webm"]
+    ? ["video/webm;codecs=vp9,opus", "video/webm", "video/mp4"]
     : ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm", "audio/webm"];
-  if ($("r-miconly").checked) return "audio/webm";
   for (const c of cands) {
     try {
       if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
@@ -593,20 +648,63 @@ async function recPreview() {
   const btn = $("r-preview-btn");
   btn.disabled = true;
   try {
-    if (rec.stream) rec.stream.getTracks().forEach((t) => t.stop());
+    stopRaw();
+    rec.source = "camera";
     const micOnly = $("r-miconly").checked;
-    rec.stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
       video: micOnly ? false : { facingMode: $("r-camera").value },
     });
+    rec.raw.push(stream);
+    rec.stream = stream;
+    const pv = $("rec-preview");
+    pv.classList.remove("hidden");
+    pv.srcObject = stream;
+    await pv.play().catch(() => {});
+    $("r-record").disabled = false;
+    $("r-source").textContent = micOnly ? "source: microphone" : "source: camera + microphone";
+    setStatus("camera ready", "ok");
+  } catch (e) {
+    setStatus(`camera blocked: ${e instanceof Error ? e.message : e}`, "warn");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function screenPreview() {
+  const btn = $("r-screen-btn");
+  btn.disabled = true;
+  try {
+    stopRaw();
+    rec.source = "screen";
+    const display = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 } },
+      audio: true,
+    });
+    rec.raw.push(display);
+    let mic = null;
+    if ($("r-micmix").checked) {
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        rec.raw.push(mic);
+      } catch {
+        mic = null; // mic denied: screen audio only
+      }
+    }
+    const audioTrack = await mixedAudio(mic, display);
+    const videoTrack = display.getVideoTracks()[0] ?? null;
+    if (!videoTrack) throw new Error("no video track from screen share");
+    rec.stream = new MediaStream([videoTrack, ...(audioTrack ? [audioTrack] : [])]);
     const pv = $("rec-preview");
     pv.classList.remove("hidden");
     pv.srcObject = rec.stream;
     await pv.play().catch(() => {});
+    attachEndedWatch(display);
     $("r-record").disabled = false;
-    setStatus("camera ready", "ok");
+    $("r-source").textContent = `source: screen/window${audioTrack ? " + mixed audio" : " (no audio)"}`;
+    setStatus("screen ready — Record or Go live", "ok");
   } catch (e) {
-    setStatus(`camera blocked: ${e instanceof Error ? e.message : e}`, "warn");
+    setStatus(`screen share failed: ${e instanceof Error ? e.message : e}`, "warn");
   } finally {
     btn.disabled = false;
   }
@@ -626,7 +724,10 @@ function recStart(live) {
   }
   rec.chunks = [];
   rec.blob = null;
-  rec.recorder = new MediaRecorder(rec.stream, { mimeType: rec.mime, videoBitsPerSecond: 2_500_000 });
+  rec.recorder = new MediaRecorder(rec.stream, {
+    mimeType: rec.mime,
+    videoBitsPerSecond: rec.source === "screen" ? 4_000_000 : 2_500_000,
+  });
   rec.recorder.ondataavailable = (e) => {
     if (e.data && e.data.size) {
       if (live) void liveChunk(e.data);
@@ -658,6 +759,7 @@ function recStart(live) {
 }
 
 $("r-preview-btn").addEventListener("click", () => void recPreview());
+$("r-screen-btn").addEventListener("click", () => void screenPreview());
 $("r-record").addEventListener("click", () => void recStart(false));
 $("r-stop").addEventListener("click", () => {
   try {
