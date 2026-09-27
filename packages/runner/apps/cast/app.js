@@ -77,13 +77,22 @@ function mseMimeCandidates(base) {
   if (b.startsWith("video/webm")) {
     return ['video/webm;codecs="vp9,opus"', 'video/webm;codecs="vp8,opus"', 'video/webm;codecs="vp9"', "video/webm"];
   }
-  if (b.startsWith("video/mp4")) return ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', "video/mp4"];
+  if (b.startsWith("audio/mp4")) return ['audio/mp4;codecs="mp4a.40.2"', "audio/mp4", 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"'];
+  if (b.startsWith("video/mp4")) {
+    return [
+      'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+      'video/mp4;codecs="avc1.4D401E,mp4a.40.2"',
+      'video/mp4;codecs="avc1.64001f,mp4a.40.2"',
+      "video/mp4",
+    ];
+  }
   return [base || "video/webm"];
 }
 
-// MSE fallback: WebM recorders emit mid-stream clusters that no HLS demuxer
-// accepts, but appended after the init chunk they play fine. Used when HLS
-// fails with a parsing error, or (via mime) for known-webm broadcasts.
+// MSE playback for our own ingest: sequential append of the exact chunks
+// the recorder produced. WebM recorders emit mid-stream clusters no HLS
+// demuxer accepts; mp4 recorders can leave holes hls.js seeks over. Both
+// classes vanish when we append init + fragments in arrival order.
 async function msePlay(playlistUrl) {
   const gen = (state.mseGen || 0) + 1;
   state.mseGen = gen;
@@ -96,7 +105,28 @@ async function msePlay(playlistUrl) {
       if (info && typeof info.mime === "string" && info.mime) botMime = info.mime.split(";")[0];
     } catch { /* default stands */ }
   }
-  const mime = (window.MediaSource ? mseMimeCandidates(botMime) : []).find((c) => {
+  const base = playlistUrl.replace(/index\.m3u8.*$/, "");
+  // Sniff the init chunk: stored sessions from before mime recording carry
+  // no label, and ftyp vs EBML decides which codec family can buffer them.
+  let initBuf = null;
+  try {
+    const res = await fetch(base + "init.mp4", { cache: "no-store" });
+    if (res.ok) initBuf = await res.arrayBuffer();
+  } catch { /* live may not have init yet */ }
+  if (!alive()) return;
+  if (initBuf && initBuf.byteLength > 8) {
+    const u8 = new Uint8Array(initBuf);
+    const ftyp = u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70;
+    const ebml = u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3;
+    if (ftyp) botMime = u8[8] === 0x69 && u8[9] === 0x73 && u8[10] === 0x6f && u8[11] === 0x6d ? "audio/mp4" : "video/mp4";
+    else if (ebml) botMime = "video/webm";
+  }
+  const family = (b) => (b.startsWith("audio") || b.startsWith("video")) ? b : "video/webm";
+  const cands = [
+    ...mseMimeCandidates(family(botMime)),
+    ...mseMimeCandidates(family(botMime).startsWith("video") ? "audio/" + botMime.split("/")[1] : "video/" + botMime.split("/")[1]),
+  ];
+  const mime = (window.MediaSource ? cands : []).find((c) => {
     try {
       return MediaSource.isTypeSupported(c);
     } catch {
@@ -107,8 +137,7 @@ async function msePlay(playlistUrl) {
     hintEl.textContent = `cannot play this broadcast here (${botMime} unsupported)`;
     return;
   }
-  hintEl.textContent = "playing via MSE fallback (WebM broadcast)…";
-  const base = playlistUrl.replace(/index\.m3u8.*$/, "");
+  hintEl.textContent = "playing broadcast (direct stream)…";
 
   // Attempt loop: a detached SourceBuffer (media element reset underneath us)
   // aborts the attempt; one clean retry handles races with play/pause/seek.
@@ -157,6 +186,10 @@ async function msePlay(playlistUrl) {
     });
     const seen = new Set();
     try {
+      if (initBuf) {
+        seen.add("init.mp4"); // prefetched + sniffed above
+        await append(initBuf);
+      }
       for (;;) {
         if (!alive()) return;
         const txt = await (await fetch(playlistUrl, { cache: "no-store" })).text();
@@ -200,8 +233,24 @@ function loadMedia(url) {
   teardownMedia();
   if (!url) return;
   const isHls = /\.m3u8(\?|#|$)/i.test(url);
+  // Our own ingest URLs always go straight to MSE: sequential append of the
+  // exact chunks the recorder produced can never have holes or mid-stream
+  // clusters, which is precisely the failure class hls.js keeps tripping on
+  // (fragParsingError, bufferSeekOverHole). Third-party .m3u8s keep hls.js.
+  if (isHls && /\/cast\/live\/[a-z0-9]{6,16}\//.test(url)) {
+    void msePlay(url);
+    return;
+  }
   if (isHls && window.Hls && window.Hls.isSupported()) {
     const hls = new window.Hls({ maxBufferLength: 30 });
+    // A dropped rolling-window segment can leave a buffer hole the player
+    // seeks over; clamp to the live edge instead of surfacing the error.
+    const seekToEdge = () => {
+      try {
+        const sk = player.seekable;
+        if (sk.length) player.currentTime = Math.max(0, sk.end(sk.length - 1) - 0.5);
+      } catch { /* ignore */ }
+    };
     hls.on(window.Hls.Events.ERROR, (_ev, data) => {
       if (!data || !data.fatal) return;
       if (data.details === "fragParsingError") {
@@ -210,6 +259,9 @@ function loadMedia(url) {
         } catch { /* ignore */ }
         if (state.hls === hls) state.hls = null;
         void msePlay(url);
+      } else if (data.details === "bufferSeekOverHole" || data.details === "bufferStalledError") {
+        seekToEdge();
+        hintEl.textContent = "caught up to the live edge…";
       } else {
         hintEl.textContent = `stream error: ${data.type} ${data.details}`;
       }

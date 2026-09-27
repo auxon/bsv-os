@@ -151,6 +151,11 @@ test("player app bundle: served files, no remote code", async () => {
   for (const token of ["castPlay", "castStop", "streamPause", "streamResume", "streamTicks", "castEpisodes", "castAdd"]) {
     assert.ok(js.includes(token), token);
   }
+  // Our own broadcasts skip hls.js entirely (direct MSE append); third-party
+  // m3u8s keep it.
+  assert.ok(js.includes("\\/cast\\/live\\/"), "own-ingest routing marker present");
+  assert.ok(js.includes("void msePlay(url)"), "own ingest goes to msePlay");
+  assert.ok(js.includes("bufferSeekOverHole"), "hole clamp for foreign m3u8s");
   const manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", dir), "utf8"));
   assert.equal(manifest.start_url, "https://localhost:2121/cast/");
 });
