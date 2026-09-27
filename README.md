@@ -328,13 +328,47 @@ Setup, boundaries and the full panel-parity table:
 bsv mcp --agent=research-agent   # stdio server: Claude Code, OpenCode, etc.
 ```
 
-Eight tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
-`list_pending`, `x402_pay` (metered fetch, spends the agent's own budget
-through policy), `jev_decide` (calibrated decision calls, ~$0.00002 each),
-and `jev_status`. Every call is stamped with the agent name, so daemon policy
+**44 tools** across the whole surface — wallet (`wallet_status`,
+`wallet_balance`, `list_pending`, `get_version`), memory (`memory_remember`,
+`memory_recall`, `memory_forget`), boards, streams, capsules, cast, markets,
+gigs, commitments, funds proofs, `watch_poll`, `x402_pay` (metered fetch,
+spending the agent's own budget through policy), and Jev (`jev_decide`,
+`jev_status`). Every call is stamped with the agent name, so daemon policy
 and the custody lock apply per-agent. A first-run denial surfaces as
-`ask your human to run: bsv allow research-agent` — the agent loop closes
-without ever touching keys.
+`ask your human to run: bsv allow <agent>` — the agent loop closes without
+ever touching keys.
+
+### Wiring it into a client
+
+The server is stdio, so a client just spawns it. Two things bite:
+
+- **`bsv` must be on the spawned PATH**, and its `#!/usr/bin/env node` shebang
+  needs `node` too. MCP clients often spawn with a minimal environment; under
+  `PATH=/usr/bin:/bin` the server dies with `env: node: No such file or
+  directory` (exit 127) and the client just shows the server as unavailable.
+  Spawning through a login shell fixes it, because that reads your profile:
+
+  ```jsonc
+  // ~/.config/opencode/opencode.jsonc
+  "mcp": {
+    "bsv": {
+      "type": "local",
+      "command": ["/bin/zsh", "-lc", "exec bsv mcp --agent=opencode"],
+      "enabled": true
+    }
+  }
+  ```
+
+  Use `-lc` (login, non-interactive), not `-lic`: an interactive shell can
+  print a banner to stdout, which corrupts the JSON-RPC stream.
+- **Memory tool arguments are snake_case**: `include_public`, not
+  `includePublic`. Unknown arguments are silently dropped rather than
+  rejected, so a wrong name returns a plausible empty result instead of an
+  error — worth knowing before concluding the memory is empty.
+
+Restart the client after editing its config; MCP servers are spawned at
+startup. The agent then needs a policy before it can spend, including the
+~20 sats a public memory post costs: `bsv allow <agent> <cap>`.
 
 Agent instructions live in [SKILLS.md](SKILLS.md) — point any MCP-capable
 agent at it.
