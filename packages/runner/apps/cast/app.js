@@ -109,60 +109,91 @@ async function msePlay(playlistUrl) {
   }
   hintEl.textContent = "playing via MSE fallback (WebM broadcast)…";
   const base = playlistUrl.replace(/index\.m3u8.*$/, "");
-  const ms = new MediaSource();
-  player.src = URL.createObjectURL(ms);
-  await new Promise((res, rej) => {
-    ms.addEventListener("sourceopen", res, { once: true });
-    setTimeout(() => rej(new Error("media source timeout")), 10000);
-  }).catch(() => {});
-  if (!alive()) return;
-  let sb;
-  try {
-    sb = ms.addSourceBuffer(mime);
-  } catch {
-    hintEl.textContent = `cannot buffer ${mime} here`;
-    return;
-  }
-  const seen = new Set();
-  const append = (buf) => new Promise((res, rej) => {
-    const done = () => {
-      sb.removeEventListener("updateend", done);
-      res();
-    };
-    sb.addEventListener("updateend", done);
+
+  // Attempt loop: a detached SourceBuffer (media element reset underneath us)
+  // aborts the attempt; one clean retry handles races with play/pause/seek.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (!alive()) return;
+    const ms = new MediaSource();
+    const objUrl = URL.createObjectURL(ms);
+    player.src = objUrl;
+    const opened = await new Promise((res) => {
+      ms.addEventListener("sourceopen", () => res(true), { once: true });
+      setTimeout(() => res(false), 10000);
+    });
+    if (!alive()) return;
+    if (!opened) break;
+    let sb;
     try {
-      sb.appendBuffer(buf);
-    } catch (e) {
-      sb.removeEventListener("updateend", done);
-      rej(e);
+      sb = ms.addSourceBuffer(mime);
+    } catch {
+      hintEl.textContent = `cannot buffer ${mime} here`;
+      return;
     }
-  });
-  try {
-    for (;;) {
-      if (!alive()) return;
-      const txt = await (await fetch(playlistUrl, { cache: "no-store" })).text();
-      const files = [...txt.matchAll(/^(init\.mp4|seg-\d+\.m4s)$/gm)].map((x) => x[1]);
-      for (const f of files) {
-        if (!alive()) return;
-        if (seen.has(f)) continue;
-        seen.add(f);
-        const buf = await (await fetch(base + f, { cache: "no-store" })).arrayBuffer();
-        if (!alive()) return;
-        await append(buf);
-      }
-      if (txt.includes("ENDLIST")) break;
-      await new Promise((r) => setTimeout(r, 4000));
-    }
-    if (alive() && ms.readyState === "open") {
+    const attached = () => {
       try {
-        ms.endOfStream();
-      } catch { /* ignore */ }
+        return ms.readyState === "open" && ms.sourceBuffers.length > 0;
+      } catch {
+        return false;
+      }
+    };
+    let appendError = null;
+    const append = (buf) => new Promise((res, rej) => {
+      if (!attached()) {
+        rej(new Error("source buffer detached"));
+        return;
+      }
+      const done = () => {
+        sb.removeEventListener("updateend", done);
+        res();
+      };
+      sb.addEventListener("updateend", done);
+      try {
+        sb.appendBuffer(buf);
+      } catch (e) {
+        sb.removeEventListener("updateend", done);
+        rej(e);
+      }
+    });
+    const seen = new Set();
+    try {
+      for (;;) {
+        if (!alive()) return;
+        const txt = await (await fetch(playlistUrl, { cache: "no-store" })).text();
+        const files = [...txt.matchAll(/^(init\.mp4|seg-\d+\.m4s)$/gm)].map((x) => x[1]);
+        for (const f of files) {
+          if (!alive()) return;
+          if (seen.has(f)) continue;
+          seen.add(f);
+          const buf = await (await fetch(base + f, { cache: "no-store" })).arrayBuffer();
+          if (!alive()) return;
+          await append(buf);
+        }
+        if (txt.includes("ENDLIST")) break;
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+      if (alive() && attached()) {
+        try {
+          ms.endOfStream();
+        } catch { /* ignore */ }
+      }
+      hintEl.textContent = "";
+      await player.play().catch(() => {});
+      return; // clean finish: done, no retry
+    } catch (e) {
+      appendError = e;
     }
-    hintEl.textContent = "";
-    await player.play().catch(() => {});
-  } catch (e) {
-    if (alive()) hintEl.textContent = `MSE stopped: ${e instanceof Error ? e.message : e}`;
+    if (!alive()) return; // teardown raced us — silent
+    try {
+      URL.revokeObjectURL(objUrl);
+    } catch { /* ignore */ }
+    if (attempt === 2) {
+      hintEl.textContent = `MSE stopped: ${appendError instanceof Error ? appendError.message : appendError}`;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1200));
   }
+  hintEl.textContent = "stream stalled — press play to retry";
 }
 
 function loadMedia(url) {
