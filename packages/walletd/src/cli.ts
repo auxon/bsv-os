@@ -1166,6 +1166,65 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "evolve": {
+      const [evSub, ...evRest] = rest;
+      const evArg = evRest.find((a) => !a.startsWith("--"));
+      if (evSub === "create") {
+        const task = flag(rest, "task") ?? evArg;
+        const rubric = flag(rest, "rubric");
+        const prize = flag(rest, "prize");
+        if (!task || !rubric || !prize) {
+          console.error("usage: bsv evolve create --task <text> --rubric <text> --prize <sats> [--rounds N] [--fee <sats>] [--round <30m|6h|7d>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("evolveCreate", {
+          task, rubric, prize: Number(prize),
+          ...(flag(rest, "rounds") ? { rounds: Number(flag(rest, "rounds")) } : {}),
+          ...(flag(rest, "fee") ? { entryFee: Number(flag(rest, "fee")) } : {}),
+          ...(flag(rest, "round") ? { round: flag(rest, "round") } : {}),
+        }));
+      } else if (evSub === "submit" && evArg) {
+        const text = flag(rest, "text");
+        const payTo = flag(rest, "pay-to");
+        if (!text || !payTo) {
+          console.error("usage: bsv evolve submit <contest> --text <prompt ---OUTPUT--- output> --pay-to <addr> [--round N] [--parent <entry>] [--pay-now|--fee-txid <txid>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("evolveSubmit", {
+          contest: evArg, text, payTo,
+          ...(flag(rest, "round") ? { round: Number(flag(rest, "round")) } : {}),
+          ...(flag(rest, "parent") ? { parent: Number(flag(rest, "parent")) } : {}),
+          ...(evRest.includes("--pay-now") ? { payNow: true } : {}),
+          ...(flag(rest, "fee-txid") ? { feeTxid: flag(rest, "fee-txid") } : {}),
+          ...(flag(rest, "agent") !== undefined ? { agent: flag(rest, "agent") } : {}),
+        }));
+      } else if (evSub === "entries" && evArg) {
+        print(await call("evolveEntries", {
+          contest: evArg,
+          ...(flag(rest, "round") ? { round: Number(flag(rest, "round")) } : {}),
+        }));
+      } else if (evSub === "score" && evArg) {
+        print(await call("evolveScore", {
+          contest: evArg,
+          ...(flag(rest, "round") ? { round: Number(flag(rest, "round")) } : {}),
+        }));
+      } else if (evSub === "payout" && evArg) {
+        print(await call("evolvePayout", {
+          contest: evArg,
+          ...(flag(rest, "round") ? { round: Number(flag(rest, "round")) } : {}),
+        }));
+      } else if (evSub === "close" && evArg) {
+        print(await call("evolveClose", { contest: evArg }));
+      } else if (evSub === "list" || evSub === undefined) {
+        print(await call("evolveList"));
+      } else {
+        console.error("usage: bsv evolve <create|submit|entries|score|payout|close|list>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

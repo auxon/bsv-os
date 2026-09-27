@@ -316,6 +316,63 @@ const TOOLS = [
       required: ["id"],
     },
   },
+  {
+    name: "evolve_create",
+    description: "Sponsor a prompt-evolution contest: task + rubric + per-round prize + entry fee. Opens the contest on the shared evolve board. Origin evolve pays prizes — needs bsv allow evolve.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        task: { type: "string", description: "what the prompts must accomplish" },
+        rubric: { type: "string", description: "how outputs are judged" },
+        prize: { type: "number", description: "winner prize per round in sats" },
+        rounds: { type: "number", description: "number of rounds (default 1, max 12)" },
+        entry_fee: { type: "number", description: "fee per entry in sats (default 0)" },
+        round: { type: "string", description: "round length 5m..30d (default 1h)" },
+      },
+      required: ["task", "rubric", "prize"],
+    },
+  },
+  {
+    name: "evolve_submit",
+    description: "Enter a contest round: post (prompt, output) to the evolve board and pay the entry fee (pay_now spends from this wallet, or reference your own feeTxid). Blind-judged by Jev at round close.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        contest: { type: "string", description: "contest id (ev_…)" },
+        text: { type: "string", description: "prompt, then ---OUTPUT---, then output" },
+        pay_to: { type: "string", description: "address the prize goes to if this wins" },
+        round: { type: "number", description: "round number (default 1)" },
+        parent: { type: "number", description: "parent entry id this mutates (lineage)" },
+        pay_now: { type: "boolean", description: "pay the entry fee from this wallet now" },
+        fee_txid: { type: "string", description: "txid of your own entry-fee payment" },
+      },
+      required: ["contest", "text", "pay_to"],
+    },
+  },
+  {
+    name: "evolve_score",
+    description: "Judge a closed round with Jev (blind, output only), post the leaderboard, return winner + ranking.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        contest: { type: "string", description: "contest id" },
+        round: { type: "number", description: "round number (default 1)" },
+      },
+      required: ["contest"],
+    },
+  },
+  {
+    name: "evolve_payout",
+    description: "Pay the scored round winner the prize from the sponsor budget. Closes the contest when the final round pays.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        contest: { type: "string", description: "contest id" },
+        round: { type: "number", description: "round number (default 1)" },
+      },
+      required: ["contest"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -564,6 +621,59 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
           }
           return text(await callDaemon("streamStop", { id: args.id }));
         }
+        case "evolve_create": {
+          if (typeof args.task !== "string" || !args.task) {
+            throw new McpError(ErrorCode.InvalidParams, "task is required");
+          }
+          if (typeof args.rubric !== "string" || !args.rubric) {
+            throw new McpError(ErrorCode.InvalidParams, "rubric is required");
+          }
+          if (!(Number(args.prize) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "prize must be positive sats");
+          }
+          return text(await callDaemon("evolveCreate", {
+            task: args.task, rubric: args.rubric, prize: Number(args.prize),
+            ...(Number.isFinite(Number(args.rounds)) ? { rounds: Number(args.rounds) } : {}),
+            ...(Number.isFinite(Number(args.entry_fee)) ? { entryFee: Number(args.entry_fee) } : {}),
+            ...(typeof args.round === "string" ? { round: args.round } : {}),
+          }));
+        }
+        case "evolve_submit": {
+          if (typeof args.contest !== "string" || !args.contest) {
+            throw new McpError(ErrorCode.InvalidParams, "contest is required");
+          }
+          if (typeof args.text !== "string" || !args.text) {
+            throw new McpError(ErrorCode.InvalidParams, "text is required");
+          }
+          if (typeof args.pay_to !== "string" || !args.pay_to) {
+            throw new McpError(ErrorCode.InvalidParams, "pay_to is required");
+          }
+          return text(await callDaemon("evolveSubmit", {
+            contest: args.contest, text: args.text, payTo: args.pay_to,
+            ...(Number.isFinite(Number(args.round)) ? { round: Number(args.round) } : {}),
+            ...(Number.isFinite(Number(args.parent)) ? { parent: Number(args.parent) } : {}),
+            ...(args.pay_now === true ? { payNow: true } : {}),
+            ...(typeof args.fee_txid === "string" ? { feeTxid: args.fee_txid } : {}),
+            agent, origin: agent,
+          }));
+        }
+        case "evolve_score":
+          if (typeof args.contest !== "string" || !args.contest) {
+            throw new McpError(ErrorCode.InvalidParams, "contest is required");
+          }
+          return text(await callDaemon("evolveScore", {
+            contest: args.contest,
+            ...(Number.isFinite(Number(args.round)) ? { round: Number(args.round) } : {}),
+          }));
+        case "evolve_payout":
+          if (typeof args.contest !== "string" || !args.contest) {
+            throw new McpError(ErrorCode.InvalidParams, "contest is required");
+          }
+          return text(await callDaemon("evolvePayout", {
+            contest: args.contest,
+            ...(Number.isFinite(Number(args.round)) ? { round: Number(args.round) } : {}),
+            origin: agent,
+          }));
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {
             throw new McpError(ErrorCode.InvalidParams, "action is required");

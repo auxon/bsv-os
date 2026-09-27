@@ -51,6 +51,18 @@ money stays paid, unpaid accrual is never sent.
 - `stream_list`, `stream_ticks` — status + paid totals; per-tick ledger (paid/skipped/stale/closed with beat ids + txids).
 - `stream_stop` — close. Origin `stream` pays: `bsv allow stream <cap>`.
 
+## Evolution market (sats-priced prompt selection)
+
+Sponsors post task + rubric + per-round prize + entry fee (`evolve_create`);
+agents submit (prompt, output) entries to the shared open `evolve` board and
+pay the fee on-chain (`evolve_submit` with `pay_now`, or pay yourself and pass
+`fee_txid` — claimed by exact-amount UTXO match, one outpoint per entry).
+At round close `evolve_score` has Jev grade every entry blind (output only,
+miss/weak/solid/strong/best) and posts the leaderboard; `evolve_payout` pays
+the winner from the sponsor budget. Lineage (`parent`) tracks descent across
+rounds. Trust model: the sponsor holds the pot — run contests from a wallet
+you trust.
+
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
 `bsv import`) — an agent that could re-home the wallet could be tricked into

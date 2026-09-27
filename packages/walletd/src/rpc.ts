@@ -54,6 +54,10 @@ import {
   mergeUsenetHits, normalizeMemoryText, recallFromPosts, refHash, usenetPayload,
 } from "./memory.ts";
 import {
+  EVOLVE_BOARD, SCORE_LEVELS, contestRef, createContest, getContest,
+  judgeRound, listContests, recordEntry, roundEntries, splitEntry,
+} from "./evolve.ts";
+import {
   createStream, getStream, listStreams, listTicks, setStreamStatus, streamBeatRef, tickStreams,
 } from "./streams.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
@@ -1590,6 +1594,159 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       text: typeof text === "string" && text.trim() ? text : `beat for ${s.id}`,
       kind: "artifact", refs: [streamBeatRef(s.id)], agent, origin,
     });
+  },
+  /**
+   * Prompt evolution market. The sponsor (this wallet) posts a task +
+   * rubric + per-round prize; agents submit (prompt, output) entries to the
+   * shared open board and pay the entry fee on-chain. At round close Jev
+   * scores entries blind and the winner is paid from the sponsor budget
+   * through policy (origin `evolve`).
+   */
+  evolveCreate: async (params) => {
+    const b = needBackend();
+    const { task, rubric, prize, rounds, entryFee, round } = p(params) as {
+      task?: unknown; rubric?: unknown; prize?: unknown; rounds?: unknown; entryFee?: unknown; round?: unknown;
+    };
+    let board = await getBoard(b.db, EVOLVE_BOARD);
+    if (!board) board = await createBoard(b.db, { name: EVOLVE_BOARD, mode: "open" });
+    const c = await createContest(b.db, {
+      task: typeof task === "string" ? task : "",
+      rubric: typeof rubric === "string" ? rubric : "",
+      prize: Number(prize) || 0,
+      rounds: Number(rounds) || 1,
+      entryFee: Number(entryFee) || 0,
+      sponsor: selfAddress(),
+      round: round ?? "1h",
+    });
+    await boardPublish(b, board, {
+      text: `contest ${c.id}: ${c.task}`,
+      kind: "artifact",
+      refs: [contestRef(c.id), "contest", `prize:${c.prize}`, `rounds:${c.rounds}`, `fee:${c.entryFee}`],
+    });
+    return { ...c, board: board.name, origin: "evolve", approve: `bsv allow evolve <cap sats, at least ${c.prize * c.rounds} + fees>` };
+  },
+  evolveList: async () => {
+    const b = needBackend();
+    return { contests: await listContests(b.db) };
+  },
+  evolveSubmit: async (params) => {
+    const b = needBackend();
+    const { contest, round, text, payTo, parent, feeTxid, payNow, agent, origin } = p(params) as {
+      contest?: unknown; round?: unknown; text?: unknown; payTo?: unknown;
+      parent?: unknown; feeTxid?: unknown; payNow?: unknown; agent?: unknown; origin?: unknown;
+    };
+    const c = await getContest(b.db, String(contest ?? ""));
+    if (typeof payTo !== "string" || !payTo) throw Object.assign(new Error("payTo (winner payout address) required"), { code: "BAD_PARAM" });
+    const { output } = splitEntry(typeof text === "string" ? text : "");
+    if (!output) throw Object.assign(new Error("entry output required (use ---OUTPUT--- to separate prompt from output)"), { code: "BAD_PARAM" });
+    const originStr = typeof origin === "string" && origin ? origin : "evolve";
+    let feeOutpoint: string | null = null;
+    if (c.entryFee > 0) {
+      if (payNow === true) {
+        const paid = await spendTo({
+          db: b.db, chain: b.chain, origin: originStr,
+          payments: [{ to: c.sponsor, sats: c.entryFee }],
+          memo: ["EVOLVE-ENTRY", c.id],
+          label: `evolve entry fee ${c.id}`,
+          description: `evolution market entry fee ${c.entryFee} sats for contest ${c.id}`,
+        });
+        feeOutpoint = paid.txid;
+      } else if (typeof feeTxid === "string" && feeTxid) {
+        // Remote wallet paid itself: claim an exact-fee UTXO at the sponsor
+        // address that no other entry has claimed. Attribution is by amount
+        // + memo convention, not cryptographic — stated limit of v1.
+        const u = await b.chain.utxos(c.sponsor);
+        const claimed = new Set(
+          ((await b.db("evolve_entries").where({ contest: c.id }).select("fee_outpoint")) as Array<{ fee_outpoint: string | null }>)
+            .map((r) => r.fee_outpoint).filter((x): x is string => !!x),
+        );
+        const hit = u.utxos.find((x) => x.value === c.entryFee && !claimed.has(`${x.txid}:${x.vout}`) && !claimed.has(x.txid));
+        if (!hit) throw Object.assign(new Error("no unclaimed exact-fee UTXO at the sponsor address — pay the entry fee first"), { code: "BAD_STATE" });
+        feeOutpoint = `${hit.txid}:${hit.vout}`;
+      } else {
+        throw Object.assign(new Error("entry fee required: payNow true or feeTxid of your payment"), { code: "BAD_PARAM" });
+      }
+    }
+    const row = await getBoard(b.db, EVOLVE_BOARD);
+    if (!row) throw Object.assign(new Error("no evolve board"), { code: "NOT_FOUND" });
+    const entry = await recordEntry(b.db, {
+      contest: c.id,
+      round: Math.floor(Number(round) || 1),
+      author: identityPubkeyHex(),
+      agent: typeof agent === "string" && agent ? agent : "cli",
+      output,
+      ...(parent !== undefined && parent !== null && parent !== "" ? { parent: Math.floor(Number(parent)) } : {}),
+      payTo,
+      ...(feeOutpoint ? { feeOutpoint } : {}),
+    });
+    const posted = await boardPublish(b, row, {
+      text: typeof text === "string" ? text : output,
+      kind: "artifact",
+      refs: [contestRef(c.id), `round:${entry.round}`, "entry", ...(entry.parent !== null ? [`parent:${entry.parent}`] : [])],
+      agent, origin: originStr,
+    });
+    await b.db("evolve_entries").where({ id: entry.id }).update({ board_post_id: posted.id });
+    return { ...entry, boardPostId: posted.id, boardPost: posted.id };
+  },
+  evolveEntries: async (params) => {
+    const b = needBackend();
+    const { contest, round } = p(params) as { contest?: unknown; round?: unknown };
+    await getContest(b.db, String(contest ?? ""));
+    const all = await roundEntries(b.db, String(contest ?? ""), Math.floor(Number(round) || 1));
+    return { entries: all.map((e) => ({ ...e, output: e.output.slice(0, 500) })) };
+  },
+  evolveScore: async (params) => {
+    const b = needBackend();
+    const { contest, round } = p(params) as { contest?: unknown; round?: unknown };
+    const c = await getContest(b.db, String(contest ?? ""));
+    const n = Math.floor(Number(round) || 1);
+    const { winner, ranking } = await judgeRound(b.db, c.id, n, async (output) => {
+      const r = await jevDecideCall(
+        { task: c.task, rubric: c.rubric, output },
+        { quality: { type: "score", instructions: "Score this contest entry output against the rubric. Judge the output only.", criteria: SCORE_LEVELS } },
+        {},
+      );
+      const a = r.answers.quality;
+      return { score: Math.floor(Number(a?.score) || 0), confidence: Number(a?.confidence) || 0 };
+    });
+    const row = await getBoard(b.db, EVOLVE_BOARD);
+    if (row) {
+      await boardPublish(b, row, {
+        text: `results ${c.id} round ${n}: winner entry #${winner.id} (${SCORE_LEVELS[winner.score ?? 0]}, conf ${(winner.confidence ?? 0).toFixed(2)}) over ${ranking.length} entries`,
+        kind: "result",
+        refs: [contestRef(c.id), `round:${n}`, "results", `winner:${winner.id}`],
+      });
+    }
+    return { winner, ranking: ranking.map((e) => ({ id: e.id, score: e.score, confidence: e.confidence, author: e.author.slice(0, 16) })) };
+  },
+  evolvePayout: async (params) => {
+    const b = needBackend();
+    const { contest, round, origin } = p(params) as { contest?: unknown; round?: unknown; origin?: unknown };
+    const c = await getContest(b.db, String(contest ?? ""));
+    const n = Math.floor(Number(round) || 1);
+    const entries = await roundEntries(b.db, c.id, n);
+    const scored = entries.filter((e) => e.score !== null).sort((a, b2) =>
+      (b2.score ?? -1) - (a.score ?? -1) || (b2.confidence ?? -1) - (a.confidence ?? -1) || a.createdAt - b2.createdAt,
+    );
+    if (!scored.length) throw Object.assign(new Error("round has no scored entries — run evolveScore first"), { code: "BAD_STATE" });
+    const winner = scored[0]!;
+    const originStr = typeof origin === "string" && origin ? origin : "evolve";
+    const r = await spendTo({
+      db: b.db, chain: b.chain, origin: originStr,
+      payments: [{ to: winner.payTo, sats: c.prize }],
+      memo: ["EVOLVE-PRIZE", c.id, `round:${n}`, `entry:${winner.id}`],
+      label: `evolve prize ${c.id} round ${n}`,
+      description: `evolution market prize ${c.prize} sats to round ${n} winner (entry ${winner.id})`,
+    });
+    if (n >= c.rounds) await b.db("evolve_contests").where({ id: c.id }).update({ status: "closed" });
+    return { txid: r.txid, fee: r.fee, winner: winner.id, payTo: winner.payTo, prize: c.prize };
+  },
+  evolveClose: async (params) => {
+    const b = needBackend();
+    const { contest } = p(params) as { contest?: unknown };
+    await getContest(b.db, String(contest ?? ""));
+    await b.db("evolve_contests").where({ id: String(contest) }).update({ status: "closed" });
+    return { closed: String(contest) };
   },
   /**
    * Sign an arbitrary short message with the wallet identity key (BSM).

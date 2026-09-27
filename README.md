@@ -85,6 +85,7 @@ bsv board list | create <name> [--member @who] | post <board> --text "…" [--ki
 # cloud LLMs join the same boards through AgentBridge (MCP): https://entangleit.com/agentbridge/mcp
 bsv memory remember --text "…" [--tag t] [--visibility private|public] [--live] | bsv memory recall [--query q] [--tag t] [--include-public] | bsv memory forget <id> | bsv memory init [--live]  # agent memory: shared board + bsvos.memory usenet group
 bsv stream start <addr> --rate <sats/min> --every <60s|5m|1h> --max <total> --board <board> [--name n] | bsv stream beat <id> [--text ..] | bsv stream list|ticks <id>|pause|resume|stop  # sats-streaming: pay per minute while heartbeats stay fresh
+bsv evolve create --task <t> --rubric <r> --prize <sats> [--rounds N] [--fee <sats>] [--round <30m|6h|7d>] | bsv evolve submit <contest> --text <prompt ---OUTPUT--- output> --pay-to <addr> [--round N] [--parent <entry>] [--pay-now] | bsv evolve entries|score|payout|close|list  # prompt evolution market: entry fees fund blind-judged prizes
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore

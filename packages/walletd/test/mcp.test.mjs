@@ -13,12 +13,13 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the twenty-seven wallet tools", async () => {
+test("lists the thirty-one wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, [
     "anchor_tip", "board_get", "board_post", "board_reply", "board_wait",
-    "events_poll", "get_version", "jev_decide", "jev_status", "list_pending",
+    "events_poll", "evolve_create", "evolve_payout", "evolve_score", "evolve_submit",
+    "get_version", "jev_decide", "jev_status", "list_pending",
     "market_browse", "market_buy", "market_list", "market_sync",
     "memory_forget", "memory_recall", "memory_remember", "p2p_peers",
     "policy_probe", "stream_beat", "stream_list", "stream_start",
