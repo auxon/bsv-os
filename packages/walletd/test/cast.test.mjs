@@ -101,3 +101,48 @@ test("startSession validates economics", async () => {
     await db.destroy();
   }
 });
+
+test("episodes carry media URL + live flag", async () => {
+  const db = await memdb();
+  try {
+    const live = await addEpisode(db, {
+      title: "Live show", mediaUrl: "https://example.com/live.m3u8", live: true,
+      splits: [{ address: A1, pct: 100 }],
+    });
+    assert.equal(live.mediaUrl, "https://example.com/live.m3u8");
+    assert.equal(live.live, true);
+    const file = await addEpisode(db, {
+      title: "Recorded", mediaUrl: "https://example.com/ep.mp3",
+      splits: [{ address: A1, pct: 100 }],
+    });
+    assert.equal(file.live, false);
+    const bare = await addEpisode(db, { title: "Pay only", splits: [{ address: A1, pct: 100 }] });
+    assert.equal(bare.mediaUrl, "");
+    await assert.rejects(
+      addEpisode(db, { title: "Bad", mediaUrl: "ftp://example.com/x.mp3", splits: [{ address: A1, pct: 100 }] }),
+      /http\(s\)/,
+    );
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("player app bundle: served files, no remote code", async () => {
+  const fs = await import("node:fs");
+  const dir = new URL("../../runner/apps/cast/", import.meta.url);
+  for (const f of ["index.html", "app.js", "styles.css", "manifest.json", "hls.min.js"]) {
+    assert.ok(fs.existsSync(new URL(f, dir)), f);
+  }
+  const html = fs.readFileSync(new URL("index.html", dir), "utf8");
+  const js = fs.readFileSync(new URL("app.js", dir), "utf8");
+  // No remote scripts baked in — only same-directory assets.
+  for (const src of [...html.matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1])) {
+    assert.ok(!/^https?:\/\//i.test(src), `remote script: ${src}`);
+  }
+  // Payment lifecycle is observed playback, never ambient.
+  for (const token of ["castPlay", "castStop", "streamPause", "streamResume", "streamTicks", "castEpisodes", "castAdd"]) {
+    assert.ok(js.includes(token), token);
+  }
+  const manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", dir), "utf8"));
+  assert.equal(manifest.start_url, "https://localhost:2121/cast/");
+});

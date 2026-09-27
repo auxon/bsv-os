@@ -1762,7 +1762,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    */
   castAdd: async (params) => {
     const b = needBackend();
-    const { title, feed, splits } = p(params) as { title?: unknown; feed?: unknown; splits?: unknown };
+    const { title, feed, media, live, splits } = p(params) as { title?: unknown; feed?: unknown; media?: unknown; live?: unknown; splits?: unknown };
     const { p2pkhScript } = await import("./tx.ts");
     const parsed = parseSplits(splits, (a) => {
       try {
@@ -1775,6 +1775,8 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     return addEpisode(b.db, {
       title: typeof title === "string" ? title : "",
       ...(typeof feed === "string" ? { feed } : {}),
+      ...(typeof media === "string" ? { mediaUrl: media } : {}),
+      ...(live === true ? { live: true as const } : {}),
       splits: parsed,
     });
   },

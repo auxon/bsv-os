@@ -29,6 +29,9 @@ export interface Episode {
   id: string;
   title: string;
   feed: string;
+  mediaUrl: string;
+  /** Live broadcast (video/audio stream) vs on-demand file. */
+  live: boolean;
   splits: ValueSplit[];
   createdAt: number;
 }
@@ -87,9 +90,22 @@ export async function migrateCast(db: Knex): Promise<void> {
       t.string("id", 16).primary();
       t.string("title", 120).notNullable();
       t.text("feed").notNullable().defaultTo("");
+      t.text("media_url").notNullable().defaultTo("");
+      t.integer("is_live").notNullable().defaultTo(0);
       t.text("splits").notNullable();
       t.integer("created_at").notNullable();
     });
+  } else {
+    if (!(await db.schema.hasColumn("cast_episodes", "media_url"))) {
+      await db.schema.alterTable("cast_episodes", (t) => {
+        t.text("media_url").notNullable().defaultTo("");
+      });
+    }
+    if (!(await db.schema.hasColumn("cast_episodes", "is_live"))) {
+      await db.schema.alterTable("cast_episodes", (t) => {
+        t.integer("is_live").notNullable().defaultTo(0);
+      });
+    }
   }
   if (!(await db.schema.hasTable("cast_sessions"))) {
     await db.schema.createTable("cast_sessions", (t) => {
@@ -107,14 +123,17 @@ export async function migrateCast(db: Knex): Promise<void> {
   }
 }
 
-interface EpisodeRow { id: string; title: string; feed: string; splits: string; created_at: number }
+interface EpisodeRow { id: string; title: string; feed: string; media_url: string; is_live: number; splits: string; created_at: number }
 interface SessionRow {
   id: string; episode: string; title: string; rate_per_min: number; every_secs: number;
   max_total: number; stream_ids: string; status: string; started_at: number; stopped_at: number | null;
 }
 
 function toEpisode(r: EpisodeRow): Episode {
-  return { id: r.id, title: r.title, feed: r.feed, splits: JSON.parse(r.splits) as ValueSplit[], createdAt: r.created_at };
+  return {
+    id: r.id, title: r.title, feed: r.feed, mediaUrl: r.media_url ?? "", live: (r.is_live ?? 0) === 1,
+    splits: JSON.parse(r.splits) as ValueSplit[], createdAt: r.created_at,
+  };
 }
 
 function toSession(r: SessionRow): CastSession {
@@ -129,13 +148,16 @@ function toSession(r: SessionRow): CastSession {
 
 export async function addEpisode(
   db: Knex,
-  opts: { title: string; feed?: string; splits: ValueSplit[] },
+  opts: { title: string; feed?: string; mediaUrl?: string; live?: boolean; splits: ValueSplit[] },
 ): Promise<Episode> {
   const title = (opts.title ?? "").trim().slice(0, 120);
   if (!title) fail("BAD_PARAM", "title required");
   if (!opts.splits.length) fail("BAD_PARAM", "splits required");
+  const mediaUrl = (opts.mediaUrl ?? "").trim().slice(0, 500);
+  if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) fail("BAD_PARAM", "media must be an http(s) URL");
   const row: EpisodeRow = {
     id: newId("ep"), title, feed: (opts.feed ?? "").trim().slice(0, 500),
+    media_url: mediaUrl, is_live: opts.live === true ? 1 : 0,
     splits: JSON.stringify(opts.splits), created_at: Date.now(),
   };
   await db("cast_episodes").insert(row);

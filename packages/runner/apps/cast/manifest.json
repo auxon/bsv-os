@@ -1,0 +1,13 @@
+{
+  "name": "Cast",
+  "short_name": "Cast",
+  "start_url": "https://localhost:2121/cast/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Cast: value-for-value player. Plays episode audio/video (files and HLS livestreams) and streams sats per minute across the episode's value splits while you listen. Pause pauses payment, stop closes it.",
+      "spendingAuthorization": { "amount": 1000000, "description": "per-minute streaming to creators and guests (each stream still gates on policy; caps bind per session)" }
+    }
+  }
+}

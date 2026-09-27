@@ -1,0 +1,53 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; max-width: 860px; padding: 16px;
+  background: #0c0e12; color: #e8eaf0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header h1 { margin: 0 0 4px; font-size: 28px; }
+.status { color: #9aa3b5; min-height: 1.2em; }
+.status.warn { color: #f0b429; }
+.status.ok { color: #58d68d; }
+.hidden { display: none !important; }
+main { display: grid; gap: 28px; margin-top: 12px; }
+h2 { font-size: 18px; margin: 0 0 10px; }
+#player { width: 100%; max-height: 480px; background: #000; border-radius: 10px; }
+#session-bar {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: end;
+  justify-content: space-between; margin-top: 10px;
+}
+#session-bar label { display: inline-grid; gap: 4px; font-size: 13px; color: #9aa3b5; margin-right: 8px; }
+input[type="number"], input[type="url"], input[type="text"], input:not([type]) {
+  background: #161a22; border: 1px solid #2a3140; color: #e8eaf0;
+  border-radius: 8px; padding: 8px 10px; font-size: 14px;
+}
+input[type="number"] { width: 110px; }
+button {
+  background: #2f6df6; border: 0; color: #fff; border-radius: 8px;
+  padding: 9px 16px; font-size: 14px; cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+button:not(:disabled):hover { background: #3d7bff; }
+.meter { font-variant-numeric: tabular-nums; font-size: 15px; }
+.meter small { color: #9aa3b5; }
+.hint { color: #9aa3b5; font-size: 13px; }
+.grid { display: grid; gap: 10px; }
+.card {
+  background: #141822; border: 1px solid #232a3a; border-radius: 10px;
+  padding: 12px 14px; display: grid; gap: 6px;
+}
+.card h3 { margin: 0; font-size: 16px; }
+.card .meta { color: #9aa3b5; font-size: 13px; }
+.card .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.badge {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+  border-radius: 6px; padding: 2px 8px; text-transform: uppercase;
+}
+.badge.live { background: #e5484d; color: #fff; }
+.badge.file { background: #2a3140; color: #9aa3b5; }
+.badge.nomedia { background: #2a3140; color: #5b6373; }
+.empty { color: #5b6373; }
+#add-form { display: grid; gap: 10px; max-width: 560px; }
+#add-form label { display: grid; gap: 4px; font-size: 14px; }
+#add-form .row { display: flex; gap: 8px; align-items: center; }

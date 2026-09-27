@@ -104,6 +104,13 @@ host never touches guest money. v1 trusts the stop button: beats prove the
 session is open, not that ears are present. Tools: `cast_play`,
 `cast_stop`, `cast_list`.
 
+The bundled player (`https://localhost:2121/cast/`, also `Cast` in the
+runner catalog) closes that gap: one `<video>` element plays files
+(mp3/mp4/webm, Icecast) and HLS livestreams (vendored hls.js, no remote
+code), and element events drive money — play starts/resumes, pause pauses
+every split stream, ended/unload stops. Pay buttons stay explicit (rate +
+cap reviewed before sats move); the meter polls per-split ticks live.
+
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
 `bsv import`) — an agent that could re-home the wallet could be tricked into

@@ -1273,13 +1273,15 @@ async function main(): Promise<void> {
         const title = flag(rest, "title") ?? castArg;
         const splits = flag(rest, "splits");
         if (!title || !splits) {
-          console.error('usage: bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>]');
+          console.error('usage: bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>] [--media <http(s) audio/video url>] [--live]');
           process.exitCode = 2;
           break;
         }
         print(await call("castAdd", {
           title, splits,
           ...(flag(rest, "feed") ? { feed: flag(rest, "feed") } : {}),
+          ...(flag(rest, "media") ? { media: flag(rest, "media") } : {}),
+          ...(rest.includes("--live") ? { live: true } : {}),
         }));
       } else if (castSub === "play" && castArg) {
         const rate = flag(rest, "rate");

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cast — value-for-value player</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Cast</h1>
+    <p id="status" class="status">connecting…</p>
+  </header>
+
+  <main>
+    <section id="now-playing" class="hidden">
+      <h2 id="np-title">—</h2>
+      <video id="player" controls playsinline preload="metadata"></video>
+      <div id="session-bar">
+        <div>
+          <label>rate sats/min <input id="rate" type="number" min="1" value="600" /></label>
+          <label>cap sats <input id="maxcap" type="number" min="1000" value="60000" /></label>
+          <button id="pay-btn" type="button">Start paying</button>
+          <button id="stop-btn" type="button" class="hidden">Stop paying</button>
+        </div>
+        <div id="meter" class="meter">not paying</div>
+      </div>
+      <p id="pay-hint" class="hint"></p>
+    </section>
+
+    <section>
+      <h2>Episodes</h2>
+      <div id="episodes" class="grid"><p class="empty">loading…</p></div>
+    </section>
+
+    <section>
+      <h2>Add episode</h2>
+      <form id="add-form">
+        <label>title <input id="f-title" required maxlength="120" /></label>
+        <label>media URL (mp3/mp4/webm, Icecast, or .m3u8 livestream) <input id="f-media" type="url" placeholder="https://…" /></label>
+        <label class="row"><input id="f-live" type="checkbox" /> live broadcast</label>
+        <label>splits <input id="f-splits" required placeholder="address:pct,address:pct" /></label>
+        <p class="hint">Splits must sum to 100. Payments stream per minute while you listen; pause pauses payment, stop closes it.</p>
+        <button type="submit">Add</button>
+        <span id="add-status" class="status"></span>
+      </form>
+    </section>
+  </main>
+
+  <script src="hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
