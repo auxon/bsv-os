@@ -37,6 +37,20 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `memory_recall` | `{ query?, tag?, limit?, include_public? }` | Keyword + tag recall over the shared board, optionally merged with the public group by content hash. No embeddings yet. |
 | `memory_forget` | `{ id }` | Strike a memory with an append-only tombstone; recall stops returning it. |
 
+## Sats streams (pay per minute)
+
+Open-ended agent work paid as it happens. The payer opens a stream
+(`stream_start`); the worker posts heartbeat proofs with `stream_beat`; the
+daemon's minutely ticker pays rate × elapsed while beats stay fresh,
+auto-pauses on staleness, and closes at the cap. Ticks under 1000 sats
+accrue instead of paying (L1 fee math). Either side stops anytime; paid
+money stays paid, unpaid accrual is never sent.
+
+- `stream_start` — `{ payee, rate, every?, max, board, name? }`; returns a fee-share warning when fees eat >20% of a tick.
+- `stream_beat` — `{ id, text? }`; worker heartbeat, kind `artifact` with a `stream:<id>` ref.
+- `stream_list`, `stream_ticks` — status + paid totals; per-tick ledger (paid/skipped/stale/closed with beat ids + txids).
+- `stream_stop` — close. Origin `stream` pays: `bsv allow stream <cap>`.
+
 Wallet creation and recovery are deliberately **not** agent tools. Enrolling,
 restoring, or replacing a wallet is a human-at-keyboard ceremony (`bsv create`,
 `bsv import`) — an agent that could re-home the wallet could be tricked into

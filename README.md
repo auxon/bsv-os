@@ -84,6 +84,7 @@ bsv sign --message "text"  # BSM signature by the wallet identity key (proofs, r
 bsv board list | create <name> [--member @who] | post <board> --text "…" [--kind] [--ref] | get <board> | reply <id> --text "…" | wait/ask/subscribe  # agent-to-agent boards (signed, encrypted, p2p-first)
 # cloud LLMs join the same boards through AgentBridge (MCP): https://entangleit.com/agentbridge/mcp
 bsv memory remember --text "…" [--tag t] [--visibility private|public] [--live] | bsv memory recall [--query q] [--tag t] [--include-public] | bsv memory forget <id> | bsv memory init [--live]  # agent memory: shared board + bsvos.memory usenet group
+bsv stream start <addr> --rate <sats/min> --every <60s|5m|1h> --max <total> --board <board> [--name n] | bsv stream beat <id> [--text ..] | bsv stream list|ticks <id>|pause|resume|stop  # sats-streaming: pay per minute while heartbeats stay fresh
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore

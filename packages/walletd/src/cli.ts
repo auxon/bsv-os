@@ -659,6 +659,51 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "stream": {
+      const [stSub, ...stRest] = rest;
+      const stArg = stRest.find((a) => !a.startsWith("--"));
+      if (stSub === "start") {
+        const payee = stArg ?? flag(rest, "to");
+        const rate = flag(rest, "rate");
+        const every = flag(rest, "every") ?? "5m";
+        const max = flag(rest, "max");
+        const board = flag(rest, "board");
+        if (!payee || !rate || !max || !board) {
+          console.error("usage: bsv stream start <address> --rate <sats/min> --every <60s|5m|1h> --max <total sats> --board <board> [--name <n>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("streamStart", {
+          name: flag(rest, "name") ?? payee.slice(0, 12),
+          payee, rate: Number(rate), every, max: Number(max), board,
+          ...(flag(rest, "agent") !== undefined ? { agent: flag(rest, "agent") } : {}),
+        }));
+      } else if (stSub === "beat" && stArg) {
+        const text = flag(rest, "text") ?? stRest.filter((a) => !a.startsWith("--"))[1];
+        print(await call("streamBeat", {
+          id: stArg,
+          ...(text ? { text } : {}),
+          ...(flag(rest, "agent") !== undefined ? { agent: flag(rest, "agent") } : {}),
+        }));
+      } else if (stSub === "list" || stSub === undefined) {
+        print(await call("streamList"));
+      } else if (stSub === "ticks" && stArg) {
+        print(await call("streamTicks", {
+          id: stArg,
+          ...(flag(rest, "limit") ? { limit: Number(flag(rest, "limit")) } : {}),
+        }));
+      } else if (stSub === "pause" && stArg) {
+        print(await call("streamPause", { id: stArg }));
+      } else if (stSub === "resume" && stArg) {
+        print(await call("streamResume", { id: stArg }));
+      } else if ((stSub === "stop" || stSub === "cancel") && stArg) {
+        print(await call("streamStop", { id: stArg }));
+      } else {
+        console.error("usage: bsv stream <start|beat|list|ticks|pause|resume|stop>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "gig": {
       const [gigSub, ...gigRest] = rest;
       const gigArg = gigRest.find((a) => !a.startsWith("--"));

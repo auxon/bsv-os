@@ -53,6 +53,9 @@ import {
   MEMORY_BOARD, USENET_BASE, USENET_GROUP, cleanTag, contentHash, forgetRefs, memoryRefs,
   mergeUsenetHits, normalizeMemoryText, recallFromPosts, refHash, usenetPayload,
 } from "./memory.ts";
+import {
+  createStream, getStream, listStreams, listTicks, setStreamStatus, streamBeatRef, tickStreams,
+} from "./streams.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
 import { completeSwap, signSwapOffer, SWAP_VERSION, SWAP_VERSION_BSV21 } from "./swaps.ts";
 import { buyOrdLock, cancelOrdLock, lockOrdinal } from "./ordlock.ts";
@@ -1509,6 +1512,84 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       method: "POST", body: payload, origin: originStr,
     });
     return { board: row.name, group: USENET_GROUP, dryRun: false, txid: paid.receipt?.txid ?? null, data: paid.data };
+  },
+  /**
+   * Sats-streaming for agent compute. streamStart opens a per-minute flow
+   * to a worker address; the minutely ticker pays rate × elapsed while
+   * fresh `stream:<id>` heartbeats land on the board, auto-pauses on
+   * staleness, and closes at the cap. Ticks below the pay floor accrue.
+   * Origin `stream` pays — approve with `bsv allow stream <cap>`.
+   */
+  streamStart: async (params) => {
+    const b = needBackend();
+    const { name, payee, rate, every, max, board, agent } = p(params) as {
+      name?: unknown; payee?: unknown; rate?: unknown; every?: unknown;
+      max?: unknown; board?: unknown; agent?: unknown;
+    };
+    const row = await getBoard(b.db, String(board ?? ""));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
+    const created = await createStream(b.db, {
+      name: typeof name === "string" ? name : "",
+      payee: typeof payee === "string" ? payee : "",
+      ratePerMin: Math.floor(Number(rate) || 0),
+      every: every ?? "5m",
+      maxTotal: Math.floor(Number(max) || 0),
+      board: row.name,
+    });
+    void agent;
+    return {
+      ...created,
+      origin: "stream",
+      approve: "bsv allow stream <cap sats>",
+      warn: created.feeShare > 0.2 ? `fee share ~${Math.round(created.feeShare * 100)}% per tick — raise the rate or lengthen the interval` : null,
+    };
+  },
+  streamList: async () => {
+    const b = needBackend();
+    return { streams: await listStreams(b.db) };
+  },
+  streamStop: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return setStreamStatus(b.db, id, "done");
+  },
+  streamPause: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return setStreamStatus(b.db, id, "paused");
+  },
+  streamResume: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const s = await getStream(b.db, id);
+    if (s.status === "done") throw Object.assign(new Error("closed streams stay closed"), { code: "BAD_STATE" });
+    const row = await setStreamStatus(b.db, id, "active");
+    await b.db("streams").where({ id }).update({ next_due: Date.now() + row.tickSecs * 1000, last_paid_at: Date.now() });
+    return getStream(b.db, id);
+  },
+  streamTicks: async (params) => {
+    const b = needBackend();
+    const { id, limit } = p(params) as { id?: unknown; limit?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    await getStream(b.db, id);
+    return { ticks: await listTicks(b.db, id, Number.isFinite(Number(limit)) ? Number(limit) : 50) };
+  },
+  /** Worker side: post a heartbeat proof to the stream's board. */
+  streamBeat: async (params) => {
+    const b = needBackend();
+    const { id, text, agent, origin } = p(params) as { id?: unknown; text?: unknown; agent?: unknown; origin?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const s = await getStream(b.db, id);
+    if (s.status === "done") throw Object.assign(new Error("stream is closed"), { code: "BAD_STATE" });
+    const row = await getBoard(b.db, s.board);
+    if (!row) throw Object.assign(new Error(`no board ${s.board}`), { code: "NOT_FOUND" });
+    return boardPublish(b, row, {
+      text: typeof text === "string" && text.trim() ? text : `beat for ${s.id}`,
+      kind: "artifact", refs: [streamBeatRef(s.id)], agent, origin,
+    });
   },
   /**
    * Sign an arbitrary short message with the wallet identity key (BSM).

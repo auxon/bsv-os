@@ -29,6 +29,9 @@ import type { Knex } from "knex";
 import type { ChainProvider } from "./chain.ts";
 import { tick } from "./monitor.ts";
 import { tickOrders } from "./nightshift.ts";
+import { getBoard, getPosts } from "./boards.ts";
+import { spendTo } from "./engine.ts";
+import { streamBeatRef, tickStreams } from "./streams.ts";
 
 const PORT = Number(process.env.BSV_WALLETD_PORT ?? 2121);
 const RUNTIME_DIR = process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os");
@@ -582,6 +585,44 @@ export async function main(): Promise<void> {
     };
     void shiftLoop();
     setInterval(() => void shiftLoop(), 60_000).unref?.();
+
+    // Streams: pay fresh heartbeats, auto-pause stale ones, minutely.
+    const streamLoop = async (): Promise<void> => {
+      try {
+        const res = await tickStreams(db, {
+          latestBeat: async (s) => {
+            const row = await getBoard(db, s.board);
+            if (!row) return null;
+            const { posts } = await getPosts(db, s.board, { limit: 500, markRead: false });
+            const beats = posts.filter((x) => x.refs.includes(streamBeatRef(s.id)) && !x.locked);
+            if (!beats.length) return null;
+            const top = beats.sort((a, b) => b.ts - a.ts)[0]!;
+            return { id: top.id, ts: top.ts };
+          },
+          pay: async (s, amount, beatId) => {
+            const r = await spendTo({
+              db, chain, origin: "stream",
+              payments: [{ to: s.payee, sats: amount }],
+              memo: ["STREAM-PAY", s.id, `beat:${beatId.slice(0, 8)}`],
+              label: `stream ${s.name} tick`,
+              description: `streamed pay ${amount} sats to ${s.payee} for ${s.name} (heartbeat ${beatId.slice(0, 8)})`,
+            });
+            return { txid: r.txid, fee: r.fee };
+          },
+        });
+        for (const r of res) {
+          if (r.outcome !== "accruing") {
+            // eslint-disable-next-line no-console
+            console.log(`stream: ${r.stream.slice(0, 12)} ${r.outcome}${r.amount ? ` ${r.amount}sats` : ""}${r.txid ? ` ${r.txid.slice(0, 12)}` : ""}`);
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("stream tick failed:", err instanceof Error ? err.message : err);
+      }
+    };
+    void streamLoop();
+    setInterval(() => void streamLoop(), 60_000).unref?.();
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("monitor disabled:", err instanceof Error ? err.message : err);

@@ -13,7 +13,7 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the twenty-two wallet tools", async () => {
+test("lists the twenty-seven wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, [
@@ -21,7 +21,8 @@ test("lists the twenty-two wallet tools", async () => {
     "events_poll", "get_version", "jev_decide", "jev_status", "list_pending",
     "market_browse", "market_buy", "market_list", "market_sync",
     "memory_forget", "memory_recall", "memory_remember", "p2p_peers",
-    "policy_probe", "wallet_balance", "wallet_status", "x402_pay",
+    "policy_probe", "stream_beat", "stream_list", "stream_start",
+    "stream_stop", "stream_ticks", "wallet_balance", "wallet_status", "x402_pay",
   ]);
   await client.close();
   await server.close();

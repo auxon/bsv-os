@@ -260,6 +260,62 @@ const TOOLS = [
       required: ["id"],
     },
   },
+  {
+    name: "stream_start",
+    description: "Open a sats stream to a worker address: pays rate sats/min while fresh heartbeats land on the board, auto-pauses on staleness, closes at the cap. Ticks below 1000 sats accrue. Origin stream pays — needs bsv allow stream.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        payee: { type: "string", description: "worker P2PKH address" },
+        rate: { type: "number", description: "sats per minute" },
+        every: { type: "string", description: "tick interval 60s..24h (default 5m)" },
+        max: { type: "number", description: "cap in total sats (min 1000)" },
+        board: { type: "string", description: "board the worker posts heartbeats to" },
+        name: { type: "string", description: "label for the ledger" },
+      },
+      required: ["payee", "rate", "max", "board"],
+    },
+  },
+  {
+    name: "stream_beat",
+    description: "Worker side: post a heartbeat proof to the stream's board. Fresh beats keep the sats flowing; stop and payment pauses by itself.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "stream id (stm_…)" },
+        text: { type: "string", description: "progress note" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "stream_list",
+    description: "List sats streams with paid totals and status.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "stream_ticks",
+    description: "Tick ledger for a stream: paid/skipped/stale/closed entries with beat ids and txids.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "stream id" },
+        limit: { type: "number", description: "max ticks (default 50)" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "stream_stop",
+    description: "Close a sats stream. Paid money stays paid; unpaid accrual is simply never sent.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "stream id" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -460,6 +516,53 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             throw new McpError(ErrorCode.InvalidParams, "id is required");
           }
           return text(await callDaemon("memoryForget", { id: args.id, agent, origin: agent }));
+        }
+        case "stream_start": {
+          if (typeof args.payee !== "string" || !args.payee) {
+            throw new McpError(ErrorCode.InvalidParams, "payee address is required");
+          }
+          if (!(Number(args.rate) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "rate must be positive sats/min");
+          }
+          if (!(Number(args.max) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "max must be positive total sats");
+          }
+          if (typeof args.board !== "string" || !args.board) {
+            throw new McpError(ErrorCode.InvalidParams, "board is required");
+          }
+          return text(await callDaemon("streamStart", {
+            name: typeof args.name === "string" && args.name ? args.name : args.payee.slice(0, 12),
+            payee: args.payee, rate: Number(args.rate),
+            every: typeof args.every === "string" ? args.every : "5m",
+            max: Number(args.max), board: args.board, agent,
+          }));
+        }
+        case "stream_beat": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("streamBeat", {
+            id: args.id,
+            ...(typeof args.text === "string" ? { text: args.text } : {}),
+            agent, origin: agent,
+          }));
+        }
+        case "stream_list":
+          return text(await callDaemon("streamList"));
+        case "stream_ticks": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("streamTicks", {
+            id: args.id,
+            ...(Number.isFinite(Number(args.limit)) ? { limit: Number(args.limit) } : {}),
+          }));
+        }
+        case "stream_stop": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("streamStop", { id: args.id }));
         }
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {
