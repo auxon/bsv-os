@@ -65,6 +65,10 @@ export function explain(error) {
       return `Blocked by spending policy: ${msg}`;
     case "RUNNER_UNAVAILABLE":
       return `No sandboxed browser available (${msg}).`;
+    case "SETUP_REQUIRED":
+      // The daemon has no OIDC client id yet. That is a public value for a
+      // PKCE client, so the shell can configure it — no terminal needed.
+      return "Sign-in is not set up on this machine yet. Add the issuer client id below.";
     case "NOT_FOUND":
       return msg;
     default:

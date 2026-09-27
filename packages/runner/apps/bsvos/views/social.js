@@ -55,29 +55,67 @@ async function runLogin(ctx, btn) {
   }
 }
 
+/**
+ * One-time OIDC client setup.
+ *
+ * The client id of a public PKCE client is not a secret, so configuring it
+ * from the shell is safe — unlike the client *secret*, which is deliberately
+ * not offered here and stays a terminal-only value. Create the client at the
+ * issuer's /console with the callback URL shown below, paste the id, done.
+ */
+function setupCard(oidc) {
+  const issuer = oidc?.issuer ?? "https://id.entangleit.com";
+  const port = oidc?.redirectPort ?? 2122;
+  const callback = `http://127.0.0.1:${port}/callback`;
+  return (
+    `<div class="card"><h3>Set up sign-in</h3>` +
+    `<p class="dim">This machine has no OIDC client registered yet, so there is nothing to sign in with.</p>` +
+    `<ol class="dim" style="padding-left:18px;margin:8px 0">` +
+      `<li>Open <span class="mono">${esc(issuer)}/console</span> and create a <b>public</b> client (PKCE, no secret).</li>` +
+      `<li>Set its redirect URI to exactly <span class="mono">${esc(callback)}</span></li>` +
+      `<li>Paste the client id below and save.</li>` +
+    `</ol>` +
+    `<form data-form="oidc">` +
+      `<label class="field"><span>Issuer</span><input name="issuer" value="${esc(issuer)}" spellcheck="false"></label>` +
+      `<label class="field"><span>Client id</span><input name="clientId" placeholder="from the issuer console" spellcheck="false" required></label>` +
+      `<label class="field"><span>Callback port</span><input name="redirectPort" inputmode="numeric" value="${esc(port)}"></label>` +
+      `<div class="card-actions"><button class="btn primary" type="submit">Save and sign in</button></div>` +
+    `</form>` +
+    `<p class="dim" style="margin-top:10px">A confidential client (one with a secret) stays terminal-only: <span class="mono">bsv login --client-id=&lt;id&gt; --client-secret=&lt;secret&gt;</span></p>` +
+    `</div>`
+  );
+}
+
 export const identity = {
   id: "identity",
   title: "Identity",
   group: "Identity",
   note: "Who you are on the network: your system sign-in, your identity key, and the certificates you hold.",
   async load(ctx) {
-    const [sess, acct, certs, auth] = await Promise.all([
+    const [sess, acct, certs, auth, cfg] = await Promise.all([
       tryRpc("identitySession"),
       tryRpc("twetchStatus"),
       tryRpc("certList"),
       tryRpc("isAuthenticated"),
+      tryRpc("identityConfigStatus"),
     ]);
     ctx.data.session = sess.ok ? sess.value?.session ?? null : null;
     ctx.data.twetch = acct.ok ? acct.value : null;
     ctx.data.certs = certs.ok ? certs.value?.certs ?? [] : [];
     ctx.data.identityKey = auth.ok ? auth.value?.identityKey ?? null : null;
+    // A public PKCE client id is not a secret, so the shell can configure it.
+    // The panel could not: it shelled out to `bsv login --force` with no
+    // client id and dead-ended on a terminal instruction.
+    ctx.data.oidc = cfg.ok ? cfg.value?.config ?? null : null;
     ctx.data.disclosure = null;
     ctx.data.importNote = null;
   },
   render(ctx) {
-    const { session, twetch, certs = [], identityKey } = ctx.data;
+    const { session, twetch, certs = [], identityKey, oidc } = ctx.data;
+    const needsSetup = !session && !(oidc?.clientId ?? "");
     return (
       `<div class="split">` +
+        (needsSetup ? setupCard(oidc) : "") +
         `<div class="card"><h3>System sign-in</h3>` +
           (session
             ? kv([
@@ -90,8 +128,15 @@ export const identity = {
                 `<button class="btn" data-login>Sign in again</button>` +
                 `<button class="btn danger" data-logout>Sign out</button>` +
               `</div>`
-            : `<p class="dim">Not signed in. Signing in links this wallet to your account for posting and payouts.</p>` +
-              `<div class="card-actions"><button class="btn primary" data-login>Sign in with Twetch</button></div>`) +
+            : needsSetup
+              ? `<p class="dim">Set up the issuer client below, then sign in.</p>`
+              : `<p class="dim">Not signed in. Signing in links this wallet to your account for posting and payouts.</p>` +
+                `<div class="card-actions"><button class="btn primary" data-login>Sign in with Twetch</button></div>`) +
+          (oidc
+            ? `<p class="dim" style="margin-top:10px">Issuer <span class="mono">${esc(oidc.issuer)}</span> · client <span class="mono">${esc(
+                oidc.clientId || "not set",
+              )}</span> · callback <span class="mono">http://127.0.0.1:${esc(oidc.redirectPort)}/callback</span></p>`
+            : "") +
         `</div>` +
 
         `<div class="card"><h3>Identity key</h3>` +
@@ -144,6 +189,31 @@ export const identity = {
     );
   },
   bind(root, ctx) {
+    root.addEventListener("submit", async (e) => {
+      const form = e.target.closest('[data-form="oidc"]');
+      if (!form) return;
+      e.preventDefault();
+      const clientId = form.clientId.value.trim();
+      if (!clientId) return;
+      const port = intOr(form.redirectPort.value, 2122);
+      try {
+        // identityConfigure persists; identityLoginStart would only apply the
+        // id for a single attempt, which is why the terminal path goes
+        // through the CLI instead.
+        await rpc("identityConfigure", {
+          issuer: form.issuer.value.trim() || undefined,
+          clientId,
+          redirectPort: port,
+        });
+        ctx.toast("Client saved");
+        await ctx.reload();
+        // Straight into the flow the user was trying to start.
+        root.querySelector("[data-login]")?.click();
+      } catch (err) {
+        ctx.fail(err);
+      }
+    });
+
     root.addEventListener("click", async (e) => {
       const login = e.target.closest("[data-login]");
       if (login) return runLogin(ctx, login);

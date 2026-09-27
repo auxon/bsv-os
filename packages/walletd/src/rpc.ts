@@ -2382,6 +2382,25 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const b = needBackend();
     return { config: await setIdentityConfig(b.db, p(params)) };
   },
+  /**
+   * Read the OIDC config so a UI can tell "not set up yet" from "signed out"
+   * without starting a login flow to find out. The client secret is reduced
+   * to a boolean — a page must never be able to read it back, and a public
+   * PKCE client does not have one anyway.
+   */
+  identityConfigStatus: async () => {
+    const b = needBackend();
+    const c = await identityConfig(b.db);
+    return {
+      config: {
+        issuer: c.issuer,
+        clientId: c.clientId,
+        redirectPort: c.redirectPort,
+        scope: c.scope,
+        hasSecret: Boolean(c.clientSecret),
+      },
+    };
+  },
   identityLoginStart: async (params) => {
     const b = needBackend();
     const raw = p(params);

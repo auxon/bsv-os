@@ -193,6 +193,27 @@ test("bsvos app: the daemon serves every file the page can request", async () =>
   assert.equal(resolveRunnerAppFile(appDir, "/../../../etc/passwd"), null, "traversal refused");
 });
 
+test("bsvos app: OIDC setup is possible in-app, and never exposes a secret", () => {
+  const social = read("views/social.js");
+  const rpc = read("lib/rpc.js");
+  // A public PKCE client id is not a secret, so the shell configures it.
+  // Before this the only route was `bsv login --client-id=…` in a terminal,
+  // which is where the panel dead-ended.
+  assert.ok(/identityConfigure/.test(social), "setup persists via identityConfigure");
+  assert.ok(/data-form="oidc"/.test(social), "setup form is rendered");
+  assert.ok(/identityConfigStatus/.test(social), "setup state is detected, not guessed");
+  // The secret must never round-trip through a page.
+  assert.ok(!/clientSecret/.test(social), "no client secret field in the UI");
+  const src = fs.readFileSync(path.resolve(here, "../src/rpc.ts"), "utf8");
+  const status = /identityConfigStatus: async \(\) => \{([\s\S]*?)\n  \},/.exec(src);
+  assert.ok(status, "identityConfigStatus handler found");
+  assert.ok(!/clientSecret: c\.clientSecret/.test(status[1]), "secret is not returned");
+  assert.ok(/hasSecret: Boolean\(c\.clientSecret\)/.test(status[1]), "secret is reduced to a boolean");
+  // The exact callback the issuer console must be given.
+  assert.ok(/http:\/\/127\.0\.0\.1:\$\{port\}\/callback/.test(social), "callback URL is shown");
+  assert.ok(/SETUP_REQUIRED/.test(rpc), "SETUP_REQUIRED is explained, not dumped raw");
+});
+
 test("store catalog: bsvOS owns 127.0.0.1 and localhost stays shared", () => {
   const catalog = readCatalog();
   const domains = catalog.apps.map((a) => a.domain);
