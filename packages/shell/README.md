@@ -1,5 +1,18 @@
 # BSV OS shell plugins (Quickshell)
 
+> **Scope: wallet-critical only, and frozen by decision.** See "The front-end
+> split" in the root README. The macOS front end is the bsvOS shell app
+> (`packages/runner/apps/bsvos/`), which is where new user-facing features go.
+> This panel stays as the Linux bar integration: approvals, policy, agents,
+> send/receive, requests, receipts, identity. Do **not** mirror a new feature
+> here to keep parity — it cannot reuse the shell app's code (QML vs a web
+> page), and the split is intentional.
+>
+> Consequence worth knowing: features added after ~Sept 2026 are absent here.
+> As of writing that includes sweeping (`bsv sweep`), media inscribing,
+> Twetch, watch/commitments/funds, and the first-run setup wizard. Reach for
+> the `bsv` CLI on Linux for those.
+
 Omarchy manifest plugin `bsv.wallet` (source: `plugin/`). Installed by hand
 per the shell's third-party contract — `~/.config/omarchy/plugins/bsv.wallet/`
 is NOT a git checkout, so re-copy on change, then rescan:

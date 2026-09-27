@@ -3,11 +3,45 @@
 Omarchy remix with a system BRC-100 wallet. Every app, agent, and shell
 interaction can transact; keys never leave the daemon.
 
-Two front ends for the same daemon:
+Two front ends for the same daemon, and the capability always lives in the
+daemon first — both UIs drive the same JSON-RPC surface, so something built
+for one is usable from the other without new plumbing.
 
 - **Linux (Omarchy):** a Quickshell bar pill + panel — `packages/shell/plugin/`.
-- **macOS:** the **bsvOS shell app** — a bundled runner app that is the
-  replacement for that panel, plus the `bsv` CLI for everything.
+- **macOS:** the **bsvOS shell app** — a bundled runner app, plus the `bsv`
+  CLI for everything else.
+
+### The front-end split (decided, not drifted)
+
+The two UIs are **deliberately not at parity**, and neither is expected to
+catch up with the other:
+
+| | Quickshell panel (Linux) | bsvOS shell app (macOS) |
+| --- | --- | --- |
+| Scope | wallet-critical only | everything the daemon exposes |
+| Frozen at | 27 sections, ~3,200 lines | grows with each feature |
+| Examples | approvals, policy, agents, send/receive, requests, receipts, identity | the above plus inscribing, Twetch (feed/alerts/profile/memes/market), the app store, work boards, watch/commitments/funds, first-run setup |
+| Clipboard, links, file pickers | Wayland-only (`wl-copy`, `xdg-open`) | browser APIs |
+
+**Where a new feature goes.** Build the capability in `packages/walletd`
+always. Then:
+
+- **UI it in the shell app** (`packages/runner/apps/bsvos/`) — that is the
+  default home for anything user-facing.
+- **Add it to the panel only if it is wallet-critical** and you accept
+  maintaining it twice, because the panel cannot reuse the shell app's code
+  (QML vs a web page).
+- **CLI-only is a valid answer** for key-material paths and operator tooling.
+
+Precedent for the split: the panel's four platform problems — `wl-copy`,
+`xdg-open`, native file dialogs, and `systemd-run` for app launching — do not
+exist in a browser, so porting the panel to macOS would have meant rewriting
+it anyway. The shell app was that rewrite; the panel stays as the Linux bar
+integration it already was.
+
+If you are an agent picking this up: **do not mirror a new feature across
+both UIs.** Put it in the daemon, put it in the shell app, and leave the
+panel unless it is wallet-critical.
 
 ## Install
 
