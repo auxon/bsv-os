@@ -83,11 +83,16 @@ survive restarts. Shipped 2026-09-27 (`bsv watch`).
 Two more ideas from the audit remain open, and are the honest descendants:
 
 1. **Time as a ledger dimension.** Bonsai's `Timechain<TId,TData>` treats
-   time and duration as part of the record. bsvOS has three half-built
-   versions of that idea already — heartbeat-gated sats streams,
-   daemon-enforced post-dated capsules (bare CLTV is dead on BSV; 1,500 sats
-   were burned proving it), and cast episode beats. They want to become one
-   `timed commitment` primitive.
+   time and duration as part of the record. bsvOS had two implementations of
+   that idea — heartbeat-gated sats streams and daemon-enforced post-dated
+   capsules (bare CLTV is dead on BSV; 1,500 sats were burned proving it) —
+   and cast pay-per-minute, which is a *stream* underneath
+   (`cast.ts` → `createStream`), not a third engine. The scheduling math is
+   now one pure, tested ladder in `packages/walletd/src/commitment.ts`
+   (not due → nothing left → condition unmet → too small to send → release),
+   used by the stream ticker, with `bsv commitments` /
+   `commitment_list` answering "what is this wallet on the hook for?" across
+   streams, cast sessions, and capsules in one call. Shipped 2026-09-27.
 2. **Proof without disclosure.** "MPC for critical data" reduces, in practice,
    to something bsvOS genuinely lacks: proving `balance ≥ X` without revealing
    which UTXOs. Today x402 publishes amounts and links addresses on-chain.

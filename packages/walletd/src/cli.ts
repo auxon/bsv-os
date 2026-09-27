@@ -606,6 +606,34 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "commitments": {
+      // One view of every timed commitment: streams, cast sessions, capsules.
+      const res = (await call("commitmentList")) as {
+        result?: {
+          commitments?: Array<Record<string, unknown>>;
+          exposure?: { open?: number; cappedSats?: number; nextDueAt?: number };
+        };
+      };
+      const rows = res.result?.commitments ?? [];
+      if (rows.length === 0) {
+        console.log("no commitments — nothing is scheduled to move money");
+        break;
+      }
+      for (const c of rows) {
+        const when = Number(c.nextDueAt) > 0 ? new Date(Number(c.nextDueAt)).toISOString().replace("T", " ").slice(0, 19) : "—";
+        const money = `${Number(c.paidSats)}/${Number(c.capSats)} sats`;
+        console.log(
+          `${String(c.kind).padEnd(8)} ${String(c.id).padEnd(18)} ${money.padEnd(20)} next ${when.padEnd(20)} ${String(c.status).padEnd(9)} ${String(c.label ?? "").slice(0, 40)}`,
+        );
+        console.log(`         ↳ ${c.condition} → ${c.payee}`);
+      }
+      const ex = res.result?.exposure;
+      if (ex) {
+        console.log("");
+        console.log(`${ex.open} open, up to ${ex.cappedSats} sats still releasable`);
+      }
+      break;
+    }
     case "stream": {
       const [stSub, ...stRest] = rest;
       const stArg = stRest.find((a) => !a.startsWith("--"));
@@ -1693,7 +1721,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|commitments|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

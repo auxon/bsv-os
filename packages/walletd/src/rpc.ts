@@ -15,6 +15,7 @@ import { listPolicies, pendingRequests, probe, seedRequest, setPolicy } from "./
 import { qrDataUrl, qrDataUrlText } from "./qr.ts";
 import { readEvents } from "./events.ts";
 import { watchPoll, watchTailCursor, type WatchCursor } from "./watch.ts";
+import { commitmentExposure, listCommitments } from "./commitment.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
@@ -1560,6 +1561,16 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   streamList: async () => {
     const b = needBackend();
     return { streams: await listStreams(b.db) };
+  },
+  /**
+   * Every timed commitment in one place: sats streams, cast pay-per-minute
+   * sessions, and time capsules, with caps, paid totals, and the condition
+   * that releases each one. `bsv commitments` / `commitment_list`.
+   */
+  commitmentList: async () => {
+    const b = needBackend();
+    const commitments = await listCommitments(b.db);
+    return { commitments, exposure: commitmentExposure(commitments) };
   },
   streamStop: async (params) => {
     const b = needBackend();

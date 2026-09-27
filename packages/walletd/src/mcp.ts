@@ -302,6 +302,11 @@ const TOOLS = [
     },
   },
   {
+    name: "commitment_list",
+    description: "Every timed commitment in one list: sats streams, cast pay-per-minute sessions, and time capsules — with cap, paid total, remaining, next due time, status, and the condition that releases each one. Use this to answer \"what is this wallet on the hook for?\" in one call instead of reading streams, cast sessions, and capsules separately. Returns an `exposure` summary (open count, total sats still releasable, next due).",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
     name: "stream_list",
     description: "List sats streams with paid totals and status.",
     inputSchema: { type: "object" as const, properties: {} },
@@ -695,6 +700,8 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             agent, origin: agent,
           }));
         }
+        case "commitment_list":
+          return text(await callDaemon("commitmentList"));
         case "stream_list":
           return text(await callDaemon("streamList"));
         case "stream_ticks": {

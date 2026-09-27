@@ -14,6 +14,7 @@
  * the start response says the fee share out loud.
  */
 import type { Knex } from "knex";
+import { advanceDue, dueCommitment, graceMsFor } from "./commitment.ts";
 import { randomBytes } from "node:crypto";
 
 export type StreamStatus = "active" | "paused" | "done";
@@ -208,10 +209,8 @@ export async function tickStreams(
   for (const r of active) {
     const s = toStream(r);
     if (s.nextDue > now || s.tickSecs <= 0) continue;
-    const advance = () => {
-      const periods = Math.floor((now - s.nextDue) / (s.tickSecs * 1000)) + 1;
-      return s.nextDue + periods * s.tickSecs * 1000;
-    };
+    // No backfill after downtime: missed periods are skipped, not paid later.
+    const advance = () => advanceDue(s.nextDue, s.tickSecs, now);
     const note = async (status: StreamTick["status"], detail: string, extra: Partial<{ beatId: string | null; amount: number; txid: string | null }> = {}) => {
       await db("stream_ticks").insert({
         stream_id: s.id, beat_id: extra.beatId ?? null, amount: extra.amount ?? 0,
@@ -219,34 +218,64 @@ export async function tickStreams(
       });
     };
     const remaining = s.maxTotal - s.paidTotal;
+    // Cheap pre-check so an exhausted stream never touches the board; the
+    // shared ladder in commitment.ts re-checks the same condition.
     if (remaining < MIN_TICK_SATS) {
       await db("streams").where({ id: s.id }).update({ status: "done", next_due: advance() });
       await note("closed", `budget exhausted (remainder ${remaining} sats below pay floor — left unpaid)`);
       out.push({ stream: s.id, outcome: "closed" });
       continue;
     }
+    // Liveness: a heartbeat on the board, fresh within grace.
     let beat: BeatInfo | null = null;
     try {
       beat = await deps.latestBeat(s);
     } catch {
       beat = null;
     }
-    const graceMs = Math.max(s.tickSecs * 2 * 1000, 180_000);
-    if (!beat || now - beat.ts > graceMs) {
+    const graceMs = graceMsFor(s.tickSecs);
+    const ageMs = beat ? now - beat.ts : Number.MAX_SAFE_INTEGER;
+    const decision = dueCommitment(
+      {
+        cadenceSecs: s.tickSecs,
+        ratePerMin: s.ratePerMin,
+        fixedSats: 0,
+        capSats: s.maxTotal,
+        paidSats: s.paidTotal,
+        minPaymentSats: MIN_TICK_SATS,
+        lastPaidAt: s.lastPaidAt,
+        nextDueAt: s.nextDue,
+      },
+      {
+        fresh: !!beat && ageMs <= graceMs,
+        ageMs,
+        reason: beat
+          ? `last beat ${beat.id.slice(0, 8)} is ${Math.round(ageMs / 1000)}s old (grace ${Math.round(graceMs / 1000)}s) — auto-paused, resume when beats return`
+          : "no heartbeat on the board yet — auto-paused",
+      },
+      now,
+    );
+    if (decision.kind === "wait") continue;
+    if (decision.kind === "exhausted") {
+      await db("streams").where({ id: s.id }).update({ status: "done", next_due: advance() });
+      await note("closed", `budget exhausted (remainder ${decision.remaining} sats below pay floor — left unpaid)`);
+      out.push({ stream: s.id, outcome: "closed" });
+      continue;
+    }
+    if (decision.kind === "stale") {
       await db("streams").where({ id: s.id }).update({ status: "paused", next_due: advance() });
-      await note("stale", beat ? `last beat ${beat.id.slice(0, 8)} is ${Math.round((now - beat.ts) / 1000)}s old (grace ${Math.round(graceMs / 1000)}s) — auto-paused, resume when beats return` : "no heartbeat on the board yet — auto-paused");
+      await note("stale", decision.reason);
       out.push({ stream: s.id, outcome: "paused" });
       continue;
     }
-    const elapsedMin = (now - s.lastPaidAt) / 60_000;
-    let amount = Math.floor(s.ratePerMin * elapsedMin);
-    if (amount > remaining) amount = remaining;
-    if (amount < MIN_TICK_SATS) {
+    if (decision.kind === "accruing") {
       await db("streams").where({ id: s.id }).update({ next_due: advance() });
-      await note("skipped", `accrued ${amount} sats below ${MIN_TICK_SATS} floor — carrying to next tick`, { beatId: beat.id, amount });
-      out.push({ stream: s.id, outcome: "accruing", amount });
+      await note("skipped", `accrued ${decision.amount} sats below ${MIN_TICK_SATS} floor — carrying to next tick`, { beatId: beat?.id ?? null, amount: decision.amount });
+      out.push({ stream: s.id, outcome: "accruing", amount: decision.amount });
       continue;
     }
+    const amount = decision.amount;
+    if (!beat) continue; // unreachable: a release requires a fresh beat
     try {
       const { txid } = await deps.pay(s, amount, beat.id);
       await db("streams").where({ id: s.id }).update({
