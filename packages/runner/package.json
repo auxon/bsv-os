@@ -1,0 +1,5 @@
+{
+  "name": "@bsv-os/runner",
+  "private": true,
+  "type": "module"
+}

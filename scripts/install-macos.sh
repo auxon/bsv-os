@@ -104,7 +104,22 @@ load_agent() {
     launchctl unload "$AGENT" >/dev/null 2>&1 || true
     launchctl load -w "$AGENT"
   fi
-  sleep 2
+  wait_health
+}
+
+# Poll /health instead of a fixed sleep. A first run also has to generate the
+# TLS cert and load node_modules cold, which can outrun any fixed delay and
+# make a healthy daemon look dead.
+wait_health() {
+  local waited=0
+  while [ "$waited" -lt 30 ]; do
+    if curl -sk --max-time 2 https://127.0.0.1:2121/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
 }
 
 status() {
@@ -113,7 +128,7 @@ status() {
   say "==> daemon:"
   curl -sk --max-time 3 https://127.0.0.1:2121/health || say "    no answer on 127.0.0.1:2121 (see $LOG_DIR/bsv-walletd.err.log)"
   say ""
-  if command -v "$DIR/packages/walletd/dist/cli.js" >/dev/null 2>&1 || [ -x "$DIR/packages/walletd/dist/cli.js" ]; then
+  if [ -x "$DIR/packages/walletd/dist/cli.js" ]; then
     node "$DIR/packages/walletd/dist/cli.js" status 2>/dev/null || say "    run: bsv create   (or: bsv import)"
   fi
 }
