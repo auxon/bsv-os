@@ -320,8 +320,15 @@ async function authenticatedPost(
 ): Promise<Record<string, unknown>> {
   const attempts: Array<{ headers: Record<string, string>; body: URLSearchParams }> = [];
   if (clientSecret) {
+    // client_secret_basic first, then client_secret_post. Issuers pick one:
+    // the Twetch console registers confidential clients as client_secret_post
+    // while advertising client_secret_basic support, so trying only Basic
+    // made every confidential client a dead end.
     const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
     attempts.push({ headers: { "content-type": FORM, authorization: `Basic ${basic}` }, body: new URLSearchParams(form) });
+    const postBody = new URLSearchParams(form);
+    postBody.set("client_secret", clientSecret);
+    attempts.push({ headers: { "content-type": FORM }, body: postBody });
   }
   attempts.push({ headers: { "content-type": FORM }, body: new URLSearchParams(form) });
   let last: Response | null = null;
@@ -342,6 +349,18 @@ async function authenticatedPost(
     last = res;
     detail = await res.text().catch(() => "");
     if (res.status !== 401 && res.status !== 400) break;
+  }
+  // invalid_client with no secret on our side means the client is registered
+  // as confidential. Say so — the raw issuer JSON does not, and the fix is
+  // in the issuer console, not in anything the caller can retry.
+  if (/invalid_client/.test(detail) && !clientSecret) {
+    fail(
+      "CLIENT_AUTH",
+      "issuer rejected the client: it is registered as confidential (needs a client secret), " +
+        "but this wallet is configured without one. Either create the client with the " +
+        "issuer console's \"public client\" option (PKCE, no secret), or configure the secret " +
+        "in a terminal: bsv login --client-id=<id> --client-secret=<secret>",
+    );
   }
   fail("TOKEN", `issuer rejected the request (${last?.status ?? "?"})${detail ? `: ${detail.slice(0, 200)}` : ""}`);
 }

@@ -69,6 +69,9 @@ export function explain(error) {
       // The daemon has no OIDC client id yet. That is a public value for a
       // PKCE client, so the shell can configure it — no terminal needed.
       return "Sign-in is not set up on this machine yet. Add the issuer client id below.";
+    case "CLIENT_AUTH":
+      // The issuer knows the client but will not accept it without a secret.
+      return String(error?.message ?? msg);
     case "NOT_FOUND":
       return msg;
     default:

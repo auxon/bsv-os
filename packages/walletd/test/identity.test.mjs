@@ -35,6 +35,11 @@ function makeIssuer() {
     audience: "bsv-os-test",
     expiresIn: 3600,
     failRefresh: false,
+    // Confidential-client simulation: reject a token request unless the
+    // secret arrives, and record how it arrived.
+    secret: null,
+    secretVia: null,
+    rejectPublic: false,
     sub: "user-42",
     handle: "satoshi",
     tokenCalls: [],
@@ -94,6 +99,23 @@ function makeIssuer() {
           return;
         }
         control.tokenCalls.push(Object.fromEntries(form));
+        if (control.secret !== null) {
+          // A confidential issuer: only accept the secret via the body
+          // (client_secret_post), which is what the Twetch console registers.
+          const viaHeader = /^Basic /.test(req.headers.authorization ?? "");
+          if (viaHeader) {
+            json(401, { error: "invalid_client", error_description: "client authentication failed" });
+            return;
+          }
+          if (form.get("client_secret") !== control.secret) {
+            json(401, { error: "invalid_client", error_description: "client authentication failed" });
+            return;
+          }
+          control.secretVia = "client_secret_post";
+        } else if (/invalid_client/.test(JSON.stringify(control.rejectPublic))) {
+          json(401, { error: "invalid_client", error_description: "client authentication failed" });
+          return;
+        }
         if (form.get("grant_type") === "refresh_token") {
           if (control.failRefresh) {
             json(401, { error: "invalid_client" });
@@ -319,6 +341,83 @@ test("re-login is allowed once the stored session has expired", async () => {
     const status = await loginStatus(db);
     assert.equal(status.state, "done");
     assert.equal(status.session.sub, "user-42");
+  } finally {
+    cancelLogin();
+    await issuer.stop();
+    await db.destroy();
+  }
+});
+
+test("a confidential issuer is satisfied by client_secret_post", async () => {
+  // The Twetch console registers confidential clients as client_secret_post
+  // while advertising client_secret_basic. Before this, the wallet only tried
+  // Basic and then a bare body, so every confidential client was a dead end.
+  const db = await memdb();
+  const issuer = await makeIssuer();
+  issuer.control.secret = "s3cret-value";
+  await issuer.start();
+  try {
+    await setIdentityConfig(db, {
+      issuer: issuer.base,
+      clientId: "bsv-os-test",
+      clientSecret: "s3cret-value",
+      redirectPort: 0,
+      scope: "openid profile offline_access",
+    });
+    const { res } = await login(db, issuer);
+    const status = await loginStatus(db);
+    assert.equal(status.state, "done", "sign-in completed");
+    assert.equal(issuer.control.secretVia, "client_secret_post", "secret arrived in the body");
+    assert.ok(res);
+  } finally {
+    cancelLogin();
+    await issuer.stop();
+    await db.destroy();
+  }
+});
+
+test("a confidential client with no configured secret fails as CLIENT_AUTH", async () => {
+  // The raw issuer JSON ("invalid_client") does not tell the operator what to
+  // do; the fix is in the issuer console, so the error has to say so.
+  const db = await memdb();
+  const issuer = await makeIssuer();
+  issuer.control.secret = "s3cret-value";
+  await issuer.start();
+  try {
+    await configured(db, issuer.base);
+    const started = await startLogin(db);
+    const auth = new URL(started.authUrl);
+    issuer.control.nonce = auth.searchParams.get("nonce");
+    const res = await fetch(
+      `${started.redirectUri}?code=good&state=${encodeURIComponent(auth.searchParams.get("state"))}`,
+    );
+    await res.text();
+    // loginStatus reports the failure as a state, not a throw — that is what
+    // the shell's poll loop consumes.
+    const status = await loginStatus(db);
+    assert.equal(status.state, "error");
+    assert.equal(status.error?.code, "CLIENT_AUTH");
+    assert.match(status.error?.message ?? "", /confidential/);
+    assert.match(status.error?.message ?? "", /public client/, "names the console option");
+    assert.match(status.error?.message ?? "", /--client-secret/, "names the terminal fallback");
+  } finally {
+    cancelLogin();
+    await issuer.stop();
+    await db.destroy();
+  }
+});
+
+test("a public client still needs no secret", async () => {
+  const db = await memdb();
+  const issuer = await makeIssuer();
+  issuer.control.secret = null;
+  await issuer.start();
+  try {
+    await configured(db, issuer.base);
+    const { res } = await login(db, issuer);
+    await res.text();
+    const status = await loginStatus(db);
+    assert.equal(status.state, "done", "the public PKCE path is unchanged");
   } finally {
     cancelLogin();
     await issuer.stop();
