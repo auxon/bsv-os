@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 import {
   appDataDir,
   buildLaunchPlan,
+  chromiumCandidates,
   findChromium,
   findExtensionDir,
   isLoopbackUrl,
+  openExternalCommand,
+  profilePidsFromPs,
   withBridgeFragment,
 } from "../src/launcher.ts";
 
@@ -63,4 +66,34 @@ test("environment resolves chromium and the repo extension", () => {
   assert.ok(ext && fs.existsSync(path.join(ext, "manifest.json")));
   const here = path.dirname(fileURLToPath(import.meta.url));
   assert.ok(fs.existsSync(path.join(here, "..", "..", "runner", "extension", "manifest.json")));
+});
+
+test("chromium candidates cover macOS app bundles and honor the override", () => {
+  const mac = chromiumCandidates("darwin", "/Users/rah", { BSV_RUNNER_CHROMIUM: "/opt/x/chrome" });
+  assert.equal(mac[0], "/opt/x/chrome");
+  assert.ok(mac.includes("/Users/rah/Google Chrome.app/Contents/MacOS/Google Chrome"));
+  assert.ok(mac.includes("/Applications/Chromium.app/Contents/MacOS/Chromium"));
+  assert.ok(mac.includes("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"));
+  const lin = chromiumCandidates("linux", "/home/rah", {});
+  assert.ok(lin.includes("/usr/bin/chromium"));
+  assert.ok(lin.includes("/usr/bin/google-chrome"));
+  assert.ok(!lin.some((c) => c.includes(".app/")));
+});
+
+test("ps-based profile detection parses pid/command lines", () => {
+  const dir = "/home/rah/.local/share/bsv-os/apps/demo";
+  const out = [
+    "  123 /usr/bin/chromium --app=https://x/ --user-data-dir=/home/rah/.local/share/bsv-os/apps/demo",
+    "  456 /usr/bin/chromium --user-data-dir=/other/profile",
+    "  789 Chrome Helper --user-data-dir=/home/rah/.local/share/bsv-os/apps/demo (Renderer)",
+    "not a ps line",
+    "",
+  ].join("\n");
+  assert.deepEqual(profilePidsFromPs(out, dir), [123, 789]);
+  assert.deepEqual(profilePidsFromPs("", dir), []);
+});
+
+test("external opener is platform-correct", () => {
+  assert.deepEqual(openExternalCommand("darwin", "https://x/"), { cmd: "open", args: ["https://x/"] });
+  assert.deepEqual(openExternalCommand("linux", "https://x/"), { cmd: "xdg-open", args: ["https://x/"] });
 });

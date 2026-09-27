@@ -9,6 +9,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { openExternalCommand, profilePidsFromPs } from "./launcher.ts";
 
 const SOCK = path.join(process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os"), "bsv-walletd.sock");
 const HTTPS_URL = process.env.BSV_WALLETD_URL ?? "";
@@ -222,7 +223,7 @@ function parseExpiry(raw: string | undefined): number {
  * per-app profile + window.bsv bridge). False when the runner is
  * unavailable — the caller falls back to the default browser. */
 async function openInRunner(startUrl: string, domain: string): Promise<boolean> {
-  if (process.platform !== "linux") return false;
+  if (process.platform !== "linux" && process.platform !== "darwin") return false;
   const { findChromium, findExtensionDir, buildLaunchPlan } = await import("./launcher.ts");
   const { randomBytes } = await import("node:crypto");
   const { createServer } = await import("node:http");
@@ -289,13 +290,25 @@ async function openInRunner(startUrl: string, domain: string): Promise<boolean> 
 }
 
 /** PIDs whose command line carries this app's private browser profile. */
-function profilePids(dataDir: string): number[] {
+async function profilePids(dataDir: string): Promise<number[]> {
   const pids: number[] = [];
   let entries: string[];
   try {
     entries = fs.readdirSync("/proc");
   } catch {
-    return pids;
+    // macOS: /proc does not exist — ask ps (only runs while waiting on a window).
+    try {
+      const { execFile } = await import("node:child_process");
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile("ps", ["-axo", "pid=,command="], { maxBuffer: 8 * 1024 * 1024 }, (e, stdout) => {
+          if (e) reject(e);
+          else resolve(stdout);
+        });
+      });
+      return profilePidsFromPs(out, dataDir);
+    } catch {
+      return pids;
+    }
   }
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
@@ -313,7 +326,7 @@ function profilePids(dataDir: string): number[] {
 async function waitForProfile(dataDir: string, timeoutMs: number): Promise<boolean> {
   const start = Date.now();
   for (;;) {
-    if (profilePids(dataDir).length > 0) return true;
+    if ((await profilePids(dataDir)).length > 0) return true;
     if (Date.now() - start > timeoutMs) return false;
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -321,7 +334,7 @@ async function waitForProfile(dataDir: string, timeoutMs: number): Promise<boole
 
 async function waitForProfileGone(dataDir: string): Promise<void> {
   for (;;) {
-    if (profilePids(dataDir).length === 0) return;
+    if ((await profilePids(dataDir)).length === 0) return;
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
@@ -1598,9 +1611,11 @@ async function main(): Promise<void> {
       }
       console.log("Open the Twetch sign-in page:\n");
       console.log(`  ${started.result.authUrl}\n`);
-      if (!rest.includes("--no-open") && process.platform === "linux") {
+      if (!rest.includes("--no-open") && (process.platform === "linux" || process.platform === "darwin")) {
+        const { openExternalCommand } = await import("./launcher.ts");
         const { execFile } = await import("node:child_process");
-        execFile("xdg-open", [started.result.authUrl], () => {
+        const { cmd, args } = openExternalCommand(process.platform, started.result.authUrl);
+        execFile(cmd, args, () => {
           /* URL is printed either way */
         });
       }
@@ -1694,9 +1709,10 @@ async function main(): Promise<void> {
         }
         if (!launched) {
           console.log(url);
-          if (process.platform === "linux") {
+          if (process.platform === "linux" || process.platform === "darwin") {
             const { execFile } = await import("node:child_process");
-            execFile("xdg-open", [url], (e) => {
+            const { cmd, args } = openExternalCommand(process.platform, url);
+            execFile(cmd, args, (e) => {
               if (e) console.error("(could not open browser automatically)");
             });
           }

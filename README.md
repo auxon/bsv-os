@@ -17,6 +17,31 @@ Dev checkout path: `scripts/post-install.sh` (clones, builds, runs tests).
 Full walkthrough: [UserGuide.md](UserGuide.md). Building agents and apps
 that spend: [AGENT-ECONOMY.md](AGENT-ECONOMY.md).
 
+### macOS (daemon + CLI + runner apps)
+
+The wallet daemon is Node/TypeScript and runs on macOS (Keychain instead of
+libsecret). From a checkout:
+
+```bash
+bash scripts/install-macos.sh        # clone/update, build, launchd agent, bsv on PATH
+bash scripts/install-macos.sh status # service + wallet status
+bash scripts/install-macos.sh uninstall
+```
+
+Requires Node ≥ 22 (`brew install node`) and Xcode command-line tools.
+What you get: the full daemon (`127.0.0.1:2121` + socket), every CLI feature
+(boards, memory, streams, cast, capsules, x402), runner app windows (opened
+in Google Chrome from `/Applications`), P2P and torrents.
+
+macOS notes:
+
+- Wallet data lives in `~/.local/share/bsv-os` (same layout as Linux).
+- First `bsv unlock` triggers a one-time Keychain access prompt for `node`.
+- The Hyprland/Quickshell panel is Linux-only — `bsv` is the console there.
+- Hosted extras (public Cast/x402 URLs) need a tunnel, e.g. `brew install cloudflared`.
+- Hosted extras (public Cast/x402 URLs) need a tunnel, e.g.
+  `brew install cloudflared`.
+
 ## Layout
 
 - `packages/walletd/` — `bsv-walletd` daemon (P0 in progress)
