@@ -20,7 +20,8 @@ async function loadViews() {
   const apps = await import(new URL("views/apps.js", appDir).href);
   const work = await import(new URL("views/work.js", appDir).href);
   const { inscribe } = await import(new URL("views/inscribe.js", appDir).href);
-  return [...wallet.default, ...money.default, inscribe, ...social.default, ...apps.default, ...work.default];
+  const twetch = await import(new URL("views/twetch.js", appDir).href);
+  return [...wallet.default, ...money.default, inscribe, ...social.default, ...twetch.default, ...apps.default, ...work.default];
 }
 
 /** A ctx whose data is a realistic (non-empty) daemon payload for that view. */
@@ -121,6 +122,32 @@ function fixtures() {
     },
     faucet: { faucet: { funded: true, amount: 10000, claimed: false } },
     recovery: { recovery: { protected: true, sets: [{ setId: "set1", have: 2, need: 3, guardians: ["alice", "bob"] }] } },
+    "twetch-feed": {
+      identity: { sub: "32324", handle: "Richard A. Hein", name: "Richard A. Hein", stale: false },
+      account: { imported: true, address: "1FgiUa9oMqcEsHyPD6i3yLTu2qq9BzdxR7" },
+      feed: [
+        { id: 7271976, txid: "ab".repeat(32), userId: 7346, content: "hello world", contentType: "text/plain", postedAtMs: 1790505410321, numLikes: 2, numReplies: 1, numBranches: 0, user: { id: 7346, name: "Satan", icon: "75ebb02c5338f89bba48629ceb82bad31693fac9e032c1df7a1f6674c6cd4057.webp", isTwetchGreen: true } },
+        { id: 7271958, txid: "cd".repeat(32), userId: 9, content: "https://twetch.com/t/895343e634bc31bd659339816c7ceb7d8530278237451892d9084cbfbbe14d70", contentType: "text/plain", postedAtMs: 1790505400000, replyPostId: 7271957, user: { id: 9, name: "branchy" } },
+      ],
+    },
+    "twetch-alerts": {
+      identity: { sub: "32324", handle: "rh", stale: true },
+      notifications: [{ id: 7271883, type: "like", actorUserId: 218281, postId: 7271235, description: "liked your post", createdAtMs: 1790499264089, actor: { id: 218281, name: "Koala Bear" } }],
+      postNotifications: [{ id: 7271900, txid: "ef".repeat(32), userId: 1, content: "nice one", postedAtMs: 1790500000000, numLikes: 0, numReplies: 0, numBranches: 0, user: { id: 1, name: "someone" } }],
+    },
+    "twetch-profile": {
+      identity: { sub: "32324", handle: "rh", stale: false },
+      profile: { user: { id: 32324, name: "Richard A. Hein", handle: "rh", numFollowers: 12, numFollowing: 30, profile: "https://twetch.com/u/32324" }, posts: [{ id: 1, txid: "aa".repeat(32), userId: 32324, content: "hi", postedAtMs: 1790500000000, numLikes: 0, numReplies: 0, numBranches: 0, user: { id: 32324, name: "Richard A. Hein" } }] },
+    },
+    "twetch-memes": {
+      folders: [{ slug: "laugh", label: "Laugh", count: 467 }, { slug: "wow", label: "Wow", count: 469 }],
+      memes: [{ url: "aa".repeat(32) }, { url: "bb".repeat(32) }],
+      folder: "laugh",
+    },
+    "twetch-market": {
+      marketView: "listings",
+      items: [{ id: 7271893, name: "Egg #441", number: 441, imageUrl: "https://api.twetch.com/v1/media/801ea7eb.jpg?v=4", priceSats: 480000000, outpoint: "cf5f4aef:845", sellerAddress: "142SdkqtZqqJ" }],
+    },
     inscribe: {
       picked: { name: "cat.png", size: 4096, contentType: "image/png", sha256: "ab".repeat(32), hex: "89504e47", previewUrl: "blob:x", tooBig: false },
       recent: [{ contentType: "image/png", contentLength: 2048, outpoint: "aa:0", contentUrl: "https://ordinals.com/x" }],
@@ -148,9 +175,65 @@ test("every shell view renders without throwing on realistic data", async () => 
     assert.ok(!html.includes("NaN"), `${v.id} does not render NaN`);
   }
   // 27 of these mirror a Quickshell panel section; the rest are additions the
-  // panel never had (inscribe, market). The panel-parity list lives in
-  // bsvos-app.test.mjs and is a subset check.
-  assert.equal(seen.size, 28, "28 views: 27 panel sections plus inscribe");
+  // panel never had (inscribe, market, and the five Twetch views). The
+  // panel-parity list lives in bsvos-app.test.mjs and is a subset check.
+  assert.equal(seen.size, 33, "33 views: 27 panel sections plus inscribe, market and 5 Twetch views");
+});
+
+test("twetch market only offers Buy when swapBuyFor would accept it", async () => {
+  // swapBuyFor validates /^([0-9a-f]{64})[._](\d+)$/ and requires priceSats
+  // and sellerAddress, but the market returns "txid:vout" with a colon. Passing
+  // the raw value dies on BAD_PARAM, so the view must normalise and gate.
+  const views = await loadViews();
+  const market = views.find((v) => v.id === "twetch-market");
+  const src = fs.readFileSync(new URL("views/twetch.js", appDir), "utf8");
+  assert.ok(/replace\(":", "\."\)/.test(src), "outpoint separator is normalised");
+  assert.ok(/priceSats: price/.test(src), "priceSats is sent");
+  assert.ok(/sellerAddress: b\.dataset\.seller/.test(src), "sellerAddress is sent");
+  const ctx = { data: {}, params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const good = market.render({ ...ctx, data: { marketView: "listings", items: [{ id: 1, name: "Egg", imageUrl: "https://x/y.jpg", priceSats: 480000000, outpoint: `${"ab".repeat(32)}:845`, sellerAddress: "142SdkqtZqqJ" }] } });
+  assert.ok(/data-buy="ab{32}\.845"/.test(good) || /data-buy="[a-f0-9]{64}\.\d+"/.test(good), "buyable listing gets a normalised Buy button");
+  // Missing a price or seller means the buy would be rejected, so do not offer it.
+  const bad = market.render({ ...ctx, data: { marketView: "listings", items: [{ id: 2, name: "NoSeller", priceSats: 100, outpoint: `${"cd".repeat(32)}:1` }] } });
+  assert.ok(/not buyable/.test(bad), "a listing that cannot be bought is not offered as buyable");
+  assert.ok(!/data-buy=/.test(bad), "no Buy button for an unbuyable listing");
+});
+
+test("twetch views degrade correctly when signed out", async () => {
+  // Every Twetch view must offer a way in rather than an error. This was the
+  // state this machine was actually in: identity present but stale.
+  const views = await loadViews();
+  const twetchish = views.filter((v) => v.group === "Twetch");
+  assert.equal(twetchish.length, 5, "five Twetch views");
+  const ctx = { data: {}, params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  for (const v of twetchish) {
+    const html = v.render({ ...ctx, data: { identity: null } });
+    assert.ok(html.length > 0, `${v.id} renders when signed out`);
+    assert.ok(!html.includes("undefined"), `${v.id} signed-out has no undefined`);
+    assert.ok(!html.includes("NaN"), `${v.id} signed-out has no NaN`);
+  }
+  // A stale session is the common case (public clients get no refresh token)
+  // and must be called out, since posting silently fails without it.
+  const feed = views.find((v) => v.id === "twetch-feed");
+  const stale = feed.render({ ...ctx, data: { identity: { sub: "1", stale: true }, account: { address: "1abc" }, feed: [] } });
+  assert.ok(/expired/i.test(stale), "a stale session is surfaced");
+  assert.ok(/disabled/.test(stale), "posting is disabled while stale");
+});
+
+test("a feed post that is only a permalink renders as a link, not bare text", async () => {
+  // Live feed data includes branch/reply stubs whose content is just a
+  // twetch.com permalink. Dumping that as prose looks broken.
+  const views = await loadViews();
+  const feed = views.find((v) => v.id === "twetch-feed");
+  const ctx = { data: {}, params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const data = JSON.parse(JSON.stringify({
+    identity: { sub: "32324", stale: false },
+    account: { address: "1abc" },
+    feed: [{ id: 1, txid: "aa".repeat(32), userId: 2, content: "https://twetch.com/t/895343e634bc31bd659339816c7ceb7d8530278237451892d9084cbfbbe14d70", replyPostId: 7, postedAtMs: 1790500000000, numLikes: 0, numReplies: 0, numBranches: 0, user: { id: 2, name: "x" } }],
+  }));
+  const html = feed.render({ ...ctx, data });
+  assert.ok(/post-link/.test(html), "renders as a link");
+  assert.ok(!/>https:\/\/twetch\.com\/t\//.test(html.replace(/href="[^"]*"/g, "")), "the bare URL is not shown as body text");
 });
 
 test("the inscribe view never sends a file path, only hex", async () => {

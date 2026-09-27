@@ -22,11 +22,12 @@ import socialViews from "./views/social.js";
 import appViews from "./views/apps.js";
 import workViews from "./views/work.js";
 import { inscribe } from "./views/inscribe.js";
+import twetchViews from "./views/twetch.js";
 
-const VIEWS = [...walletViews, ...moneyViews, inscribe, ...socialViews, ...appViews, ...workViews];
+const VIEWS = [...walletViews, ...moneyViews, inscribe, ...socialViews, twetchViews, ...appViews, ...workViews];
 const BY_ID = new Map(VIEWS.map((v) => [v.id, v]));
 
-const GROUP_ORDER = ["Wallet", "Money", "Identity", "Apps", "Work"];
+const GROUP_ORDER = ["Wallet", "Money", "Twetch", "Identity", "Apps", "Work"];
 
 const state = {
   viewId: location.hash.replace(/^#\/?/, "") || "overview",
