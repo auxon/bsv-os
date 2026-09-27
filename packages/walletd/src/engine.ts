@@ -193,13 +193,32 @@ export async function spendTo(opts: {
     candidates.map((x) => lockingScriptOf(x.txid, x.vout, fetchFn).catch(() => null)),
   );
   const funding: SpendableUtxo[] = [];
+  let inscribed = 0;
+  let fetchFailed = 0;
   for (let i = 0; i < candidates.length && funding.length < 6; i++) {
     const s = scripts[i];
-    if (!s || hasOrdEnvelope(s.scriptHex)) continue; // inscription carrier — hands off
+    if (!s) {
+      fetchFailed++;
+      continue;
+    }
+    if (hasOrdEnvelope(s.scriptHex)) {
+      inscribed++;
+      continue;
+    }
     const c = candidates[i]!;
     funding.push({ txid: c.txid, vout: c.vout, value: c.value, scriptHex: s.scriptHex });
   }
-  if (!funding.length) fail("INSUFFICIENT", "no plain funding UTXOs (everything is inscribed?)");
+  if (!funding.length) {
+    // Name the real reason so retry loops (streams, capsules) log something
+    // actionable instead of a catch-all "insufficient".
+    if (fetchFailed > 0 && inscribed === 0) {
+      fail("RAILS", `funding scripts unreadable for ${fetchFailed} candidate(s) — indexer throttled? retry shortly`);
+    }
+    if (candidates.length === 0) {
+      fail("INSUFFICIENT", "no spendable UTXOs at all (balance is zero or fully tracked as spent)");
+    }
+    fail("INSUFFICIENT", `no plain funding among ${candidates.length} candidate UTXO(s) (${inscribed} inscribed)`);
+  }
   const built = buildTx({
     utxos: funding,
     unlockFor: (x) => p2pkhUnlockHook("m/0/0", x.value, Script.fromHex(x.scriptHex!)),

@@ -13,6 +13,7 @@
  * real audio-element events (play/pause/seek) graduates beats from
  * self-attested to observed; the stream layer needs no changes.
  */
+import fs from "node:fs";
 import type { Knex } from "knex";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
@@ -377,6 +378,39 @@ export async function endLive(db: Knex, id: string, now = Date.now()): Promise<L
 export async function listLive(db: Knex): Promise<LiveSession[]> {
   const rows = (await db("cast_live").select().orderBy("started_at", "desc").limit(50)) as LiveRow[];
   return rows.map(toLive);
+}
+
+/** Broadcast silence window before a live session is auto-ended. */
+export const LIVE_IDLE_MS = 5 * 60_000;
+
+/**
+ * End broadcasts whose recorder stopped sending segments (crashed tab,
+ * closed lid). Playlists get ENDLIST, so a stalled "live" becomes a
+ * replayable recording instead of a stream that never loads.
+ */
+export async function endStaleLive(
+  db: Knex,
+  idleMs = LIVE_IDLE_MS,
+  now = Date.now(),
+): Promise<string[]> {
+  const rows = (await db("cast_live").where({ status: "live" }).select()) as LiveRow[];
+  const ended: string[] = [];
+  for (const r of rows) {
+    const dir = liveDir(r.id);
+    let last = r.started_at;
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        const st = fs.statSync(path.join(dir, f));
+        if (st.mtimeMs > last) last = st.mtimeMs;
+      }
+    } catch {
+      /* no dir yet: fall back to startedAt */
+    }
+    if (now - last < idleMs) continue;
+    await endLive(db, r.id, now);
+    ended.push(r.id);
+  }
+  return ended;
 }
 
 // ── media store (recordings + live segments on local disk) ───────────────

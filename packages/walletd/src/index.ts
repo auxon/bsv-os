@@ -32,7 +32,7 @@ import { tickOrders } from "./nightshift.ts";
 import { buildPost, getBoard, getPosts, publishPost } from "./boards.ts";
 import { identityPubkeyHex } from "./custody.ts";
 import { liveRelay } from "./msgs.ts";
-import { CAST_BOARD, MAX_SEGMENT_BYTES, MAX_UPLOAD_BYTES, bumpLiveSegments, getLive, liveDir, liveFileValid, liveIdValid, livePlaylist, mediaExt, mediaFileValid, mediaRoot, newMediaId, sessionBeats, sessionsDue, setLiveMime } from "./cast.ts";
+import { CAST_BOARD, MAX_SEGMENT_BYTES, MAX_UPLOAD_BYTES, bumpLiveSegments, endStaleLive, getLive, liveDir, liveFileValid, liveIdValid, livePlaylist, mediaExt, mediaFileValid, mediaRoot, newMediaId, sessionBeats, sessionsDue, setLiveMime } from "./cast.ts";
 import { spendTo } from "./engine.ts";
 import { streamBeatRef, tickStreams } from "./streams.ts";
 import { tickCapsules } from "./capsule.ts";
@@ -946,8 +946,14 @@ export async function main(): Promise<void> {
 
     // Cast: playback beats for open listening sessions, minutely. Beats
     // are local (the streams read the local board); p2p fan-out is skipped.
+    // Also reaps broadcasts whose recorder went silent (crashed tab) so
+    // their playlists become replayable VODs instead of stalled streams.
     const castLoop = async (): Promise<void> => {
       try {
+        for (const id of await endStaleLive(db).catch(() => [])) {
+          // eslint-disable-next-line no-console
+          console.log(`cast: live ${id} ended (recorder silent)`);
+        }
         for (const s of await sessionsDue(db)) {
           const row = await getBoard(db, CAST_BOARD);
           if (!row) continue;
