@@ -1,3 +1,6 @@
+import { fileURLToPath } from "node:url";
+import fsSync from "node:fs";
+import path from "node:path";
 import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import {
   twetchAccountImport,
@@ -186,6 +189,20 @@ function needBackend(): MonitorBackend {
     throw err;
   }
   return backend;
+}
+
+/**
+ * Path to the bridge child the daemon spawns for each app window. Prefers the
+ * built `bridge-main.js` next to the running module, falling back to the
+ * TypeScript source so `npm run dev` (tsx) works without a build step.
+ */
+function bridgeEntryPath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const candidate of ["bridge-main.js", "bridge-main.ts"]) {
+    const full = path.join(here, candidate);
+    if (fsSync.existsSync(full)) return full;
+  }
+  throw new Error("bridge entry not found next to the daemon");
 }
 
 /** Signed-in Twetch account key (OIDC claim), used as the import scan target. */
@@ -2165,6 +2182,38 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const app = await getApp(b.db, clean);
     if (!app) throw Object.assign(new Error("not installed — bsv app install first"), { code: "NOT_FOUND" });
     return { startUrl: app.startUrl, domain: app.domain };
+  },
+  /**
+   * Launch an installed app in a sandboxed runner window. This is what the
+   * bundled Launcher app calls, so the UI can open apps the same way
+   * `bsv app open` does — the browser launch has to live in the daemon,
+   * because a web page cannot spawn a window with the window.bsv bridge
+   * attached.
+   *
+   * Installed-only (never a bare URL, so this cannot become an
+   * open-redirector), and fire-and-forget: the bridge child watches the
+   * window's profile and exits with it, so the RPC never blocks on the UI.
+   */
+  appLaunch: async (params) => {
+    const b = needBackend();
+    const { domain } = p(params) as { domain?: unknown };
+    if (typeof domain !== "string" || !domain.trim()) {
+      throw Object.assign(new Error("domain required"), { code: "BAD_PARAM" });
+    }
+    const clean = domain.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0]!;
+    const app = await getApp(b.db, clean);
+    if (!app) throw Object.assign(new Error("not installed — install it first"), { code: "NOT_FOUND" });
+    const { openInRunner } = await import("./runner.ts");
+    const res = await openInRunner({
+      startUrl: app.startUrl,
+      domain: app.domain,
+      bridgeEntry: bridgeEntryPath(),
+      wait: false,
+    });
+    if (!res.launched) {
+      throw Object.assign(new Error(`runner unavailable: ${res.reason ?? "unknown"}`), { code: "RUNNER_UNAVAILABLE" });
+    }
+    return { launched: true, domain: app.domain, startUrl: app.startUrl };
   },
   /**
    * F2 runner intents: the sandboxed webview's `window.bsv` bridge calls

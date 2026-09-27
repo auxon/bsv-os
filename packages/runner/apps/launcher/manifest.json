@@ -1,0 +1,13 @@
+{
+  "name": "bsvOS Launcher",
+  "short_name": "Launcher",
+  "start_url": "https://127.0.0.1:2121/launcher/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "System app launcher: lists installed bsvOS apps, opens them in the sandboxed runner, and installs or removes them. Read-only for the wallet itself — it never signs or spends.",
+      "spendingAuthorization": { "amount": 0, "description": "read-only — launches and installs apps, never spends" }
+    }
+  }
+}

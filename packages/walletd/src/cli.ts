@@ -7,52 +7,9 @@
  */
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { openExternalCommand, profilePidsFromPs } from "./launcher.ts";
-
-const SOCK = path.join(process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os"), "bsv-walletd.sock");
-const HTTPS_URL = process.env.BSV_WALLETD_URL ?? "";
-
-let nextId = 1;
-async function call(method: string, params: unknown = {}): Promise<unknown> {
-  const body = JSON.stringify({ method, params, id: nextId++ });
-  if (HTTPS_URL) {
-    if (HTTPS_URL.startsWith("https:") && process.env.BSV_WALLETD_INSECURE === "1") {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // spike: self-signed localhost cert
-    }
-    const res = await fetch(HTTPS_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
-    });
-    // pinned self-signed in production use; -k equivalent for the spike
-    return res.json();
-  }
-  return new Promise((resolve, reject) => {
-    const sock = net.createConnection(SOCK, () => {
-      sock.write(`${body}\n`);
-    });
-    let buf = "";
-    const done = (v: unknown) => {
-      sock.destroy();
-      resolve(v);
-    };
-    sock.on("data", (chunk) => {
-      buf += chunk.toString("utf8");
-      const idx = buf.indexOf("\n");
-      if (idx >= 0) {
-        try {
-          done(JSON.parse(buf.slice(0, idx)));
-        } catch (e) {
-          done({ error: String(e) });
-        }
-      }
-    });
-    sock.on("error", (e) => reject(new Error(`daemon unreachable (${SOCK}): ${e.message}`)));
-    setTimeout(() => reject(new Error("daemon timeout")), 30000).unref?.();
-  });
-}
+import { call, HTTPS_URL, SOCK } from "./rpcclient.ts";
+import { openExternalCommand } from "./launcher.ts";
 
 /** Media mime by extension for `bsv twetch post --media`. */
 function mediaMimeFor(file: string): string {
@@ -219,124 +176,22 @@ function parseExpiry(raw: string | undefined): number {
   return t;
 }
 
-/** Open an installed app in the sandboxed runner (Chromium app window +
- * per-app profile + window.bsv bridge). False when the runner is
- * unavailable — the caller falls back to the default browser. */
+/**
+ * Open an installed app in the sandboxed runner. Thin wrapper over the shared
+ * launcher so `bsv app open` and the daemon's `appLaunch` cannot drift; the
+ * CLI differs only in blocking for the window's lifetime.
+ */
 async function openInRunner(startUrl: string, domain: string): Promise<boolean> {
-  if (process.platform !== "linux" && process.platform !== "darwin") return false;
-  const { findChromium, findExtensionDir, buildLaunchPlan } = await import("./launcher.ts");
-  const { randomBytes } = await import("node:crypto");
-  const { createServer } = await import("node:http");
-  const { spawn } = await import("node:child_process");
-  const { mkdir } = await import("node:fs/promises");
-  const chromium = findChromium();
-  const extensionDir = findExtensionDir();
-  if (!chromium || !extensionDir) return false;
-  const token = randomBytes(16).toString("hex");
-  const port = await new Promise<number>((resolve, reject) => {
-    const probe = createServer();
-    probe.on("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const addr = probe.address();
-      const p = typeof addr === "object" && addr ? addr.port : 0;
-      probe.close(() => resolve(p));
-    });
+  const { openInRunner: launch } = await import("./runner.ts");
+  const self = process.argv[1] ?? "";
+  const res = await launch({
+    startUrl,
+    domain,
+    bridgeEntry: self,
+    wait: true,
   });
-  if (!port) return false;
-  const plan = buildLaunchPlan({ chromium, domain, startUrl, extensionDir, port, token });
-  await mkdir(plan.dataDir, { recursive: true });
-  const self = process.argv[1];
-  const bridge = spawn(process.execPath, [self, "_bridge", domain, `--port=${port}`, `--token=${token}`], {
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("bridge start timeout")), 10000);
-    bridge.stdout.on("data", (d: Buffer) => {
-      if (d.toString().includes('"ready"')) {
-        clearTimeout(t);
-        resolve();
-      }
-    });
-    bridge.on("error", (e) => {
-      clearTimeout(t);
-      reject(e);
-    });
-    bridge.on("exit", (code) => {
-      clearTimeout(t);
-      reject(new Error(`bridge exited ${code}`));
-    });
-  }).catch((e: unknown) => {
-    bridge.kill();
-    throw e;
-  });
-  try {
-    // Chromium re-execs (or hands off to an existing instance) within a few
-    // hundred ms, so the spawned process exiting does NOT mean the window
-    // closed. Tie the bridge to the app's browser process instead, found by
-    // its unique --user-data-dir; otherwise the bridge dies under a live
-    // window and window.bsv answers BRIDGE_DOWN.
-    const child = spawn(plan.chromium, plan.args, { stdio: "ignore" });
-    let spawnError: Error | null = null;
-    child.on("error", (e) => {
-      spawnError = e as Error;
-    });
-    const appeared = await waitForProfile(plan.dataDir, 15000);
-    if (!appeared && spawnError) throw spawnError;
-    if (appeared) await waitForProfileGone(plan.dataDir);
-  } finally {
-    bridge.kill();
-  }
-  return true;
-}
-
-/** PIDs whose command line carries this app's private browser profile. */
-async function profilePids(dataDir: string): Promise<number[]> {
-  const pids: number[] = [];
-  let entries: string[];
-  try {
-    entries = fs.readdirSync("/proc");
-  } catch {
-    // macOS: /proc does not exist — ask ps (only runs while waiting on a window).
-    try {
-      const { execFile } = await import("node:child_process");
-      const out = await new Promise<string>((resolve, reject) => {
-        execFile("ps", ["-axo", "pid=,command="], { maxBuffer: 8 * 1024 * 1024 }, (e, stdout) => {
-          if (e) reject(e);
-          else resolve(stdout);
-        });
-      });
-      return profilePidsFromPs(out, dataDir);
-    } catch {
-      return pids;
-    }
-  }
-  for (const entry of entries) {
-    if (!/^\d+$/.test(entry)) continue;
-    try {
-      const cmd = fs.readFileSync(`/proc/${entry}/cmdline`, "utf8");
-      if (cmd.includes(`--user-data-dir=${dataDir}`)) pids.push(Number(entry));
-    } catch {
-      /* process vanished mid-read */
-    }
-  }
-  return pids;
-}
-
-/** True once the app's browser process exists (Chromium may re-exec first). */
-async function waitForProfile(dataDir: string, timeoutMs: number): Promise<boolean> {
-  const start = Date.now();
-  for (;;) {
-    if ((await profilePids(dataDir)).length > 0) return true;
-    if (Date.now() - start > timeoutMs) return false;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-}
-
-async function waitForProfileGone(dataDir: string): Promise<void> {
-  for (;;) {
-    if ((await profilePids(dataDir)).length === 0) return;
-    await new Promise((r) => setTimeout(r, 2000));
-  }
+  if (!res.launched && res.reason) console.error(`runner: ${res.reason}`);
+  return res.launched;
 }
 
 async function main(): Promise<void> {
@@ -1726,48 +1581,19 @@ async function main(): Promise<void> {
     case "_bridge": {
       // F2 runner internals: loopback relay for ONE app window. Spawned by
       // `app open`, never by hand. Dies with the window (or its parent).
+      // The server itself lives in bridge-server.ts so the daemon can spawn
+      // the exact same bridge from bridge-main.ts.
       const [bridgeDomain] = rest;
       const bridgePort = Number(flag(rest, "port") ?? 0);
       const bridgeToken = flag(rest, "token") ?? "";
+      const bridgeDataDir = flag(rest, "data-dir");
       if (!bridgeDomain || !bridgePort || !bridgeToken) {
         console.error("usage: bsv _bridge <domain> --port=N --token=T");
         process.exitCode = 2;
         break;
       }
-      const { createServer } = await import("node:http");
-      const { createBridgeHandler } = await import("./bridge.ts");
-      const handler = createBridgeHandler({
-        token: bridgeToken,
-        domain: bridgeDomain.toLowerCase(),
-        invoke: async (method, params) => {
-          const res = (await call("appInvoke", { domain: bridgeDomain, method, callParams: params })) as {
-            result?: unknown; error?: unknown;
-          };
-          return res && typeof res === "object" && "error" in res && res.error
-            ? { error: res.error }
-            : { result: (res as { result?: unknown }).result };
-        },
-      });
-      await new Promise<void>((resolve, reject) => {
-        const server = createServer((req, res) => {
-          let body = "";
-          req.on("data", (chunk: Buffer) => {
-            body += chunk.toString("utf8");
-            if (body.length > 1_000_000) req.destroy();
-          });
-          req.on("end", () => {
-            void handler(req, body).then((out) => {
-              res.writeHead(out.status, out.headers);
-              res.end(out.json === null ? undefined : JSON.stringify(out.json));
-            });
-          });
-          req.on("error", () => reject(new Error("bridge request failed")));
-        });
-        server.on("error", reject);
-        server.listen(bridgePort, "127.0.0.1", () => {
-          console.log(JSON.stringify({ ready: true, port: bridgePort }));
-        });
-      });
+      const { runBridge } = await import("./bridge-server.ts");
+      await runBridge(bridgeDomain, bridgePort, bridgeToken, bridgeDataDir);
       break;
     }
     case "mcp": {

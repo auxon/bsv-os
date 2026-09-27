@@ -3,9 +3,8 @@
   "apps": [
     {
       "domain": "127.0.0.1",
-      "name": "Runner Demo",
-      "blurb": "Loopback click-through proving the window.bsv bridge. Serve it locally, then install with --manifest-file.",
-      "devOnly": true
+      "name": "bsvOS Launcher",
+      "blurb": "The system app list: installed apps, the catalog, and one-click open. Ships with the daemon at https://127.0.0.1:2121/launcher/ and owns the 127.0.0.1 slot, so it never collides with the bundled feature apps on localhost."
     },
     {
       "domain": "entangleit.com",
@@ -15,7 +14,7 @@
     {
       "domain": "localhost",
       "name": "Twetch",
-      "blurb": "Feed and notifications companion: read the public Twetch feed, post text on-chain through the OS wallet (network fee only). Bundled with the daemon at https://localhost:2121/twetch/."
+      "blurb": "Feed and notifications companion: read the public Twetch feed, post text on-chain through the OS wallet (network fee only). Bundled with the daemon at https://localhost:2121/twetch/. Note: Cast, Twetch, Explorer and Colosseum all share this one localhost slot — install the one you want and open it from the Launcher."
     },
     {
       "domain": "market.entangleit.com",

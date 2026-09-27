@@ -16,16 +16,19 @@ fetched and verified daemon-side, never trusted.
 app page --postMessage--> content.js --fetch--> 127.0.0.1 bridge --socket--> daemon appInvoke
 ```
 
-- **Launcher** (`packages/walletd/src/launcher.ts`, `bsv app open`): per-app
-  `--user-data-dir` (no shared cookies/storage), `--app=<start_url>`,
-  `--load-extension` (this bridge only), `--ignore-certificate-errors`
-  for loopback hosts only. Falls back to `xdg-open` without Chromium.
-- **Bridge** (`packages/walletd/src/bridge.ts`, `bsv _bridge`): spawned per
-  window with a 128-bit token (URL fragment, client-side only) and a pinned
-  domain. Requires the token AND an `Origin` header matching the domain;
-  answers PNA preflights for that origin only; forwards to `appInvoke` only.
-  Native messaging was rejected: unpacked extensions get unstable IDs, so
-  origin pinning cannot work there.
+- **Launch** (`packages/walletd/src/runner.ts` + `launcher.ts`, `bsv app open`
+  and the daemon's `appLaunch`): per-app `--user-data-dir` (no shared
+  cookies/storage), `--app=<start_url>`, `--load-extension` (this bridge
+  only), `--ignore-certificate-errors` for loopback hosts only. Falls back to
+  `xdg-open`/`open` without Chromium. The CLI blocks for the window's
+  lifetime; `appLaunch` returns as soon as Chromium is up, and the bridge
+  child exits with the window so nothing is orphaned.
+- **Bridge** (`packages/walletd/src/bridge.ts` + `bridge-server.ts`, spawned
+  as `bridge-main.ts`): one per window with a 128-bit token (URL fragment,
+  client-side only) and a pinned domain. Requires the token AND an `Origin`
+  header matching the domain; answers PNA preflights for that origin only;
+  forwards to `appInvoke` only. Native messaging was rejected: unpacked
+  extensions get unstable IDs, so origin pinning cannot work there.
 - **Trust order**: page claims are never trusted — the launcher stamps the
   domain, the browser stamps `Origin`, the daemon checks installed-status
   and the method allowlist. The human approves spends via the panel/CLI.
@@ -50,11 +53,34 @@ fetch skipped. Production installs stay https-manifest-only.
   loopback-only network (all asserted in `test/extension.test.mjs`).
 - `demo/`: `manifest.json`, `index.html`, `serve.mjs`.
 - `apps/`: bundled runner apps served from the daemon's own origin —
-  `twetch/` (companion), `explorer/` (local chain explorer), and
+  `launcher/` (the system app list: installed apps, catalog, one-click open),
+  `twetch/` (companion), `explorer/` (local chain explorer), `cast/`
+  (camera/mic record and value-for-value playback), and
   `colosseum/` (Ordinal Colosseum: your ordinals fight; deterministic stats
   from inscription origins, optional champion-medal inscription).
-- `store.json`: curated catalog for `bsv store` (v1: the loopback demo,
-  flagged `devOnly`; real entries land as Metanet apps ship manifests).
+- `store.json`: curated catalog for `bsv store` (v1: the bundled Launcher,
+   the two bundled feature apps' shared localhost slot, and the remote
+   Metanet apps; real entries land as more apps ship manifests).
+
+## App identity: one slot per host
+
+An installed app is keyed by **hostname** (`apps.domain`, unique), not by
+URL. The daemon only ever binds `127.0.0.1:2121`, and only `localhost` /
+`::1` / `127.x` are trusted as loopback, so there are exactly two identities
+available for bundled apps:
+
+- `127.0.0.1` — owned by the **Launcher**, permanently.
+- `localhost` — shared by the bundled feature apps. Cast, Twetch, Explorer
+  and Colosseum all resolve to `https://localhost:2121/<name>/`, so
+  installing one replaces whichever was there. Install the one you want and
+  open it from the Launcher; switching is one install away.
+
+The `Origin` header a browser sends has no path, so the bridge can only pin
+a host — giving each bundled app its own policy identity needs per-app
+subdomains or nonces, not a path. That is why this is documented rather than
+worked around. The dev demo (`127.0.0.1:8443`) shares the Launcher's host
+slot too: running the click-through below evicts the Launcher, and
+`bsv app install https://127.0.0.1:2121/launcher/` puts it back.
 
 ## Store + updates (F1)
 

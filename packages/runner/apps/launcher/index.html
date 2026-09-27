@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bsvOS Launcher</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>Launcher</h1>
+      <p class="tag">Your bsvOS apps. Each opens in its own sandboxed window.</p>
+    </div>
+  </div>
+  <div class="wallet-chip" id="wallet-chip">checking wallet…</div>
+  <nav>
+    <button data-view="installed" class="active">Installed</button>
+    <button data-view="store">Store</button>
+  </nav>
+</header>
+
+<main>
+  <section id="view-installed" class="view active">
+    <div class="toolbar">
+      <button id="refresh">Refresh</button>
+      <span id="installed-note" class="dim"></span>
+    </div>
+    <div id="installed" class="grid"></div>
+  </section>
+
+  <section id="view-store" class="view">
+    <div class="toolbar">
+      <button id="store-refresh">Refresh catalog</button>
+      <span class="dim">Installing an app grants it a spend cap. You approve spending per request.</span>
+    </div>
+    <div id="store" class="grid"></div>
+  </section>
+</main>
+
+<footer>bsvOS · apps run sandboxed · keys never leave the wallet</footer>
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
