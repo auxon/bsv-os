@@ -84,6 +84,40 @@ function isLoopbackPeer(req: IncomingMessage): boolean {
 }
 
 /**
+ * Public seller manifest for x402market verification + listing. Base URL
+ * comes from BSV_SERVE_PUBLIC (the tunnel/WAN address) falling back to the
+ * request host — the verifier probes the paid tool path absolutely.
+ */
+async function serveManifestHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const json = (status: number, body: unknown): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  };
+  if (!wireBackend) return json(503, { error: "wallet engine offline" });
+  const { serveMenu } = await import("./serve.ts");
+  const menu = await serveMenu(wireBackend.db).catch(() => null);
+  if (!menu) return json(503, { error: "wallet locked" });
+  const host = req.headers.host ?? `127.0.0.1:${PORT}`;
+  const base = (process.env.BSV_SERVE_PUBLIC ?? `https://${host}`).replace(/\/+$/, "");
+  json(200, {
+    name: "bsvOS wallet answers",
+    tagline: "Calibrated Jev decisions and agent memory recall, settled in sats.",
+    baseUrl: base,
+    payTo: menu[0]?.payTo ?? "",
+    network: "bsv:mainnet",
+    tools: menu.filter((m) => m.priceSats > 0).map((m) => ({
+      name: m.method === "jevDecide" ? "decide" : m.method === "memoryRecall" ? "recall" : m.method,
+      method: "POST",
+      path: `${base}/v1/serve/${m.method}`,
+      priceSats: m.priceSats,
+      paid: true,
+      description: m.description,
+      body: m.method === "jevDecide" ? "{state, questions}" : "{query?, tag?, limit?}",
+    })),
+  });
+}
+
+/**
  * Paid method dispatch for remote buyers. No proof → 402 + quote headers.
  * PAYMENT-SIGNATURE proof → verify/broadcast/serve. Errors that mean "not
  * paid" stay 402 (no money moved or claim recorded); method failures are
@@ -342,6 +376,11 @@ function handler() {
     // verify, broadcast, serve. Payment is the only auth here, so this
     // route stays open to non-loopback peers (see gating below) while the
     // wallet JSON-RPC never leaves loopback.
+    // GET /v1/serve/manifest is the x402market seller manifest (public).
+    if (req.method === "GET" && typeof req.url === "string" && req.url.split("?")[0] === "/v1/serve/manifest") {
+      await serveManifestHttp(req, res);
+      return;
+    }
     const serveMatch =
       req.method === "POST" && typeof req.url === "string"
         ? /^\/v1\/serve\/([A-Za-z0-9_]+)(\?[^?]*)?$/.exec(req.url.split("?")[0]!)
