@@ -223,7 +223,7 @@ test("recorder UI talks to loopback ingest +observed beats only", async () => {
   const fs = await import("node:fs");
   const dir = new URL("../../runner/apps/cast/", import.meta.url);
   const js = fs.readFileSync(new URL("app.js", dir), "utf8");
-  for (const token of ["getUserMedia", "MediaRecorder", "/cast/media", "/cast/live/", "castLiveStart", "castLiveStop", "castSetMedia", "?init=1", "MediaSource", "msePlay", "fragParsingError", "castLiveGet"]) {
+  for (const token of ["getUserMedia", "MediaRecorder", "/cast/media", "/cast/live/", "castLiveStart", "castLiveStop", "castSetMedia", "?init=1", "MediaSource", "msePlay", "mseMimeCandidates", "codecs=opus", "fragParsingError", "castLiveGet"]) {
     assert.ok(js.includes(token), token);
   }
   // upload endpoint is same-origin relative — never a remote host

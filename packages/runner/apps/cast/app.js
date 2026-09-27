@@ -70,6 +70,17 @@ function teardownMedia() {
   player.load();
 }
 
+// MSE needs a full codec string — bare container types report unsupported.
+function mseMimeCandidates(base) {
+  const b = String(base || "").toLowerCase();
+  if (b.startsWith("audio/webm")) return ["audio/webm;codecs=opus", "audio/webm;codecs=vorbis", "audio/webm"];
+  if (b.startsWith("video/webm")) {
+    return ['video/webm;codecs="vp9,opus"', 'video/webm;codecs="vp8,opus"', 'video/webm;codecs="vp9"', "video/webm"];
+  }
+  if (b.startsWith("video/mp4")) return ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', "video/mp4"];
+  return [base || "video/webm"];
+}
+
 // MSE fallback: WebM recorders emit mid-stream clusters that no HLS demuxer
 // accepts, but appended after the init chunk they play fine. Used when HLS
 // fails with a parsing error, or (via mime) for known-webm broadcasts.
@@ -78,15 +89,22 @@ async function msePlay(playlistUrl) {
   state.mseGen = gen;
   const alive = () => (state.mseGen || 0) === gen;
   const m = /\/cast\/live\/([a-z0-9]{6,16})\/index\.m3u8/.exec(playlistUrl);
-  let mime = "video/webm";
+  let base = "video/webm";
   if (m) {
     try {
       const info = await rpc("castLiveGet", { id: m[1] });
-      if (info && typeof info.mime === "string" && info.mime) mime = info.mime.split(";")[0];
+      if (info && typeof info.mime === "string" && info.mime) base = info.mime.split(";")[0];
     } catch { /* default stands */ }
   }
-  if (!window.MediaSource || !MediaSource.isTypeSupported(mime)) {
-    hintEl.textContent = `cannot play this broadcast here (${mime} unsupported)`;
+  const mime = (window.MediaSource ? mseMimeCandidates(base) : []).find((c) => {
+    try {
+      return MediaSource.isTypeSupported(c);
+    } catch {
+      return false;
+    }
+  });
+  if (!mime) {
+    hintEl.textContent = `cannot play this broadcast here (${base} unsupported)`;
     return;
   }
   hintEl.textContent = "playing via MSE fallback (WebM broadcast)…";
