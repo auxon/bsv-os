@@ -58,6 +58,10 @@ import {
   judgeRound, listContests, recordEntry, roundEntries, splitEntry,
 } from "./evolve.ts";
 import {
+  cancelCapsule, claimCapsule, fetchChainTip, listCapsules,
+  lockCapsule, remaining, tickCapsules,
+} from "./capsule.ts";
+import {
   createStream, getStream, listStreams, listTicks, setStreamStatus, streamBeatRef, tickStreams,
 } from "./streams.ts";
 import { removeDesktopEntry, writeDesktopEntry } from "./desktop.ts";
@@ -1747,6 +1751,52 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     await getContest(b.db, String(contest ?? ""));
     await b.db("evolve_contests").where({ id: String(contest) }).update({ status: "closed" });
     return { closed: String(contest) };
+  },
+  /**
+   * Time capsules: consensus-enforced timelock (CLTV) + public note.
+   * Lock pays into the capsule script through policy (origin `capsule`);
+   * claim spends it back once the tip passes the locktime.
+   */
+  capsuleLock: async (params) => {
+    const b = needBackend();
+    const { amount, unlockAt, to, message } = p(params) as {
+      amount?: unknown; unlockAt?: unknown; to?: unknown; message?: unknown;
+    };
+    if (typeof unlockAt !== "string" || !unlockAt) throw Object.assign(new Error("unlockAt required: height, ISO date, or +blocks"), { code: "BAD_PARAM" });
+    return lockCapsule({ db: b.db, chain: b.chain }, {
+      amount: Math.floor(Number(amount) || 0),
+      unlockAt,
+      ...(typeof to === "string" && to ? { to } : {}),
+      ...(typeof message === "string" && message ? { message } : {}),
+    });
+  },
+  capsuleList: async (params) => {
+    const b = needBackend();
+    const { tip } = p(params) as { tip?: unknown };
+    const caps = await listCapsules(b.db);
+    if (tip === false) return { capsules: caps };
+    let t = null;
+    try {
+      t = await fetchChainTip();
+    } catch {
+      t = null;
+    }
+    return {
+      capsules: caps.map((c) => ({ ...c, ...(t ? { remaining: remaining(c, t) } : {}) })),
+      ...(t ? { tip: t } : { tipUnvailable: true }),
+    };
+  },
+  capsuleClaim: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return claimCapsule({ db: b.db, chain: b.chain }, id);
+  },
+  capsuleCancel: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    return cancelCapsule(b.db, id);
   },
   /**
    * Sign an arbitrary short message with the wallet identity key (BSM).

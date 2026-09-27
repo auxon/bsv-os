@@ -373,6 +373,47 @@ const TOOLS = [
       required: ["contest"],
     },
   },
+  {
+    name: "capsule_lock",
+    description: "Lock a post-dated cheque: reserves funding (excluded from all spend selection), pays automatically at the height/date via the minutely ticker. Origin capsule pays — needs bsv allow capsule. Notes are public in the payment OP_RETURN; cancel releases the reservation.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        amount: { type: "number", description: "sats to lock (min 1000)" },
+        unlock_at: { type: "string", description: "block height, ISO date, or +blocks" },
+        to: { type: "string", description: "claim destination (default wallet)" },
+        message: { type: "string", description: "public note in the lock OP_RETURN" },
+      },
+      required: ["amount", "unlock_at"],
+    },
+  },
+  {
+    name: "capsule_claim",
+    description: "Claim a matured capsule: spends the timelocked output once the chain tip passes the locktime. Refuses while locked, with blocks/hours remaining.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "capsule id" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "capsule_list",
+    description: "List time capsules with remaining blocks/seconds to unlock.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "capsule_cancel",
+    description: "Owner escape hatch: release a capsule's reserved coins without paying. The capsule never pays.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "capsule id" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function text(value: unknown) {
@@ -674,6 +715,33 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             ...(Number.isFinite(Number(args.round)) ? { round: Number(args.round) } : {}),
             origin: agent,
           }));
+        case "capsule_lock": {
+          if (!(Number(args.amount) > 0)) {
+            throw new McpError(ErrorCode.InvalidParams, "amount must be positive sats");
+          }
+          if (typeof args.unlock_at !== "string" || !args.unlock_at) {
+            throw new McpError(ErrorCode.InvalidParams, "unlock_at is required");
+          }
+          return text(await callDaemon("capsuleLock", {
+            amount: Number(args.amount), unlockAt: args.unlock_at,
+            ...(typeof args.to === "string" ? { to: args.to } : {}),
+            ...(typeof args.message === "string" ? { message: args.message } : {}),
+          }));
+        }
+        case "capsule_claim": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("capsuleClaim", { id: args.id }));
+        }
+        case "capsule_list":
+          return text(await callDaemon("capsuleList"));
+        case "capsule_cancel": {
+          if (typeof args.id !== "string" || !args.id) {
+            throw new McpError(ErrorCode.InvalidParams, "id is required");
+          }
+          return text(await callDaemon("capsuleCancel", { id: args.id }));
+        }
         case "policy_probe": {
           if (typeof args.action !== "string" || !args.action) {
             throw new McpError(ErrorCode.InvalidParams, "action is required");

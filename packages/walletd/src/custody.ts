@@ -157,6 +157,12 @@ export function selfAddress(path = "m/0/0"): string {
   return childPriv(path).toPublicKey().toAddress();
 }
 
+/** Compressed pubkey hex for a wallet path (capsule scripts, no address). */
+export function selfPubkey(path = "m/0/0"): string {
+  if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+  return childPriv(path).toPublicKey().toString();
+}
+
 function childPriv(path: string): PrivateKey {
   if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
   const child = session.derive(path);

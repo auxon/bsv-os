@@ -56,7 +56,7 @@ import type { Counterparty, WalletProtocol } from "@bsv/sdk";
 import type { ChainProvider } from "./chain.ts";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
-import { labelOutputs, resolveBasketForOrigin, spentByUs } from "./baskets.ts";
+import { labelOutputs, resolveBasketForOrigin, unavailableUtxos } from "./baskets.ts";
 import { getCert, listCerts, putCert, revokeCert, showCert } from "./certs.ts";
 import { checkMemo, lockingScriptOf } from "./engine.ts";
 import { hasOrdEnvelope } from "./tokens.ts";
@@ -726,7 +726,7 @@ export function createBrc100Wallet(ctx: Brc100Context): Brc100Wallet {
       // the unconfirmed change.
       const u = await chain.utxos(address);
       const taken = new Set(explicit.map((e) => `${e.txid}:${e.vout}`));
-      const spent = await spentByUs(db);
+      const spent = await unavailableUtxos(db);
       const candidates = u.utxos
         .filter((x) => !taken.has(`${x.txid}:${x.vout}`) && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`) && x.value > 1)
         .sort((a, b) => b.value - a.value)

@@ -1225,6 +1225,34 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "capsule": {
+      const [capSub, ...capRest] = rest;
+      const capArg = capRest.find((a) => !a.startsWith("--"));
+      if (capSub === "lock") {
+        const amount = flag(rest, "amount");
+        const unlockAt = flag(rest, "unlock-at") ?? capArg;
+        if (!amount || !unlockAt) {
+          console.error("usage: bsv capsule lock --amount <sats> --unlock-at <height|ISO date|+blocks> [--to <addr>] [--message <text>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("capsuleLock", {
+          amount: Number(amount), unlockAt,
+          ...(flag(rest, "to") ? { to: flag(rest, "to") } : {}),
+          ...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+        }));
+      } else if (capSub === "claim" && capArg) {
+        print(await call("capsuleClaim", { id: capArg }));
+      } else if ((capSub === "cancel" || capSub === "close") && capArg) {
+        print(await call("capsuleCancel", { id: capArg }));
+      } else if (capSub === "list" || capSub === undefined) {
+        print(await call("capsuleList"));
+      } else {
+        console.error("usage: bsv capsule <lock|claim <id>|cancel <id>|list>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ord": {
       const [ordSub, ...ordRest] = rest;
       const ordArg = ordRest.find((a) => !a.startsWith("--"));

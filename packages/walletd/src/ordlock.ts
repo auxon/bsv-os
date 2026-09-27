@@ -30,7 +30,7 @@ import { p2pkhUnlockHook, p2pkhUnlockHookOp1, selfAddress } from "./custody.ts";
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
-import { labelOutputs, resolveBasketForOrigin, spentByUs } from "./baskets.ts";
+import { labelOutputs, resolveBasketForOrigin, unavailableUtxos } from "./baskets.ts";
 import { checkMemo, lockingScriptOf } from "./engine.ts";
 import { fetchBulkMetadata, hasOrdEnvelope } from "./tokens.ts";
 import { track } from "./monitor.ts";
@@ -189,7 +189,7 @@ async function plainFunding(
 ): Promise<SpendableUtxo[]> {
   const address = selfAddress();
   const u = await chain.utxos(address);
-  const spent = await spentByUs(db);
+  const spent = await unavailableUtxos(db);
   const candidates = u.utxos
     .filter((x) => x.value > 1 && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
     .sort((a, b) => b.value - a.value)
@@ -234,7 +234,7 @@ export async function lockOrdinal(opts: {
   const ours = p2pkhScript(self).toHex().slice(0, 50).toLowerCase();
   if (!carrier.scriptHex.toLowerCase().startsWith(ours)) fail("NOT_OURS", "carrier is not ours");
   if (carrier.value !== 1) fail("BAD_PARAM", `carrier must be exactly 1 sat (found ${carrier.value})`);
-  const spent = await spentByUs(opts.db);
+  const spent = await unavailableUtxos(opts.db);
   if (spent.has(`${parts![1]!.toLowerCase()}:${opts.vout}`)) {
     fail("BAD_PARAM", "carrier already spent by an in-flight transaction (indexers may not show it yet)");
   }

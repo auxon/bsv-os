@@ -51,6 +51,24 @@ money stays paid, unpaid accrual is never sent.
 - `stream_list`, `stream_ticks` — status + paid totals; per-tick ledger (paid/skipped/stale/closed with beat ids + txids).
 - `stream_stop` — close. Origin `stream` pays: `bsv allow stream <cap>`.
 
+## Time capsules (post-dated cheques)
+
+Lock future money with present policy. `capsule_lock` selects + reserves
+funding UTXOs (excluded from every spend selection until release) and
+records {to, amount, message, unlock height/date}. Nothing moves until
+maturity: the minutely ticker auto-pays matured capsules with a fresh tx
+(current fees, note in the OP_RETURN so message and money land together).
+`capsule_claim` triggers the same path by hand; `capsule_cancel` is the
+owner escape hatch (releases reservations, never pays).
+
+Why daemon-enforced, not CLTV: BSV demotes OP_CHECKLOCKTIMEVERIFY to a NOP
+for all post-Genesis UTXOs (verified in bitcoin-sv source — a bare CLTV
+output is unspendable, proven with 1500 burned sats). Consensus timelock on
+BSV is tx-level nLockTime, which binds nothing without key custody. So
+capsules bind your daemon's policy instead — the same trust as everything
+else here: your machine refuses, your seed overrules. Sealed (encrypted)
+payloads are future work; v1 notes are public.
+
 ## Evolution market (sats-priced prompt selection)
 
 Sponsors post task + rubric + per-round prize + entry fee (`evolve_create`);

@@ -28,7 +28,7 @@ import { p2pkhUnlockHook, p2pkhUnlockHookNone, p2pkhUnlockHookSingle, selfAddres
 import { buildTx, p2pkhScript, signTx, type SpendableUtxo } from "./tx.ts";
 import { check } from "./policy.ts";
 import { recordSpend } from "./agents.ts";
-import { labelOutputs, resolveBasketForOrigin, spentByUs } from "./baskets.ts";
+import { labelOutputs, resolveBasketForOrigin, unavailableUtxos } from "./baskets.ts";
 import type { JevDecide } from "./jev.ts";
 import { fetchBulkMetadata, hasOrdEnvelope, splitOutpoint } from "./tokens.ts";
 import {
@@ -270,7 +270,7 @@ async function findPlainDust(
 ): Promise<{ txid: string; vout: number; scriptHex: string }> {
   const ours = p2pkhScript(address).toHex().slice(0, 50).toLowerCase();
   const u = await chain.utxos(address);
-  const spent = await spentByUs(db);
+  const spent = await unavailableUtxos(db);
   const candidates = u.utxos
     .filter((x) => x.value === 1 && `${x.txid}:${x.vout}` !== exclude && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
     .slice(0, 10);
@@ -359,7 +359,7 @@ export async function completeSwap(opts: {
   const address = selfAddress();
   const lock = p2pkhScript(address);
   const u = await opts.chain.utxos(address);
-  const spent = await spentByUs(opts.db);
+  const spent = await unavailableUtxos(opts.db);
   const candidates = u.utxos
     .filter((x) => x.value > 1 && !spent.has(`${x.txid.toLowerCase()}:${x.vout}`))
     .sort((a, b) => b.value - a.value)

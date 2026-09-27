@@ -211,6 +211,22 @@ export async function spentByUs(db: Knex): Promise<Set<string>> {
   return spent;
 }
 
+/** Outpoints reserved by live time capsules — excluded from spend selection. */
+export async function reservedUtxos(db: Knex): Promise<Set<string>> {
+  try {
+    const rows = (await db("reserved_utxos").select("outpoint")) as Array<{ outpoint: string }>;
+    return new Set(rows.map((r) => r.outpoint));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Everything selection must skip: spent-tracked plus capsule-reserved. */
+export async function unavailableUtxos(db: Knex): Promise<Set<string>> {
+  const [spent, reserved] = await Promise.all([spentByUs(db), reservedUtxos(db)]);
+  return new Set([...spent, ...reserved]);
+}
+
 export async function walletBaskets(db: Knex, chain: ChainProvider): Promise<BasketView[]> {
   return basketBalances(db, chain, selfAddress());
 }

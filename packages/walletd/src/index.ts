@@ -32,6 +32,7 @@ import { tickOrders } from "./nightshift.ts";
 import { getBoard, getPosts } from "./boards.ts";
 import { spendTo } from "./engine.ts";
 import { streamBeatRef, tickStreams } from "./streams.ts";
+import { tickCapsules } from "./capsule.ts";
 
 const PORT = Number(process.env.BSV_WALLETD_PORT ?? 2121);
 const RUNTIME_DIR = process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os");
@@ -623,6 +624,22 @@ export async function main(): Promise<void> {
     };
     void streamLoop();
     setInterval(() => void streamLoop(), 60_000).unref?.();
+
+    // Capsules: auto-pay matured post-dated cheques, minutely.
+    const capsuleLoop = async (): Promise<void> => {
+      try {
+        const res = await tickCapsules({ db, chain });
+        for (const r of res) {
+          // eslint-disable-next-line no-console
+          console.log(`capsule: #${r.capsule} ${r.outcome}${r.txid ? ` ${r.txid.slice(0, 12)}` : ""}`);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("capsule tick failed:", err instanceof Error ? err.message : err);
+      }
+    };
+    void capsuleLoop();
+    setInterval(() => void capsuleLoop(), 60_000).unref?.();
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("monitor disabled:", err instanceof Error ? err.message : err);
