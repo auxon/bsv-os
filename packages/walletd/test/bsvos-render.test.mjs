@@ -16,16 +16,17 @@ const appDir = new URL("../../runner/apps/bsvos/", import.meta.url);
 /** Read a file from the app bundle. readFileSync will not take a URL object. */
 const readApp = (rel) => fs.readFileSync(fileURLToPath(new URL(rel, appDir)), "utf8");
 
+/**
+ * The app's REAL view list, imported from the same module app.js uses.
+ *
+ * This used to rebuild the array here from the individual view modules, which
+ * is exactly why the missing-spread bug in app.js slipped through every test:
+ * the suite verified the modules were fine and never checked the one line that
+ * assembled them. Import views/index.js so a wiring mistake fails here.
+ */
 async function loadViews() {
-  const wallet = await import(new URL("views/wallet.js", appDir).href);
-  const money = await import(new URL("views/money.js", appDir).href);
-  const social = await import(new URL("views/social.js", appDir).href);
-  const apps = await import(new URL("views/apps.js", appDir).href);
-  const work = await import(new URL("views/work.js", appDir).href);
-  const { inscribe } = await import(new URL("views/inscribe.js", appDir).href);
-  const twetch = await import(new URL("views/twetch.js", appDir).href);
-  const { setup } = await import(new URL("views/setup.js", appDir).href);
-  return [setup, ...wallet.default, ...money.default, inscribe, ...social.default, ...twetch.default, ...apps.default, ...work.default];
+  const registry = await import(new URL("views/index.js", appDir).href);
+  return registry.VIEWS;
 }
 
 /** A ctx whose data is a realistic (non-empty) daemon payload for that view. */
@@ -164,6 +165,34 @@ function fixtures() {
     },
   };
 }
+
+test("the view registry is wired correctly, not just the modules", async () => {
+  // The bug this guards: one entry in the VIEWS array lost its `...`, so an
+  // entire module's array was inserted as ONE view with no id. The nav then
+  // rendered an empty row and that module's views never appeared — which is
+  // exactly how "I don't see a Twetch group" happened.
+  const registry = await import(new URL("views/index.js", appDir).href);
+  const { VIEWS, GROUP_ORDER, BY_ID } = registry;
+
+  assert.ok(Array.isArray(VIEWS), "VIEWS is an array");
+  const bad = VIEWS.map((v, i) => [i, v]).filter(([, v]) => !v || typeof v.id !== "string" || v.id === "" || typeof v.group !== "string" || v.group === "");
+  assert.equal(bad.length, 0, `every entry needs an id and a group; offenders: ${JSON.stringify(bad.map(([i, v]) => [i, v === undefined ? "undefined" : v]))}`);
+  for (const v of VIEWS) {
+    assert.ok(v.title, `${v.id} has a title`);
+    assert.ok(GROUP_ORDER.includes(v.group), `${v.id} group ${v.group} is in GROUP_ORDER`);
+  }
+  const ids = VIEWS.map((v) => v.id);
+  assert.equal(new Set(ids).size, ids.length, "ids are unique");
+  // BY_ID is what the router uses; a missing entry means a dead nav link.
+  for (const v of VIEWS) assert.equal(BY_ID.get(v.id), v, `${v.id} is reachable by id`);
+  // Named expectations, so dropping a module fails loudly.
+  assert.equal(VIEWS.length, 34, "34 views");
+  for (const id of ["setup", "inscribe", "twetch-feed", "twetch-alerts", "twetch-profile", "twetch-memes", "twetch-market"]) {
+    assert.ok(ids.includes(id), `${id} is registered`);
+  }
+  assert.equal(VIEWS.filter((v) => v.group === "Twetch").length, 5, "all five Twetch views are in the nav");
+  assert.equal(VIEWS[0].id, "setup", "setup is first, so a new machine starts there");
+});
 
 test("every shell view renders without throwing on realistic data", async () => {
   const views = await loadViews();

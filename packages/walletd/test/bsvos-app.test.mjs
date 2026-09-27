@@ -15,7 +15,7 @@ test("bsvos app: bundle files exist", () => {
   for (const f of ["index.html", "app.js", "styles.css", "manifest.json", "lib/rpc.js", "lib/ui.js", "lib/notify.js"]) {
     assert.ok(exists(f), `${f} present`);
   }
-  for (const f of ["views/common.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js"]) {
+  for (const f of ["views/common.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js", "views/index.js"]) {
     assert.ok(exists(f), `${f} present`);
   }
 });
@@ -61,15 +61,20 @@ test("a long-lived shell window notices when its build changes underneath it", (
   assert.ok(block.includes("etag,"), "the ETag is sent as a header");
   assert.ok(block.includes("stat.mtimeMs"), "the ETag moves when the file changes");
   // ...and the nav the user could not see must still be wired.
-  assert.ok(app.includes('"Twetch"'), "Twetch group is in GROUP_ORDER");
-  assert.ok(app.includes("twetchViews"), "twetch views are registered");
+  // app.js must consume the registry, not reassemble it: that is exactly what
+  // let a missing spread operator hide from the entire test suite.
+  assert.ok(app.includes('from "./views/index.js"'), "app.js imports the registry");
+  assert.ok(!app.includes("const VIEWS = ["), "app.js does not rebuild the view list");
+  const registry = read("views/index.js");
+  assert.ok(registry.includes("...twetchViews"), "twetch views are spread into the registry");
+  assert.ok(registry.includes('"Twetch"'), "Twetch group is declared in the registry");
 });
 
 test("bsvos app: every module parses and nothing loads remotely", () => {
   const files = [
     "app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js",
     "views/common.js", "views/wallet.js", "views/money.js",
-    "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js",
+    "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js", "views/index.js",
   ];
   for (const f of files) {
     // Real parse gate. These are ES modules, so a syntax error kills the
@@ -98,7 +103,7 @@ test("bsvos app: every module parses and nothing loads remotely", () => {
 });
 
 test("bsvos app: no key material and no keychain reads", () => {
-  const files = ["app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js"];
+  const files = ["app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js", "views/index.js"];
   for (const f of files) {
     const src = read(f);
     assert.ok(!/WIF\b|privateKey|mnemonic|seed phrase|identityKey\s*[:=]\s*["']/.test(src), `${f} has no key material`);
@@ -111,7 +116,7 @@ test("bsvos app: covers the whole Quickshell panel surface", () => {
   const app = read("app.js");
   const all = [
     "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js",
-    "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js",
+    "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js", "views/index.js",
   ]
     .map(read)
     .join("\n");
@@ -129,7 +134,8 @@ test("bsvos app: covers the whole Quickshell panel surface", () => {
   for (const v of ["twetch-feed", "twetch-alerts", "twetch-profile", "twetch-memes", "twetch-market"]) {
     assert.ok(new RegExp(`id: "${v}"`).test(all), `view ${v} exists`);
   }
-  assert.ok(/Twetch/.test(app), "a Twetch nav group exists");
+  // GROUP_ORDER moved into the registry, so check it there.
+  assert.ok(/Twetch/.test(all), "a Twetch nav group exists");
   // Setup is where a new machine starts.
   assert.ok(new RegExp('id: "setup"').test(all), "setup view exists");
   assert.ok(/hasWallet && state\.viewId !== "setup"/.test(app), "first run lands on setup");
@@ -145,7 +151,7 @@ test("bsvos app: every daemon call is same-origin RPC", () => {
   // Match the module and the concrete spawn helpers, not a bare `exec(` —
   // RegExp.prototype.exec() is everywhere in this code and is not shelling out.
   const SHELL_OUT = /child_process|execSync|spawnSync|execFileSync|\bexecFile\s*\(|\bspawn\s*\(/;
-  for (const f of ["app.js", "lib/ui.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js"]) {
+  for (const f of ["app.js", "lib/ui.js", "views/wallet.js", "views/money.js", "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js", "views/index.js"]) {
     assert.ok(!SHELL_OUT.test(read(f)), `${f} does not shell out`);
   }
 });
@@ -187,7 +193,7 @@ test("bsvos app: every import specifier resolves inside the bundle", () => {
   const files = [
     "app.js", "lib/rpc.js", "lib/ui.js", "lib/notify.js",
     "views/common.js", "views/wallet.js", "views/money.js",
-    "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js",
+    "views/social.js", "views/apps.js", "views/work.js", "views/inscribe.js", "views/twetch.js", "views/setup.js", "views/index.js",
   ];
   const seen = new Set();
   const queue = [...files];
@@ -212,7 +218,7 @@ test("bsvos app: every import specifier resolves inside the bundle", () => {
     }
   }
   // Everything reachable from app.js is accounted for.
-  assert.equal(seen.size, 13, `all 13 modules reachable, saw ${seen.size}`);
+  assert.equal(seen.size, 14, `all 14 modules reachable, saw ${seen.size}`);
 });
 
 test("bsvos app: the daemon serves every file the page can request", async () => {

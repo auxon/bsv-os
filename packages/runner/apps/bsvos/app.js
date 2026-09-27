@@ -16,21 +16,10 @@ import { rpc, tryRpc, explain, isLocked } from "./lib/rpc.js";
 import { $, esc, toast, openExternal, confirmDialog } from "./lib/ui.js";
 import { statusLine, watchRequests, notificationsEnabled, setNotificationsEnabled, requestNotificationPermission, notify } from "./lib/notify.js";
 
-import walletViews from "./views/wallet.js";
-import moneyViews from "./views/money.js";
-import socialViews from "./views/social.js";
-import appViews from "./views/apps.js";
-import workViews from "./views/work.js";
-import { inscribe } from "./views/inscribe.js";
-import twetchViews from "./views/twetch.js";
-import { setup } from "./views/setup.js";
-
-// setup comes first: it is where a new machine starts, and the other views
-// mostly dead-end until a wallet exists.
-const VIEWS = [setup, ...walletViews, ...moneyViews, inscribe, ...socialViews, twetchViews, ...appViews, ...workViews];
-const BY_ID = new Map(VIEWS.map((v) => [v.id, v]));
-
-const GROUP_ORDER = ["Wallet", "Money", "Twetch", "Identity", "Apps", "Work"];
+// The registry lives in views/index.js so the tests can import the exact array
+// the app runs. It used to be assembled here, and one entry silently lost its
+// spread operator — see the note in that file.
+import { VIEWS, BY_ID, GROUP_ORDER } from "./views/index.js";
 
 const state = {
   viewId: location.hash.replace(/^#\/?/, "") || "overview",
