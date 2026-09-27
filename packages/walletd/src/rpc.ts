@@ -14,6 +14,7 @@ import type { ChainProvider } from "./chain.ts";
 import { listPolicies, pendingRequests, probe, seedRequest, setPolicy } from "./policy.ts";
 import { qrDataUrl, qrDataUrlText } from "./qr.ts";
 import { readEvents } from "./events.ts";
+import { watchPoll, watchTailCursor, type WatchCursor } from "./watch.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
@@ -503,6 +504,36 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       events = await readEvents(b.db, opts);
     }
     return { events };
+  },
+  /**
+   * A cursor parked at the newest event, so `bsv watch --follow` (and any
+   * agent that wants "from now on") starts empty instead of replaying the
+   * whole archive.
+   */
+  watchTail: async () => {
+    const b = needBackend();
+    return { cursor: await watchTailCursor(b.db) };
+  },
+  /**
+   * `bsv watch`: the whole wallet as one filtered tail — policy lifecycle,
+   * stream payments, incoming payments, x402 receipts, board posts, cast
+   * recordings. `filter` is the text DSL (`type=payment sats>=100
+   * since=1h`) or an object. `cursor` is echoed back verbatim; `waitMs`
+   * long-polls (max 60s). Agents subscribe here instead of re-diffing
+   * state. The Bonsai idea, minus the C#.
+   */
+  watchPoll: async (params) => {
+    const b = needBackend();
+    const { filter, cursor, limit, waitMs } = p(params) as {
+      filter?: unknown; cursor?: unknown; limit?: unknown; waitMs?: unknown;
+    };
+    const opts = {
+      filter: filter ?? "",
+      limit: Math.min(200, Math.max(1, Math.floor(Number(limit) || 50))),
+      ...(cursor && typeof cursor === "object" ? { cursor: cursor as WatchCursor } : {}),
+      waitMs: Math.min(60_000, Math.max(0, Math.floor(Number(waitMs) || 0))),
+    };
+    return await watchPoll(b.db, opts);
   },
   /**
    * Dry-run gate: judge a hypothetical spend through caps, budgets, and

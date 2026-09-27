@@ -200,6 +200,7 @@ bsv jev decide --state <json|text|@file> --questions <json|@file>  # one calibra
 bsv agent mint <name> --budget=N [--daily=N] [--expiry=30d|YYYY-MM-DD]
 bsv agent list | bsv agent show <name> | bsv agent revoke <name>
 bsv pending                 # monitor queue
+bsv watch [filter] [--follow] [--since 2h|300] [--limit N] [--json]  # one filtered tail: payments, streams, x402, boards, cast, approvals
 bsv history                 # unified ledger: txs + requests + policies (F8 dashboard)
 bsv app install <domain>  # install a Metanet app (manifest + launcher)
 bsv app install <domain> --manifest-file <path>  # dev install: same validation, no fetch
@@ -288,8 +289,44 @@ without ever touching keys.
 Agent instructions live in [SKILLS.md](SKILLS.md) — point any MCP-capable
 agent at it.
 
-## Jev decisions
+## Watch (subscribe, don't poll)
 
+Everything the wallet does lands in one ordered, filterable feed: request
+created/approved/denied, budget changes, stream payments, incoming payments,
+x402 receipts, board/memory posts, cast recordings. The query runs in the
+daemon, where the data already is, and the result is pushed to you.
+
+```bash
+bsv watch                                  # the whole archive, oldest first
+bsv watch --follow                         # live from now
+bsv watch 'type=payment sats>=100 since=1h'
+bsv watch --since 2h --follow --json       # replay two hours, then tail (ndjson)
+curl -Nk 'https://127.0.0.1:2121/v1/watch?filter=type%3Dpayment'   # SSE
+```
+
+Filter DSL: whitespace-separated `field op value`, ANDed. Fields `type`,
+`source`, `origin`, `status`, `dir`, `detail`, `sats`, `at`; ops `=`, `!=`,
+`~` (substring), `>`, `>=`, `<`, `<=`; `|` separates alternatives; `since=`
+and `until=` take durations (`30s`, `15m`, `2h`, `7d`). `type` is
+hierarchical (`type=request` matches `request.created`) and `type=payment`
+means money moved either way. Unknown fields and bad operators are errors,
+never a filter that silently matches everything.
+
+Agents use `watch_poll` over MCP (pass the returned `cursor` back unchanged,
+`wait_seconds` sleeps instead of polling) — same feed, no polling loop.
+
+Cursors are honest: ordering is `(timestamp, source, key)` and the cursor
+carries the keys already delivered at its millisecond, so a page that stops
+mid-millisecond neither skips nor repeats a row, and following survives a
+daemon restart. Rows inserted with a backdated timestamp (only possible from
+an external writer) are not delivered to an existing cursor — sweep with
+`--since 0` for those.
+
+This is the one idea carried over from [auxon/bonsai](https://github.com/auxon/bonsai)
+(2021, C#/Qactive): query the thing, push the matches, evaluate where the
+data lives. See [docs/BONSAI.md](docs/BONSAI.md) for what survived the audit.
+
+## Jev decisions
 With `OPENROUTER_API_KEY` set in the daemon environment (see
 `packages/walletd/bsv-walletd.service`, `EnvironmentFile`), Jev
 (TypeSafe System One) scores spends and x402 quotes before policy decides:

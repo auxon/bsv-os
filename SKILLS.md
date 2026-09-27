@@ -29,6 +29,7 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `jev_status` | — | Whether Jev is configured in the daemon, the model, and the auto-approval thresholds. |
 | `policy_probe` | `{ action, amountSats, label?, description? }` | Dry-run the spending gate: caps, your budget, Jev verdict — without spending or writing a request. Call before spending to see what approval you need. |
 | `events_poll` | `{ since?, wait_seconds? }` | Approval-lifecycle feed (request created/approved/denied, budget minted/revoked). Pass 0 first, then your last event id; `wait_seconds` (max 60) sleeps until something happens. Poll this in a loop instead of diffing requests. |
+| `watch_poll` | `{ filter?, cursor?, limit?, wait_seconds? }` | **Everything** as one feed: approvals, stream payments, incoming payments, x402 receipts, board/memory posts, cast recordings. Pass the returned `cursor` back unchanged; `wait_seconds` (max 60) sleeps until a match arrives. Prefer this over `events_poll` + separate balance/board/stream calls. Filter: `"type=payment sats>=100 since=1h"` — fields `type source origin status dir detail sats at`, ops `= != ~ > >= <=`, `\|` for alternatives, `since`/`until` take durations. `type=payment` means money moved either way. |
 | `market_browse` | `{ kind? }` | Active atomic-market listings: ordinals and BSV21 tokens with prices, sellers, and fees. |
 | `market_buy` | `{ listing, maxPrice? }` | Buy a listing end to end: the daemon re-checks the covenant's seller + price, signs, broadcasts, and posts settlement. The OrdLock covenant enforces the payout, so the asset moves in the same tx. Spends from YOUR budget through policy. |
 | `market_list` | `{ outpoint, priceSats, kind?, tokenId?, tokenAmount?, title? }` | List the wallet's ordinal or BSV21 UTXO for sale. Ordinals move into an on-chain OrdLock covenant (miner fee; cancellable); tokens stay in the wallet behind a signed offer. |
@@ -218,6 +219,8 @@ bsv pending                   # watch queue
 bsv jev status                # Jev advisor on/off + thresholds
 bsv probe <origin> <action> <sats> [--label=..]  # dry-run the gate, no money moves
 bsv events --wait 60          # approval-lifecycle feed (same as events_poll)
+bsv watch 'type=payment since=1h'   # the whole wallet as one filtered tail
+bsv watch --follow --json    # live tail, one JSON event per line
 bsv doctor                    # machine-check the gotchas; exit 1 if anything is broken
 bsv unlock | bsv lock
 ```

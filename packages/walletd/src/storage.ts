@@ -24,6 +24,7 @@ import { migrateReceipts } from "./receipts.ts";
 import { migrateRequests } from "./requests.ts";
 import { migrateTorrents } from "./torrents.ts";
 import { migrateRecovery } from "./recovery.ts";
+import { migrateWatch } from "./watch.ts";
 import { migrateStreams } from "./streams.ts";
 import { migrateX402 } from "./x402.ts";
 
@@ -86,4 +87,5 @@ export async function migrate(db: Knex): Promise<void> {
   await migrateX402(db);
   await migrateApps(db);
   await migrateBoards(db);
+  await migrateWatch(db);
 }

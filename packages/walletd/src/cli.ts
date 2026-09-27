@@ -348,6 +348,85 @@ async function main(): Promise<void> {
       }));
       break;
     }
+    case "watch": {
+      // Positional args form the filter DSL: bsv watch 'type=payment sats>=100'
+      // (flag values like `--limit 12` are not filter terms).
+      const WATCH_VALUE_FLAGS = new Set(["since", "limit", "filter"]);
+      const positionals: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        const a = rest[i]!;
+        if (a.startsWith("--")) {
+          if (!a.includes("=") && WATCH_VALUE_FLAGS.has(a.slice(2))) i++;
+          continue;
+        }
+        if (a === "-f") continue;
+        positionals.push(a);
+      }
+      const filterText = positionals.join(" ");
+      const follow = rest.includes("--follow") || rest.includes("-f");
+      const asJson = rest.includes("--json");
+      const limit = Number(flag(rest, "limit") ?? 25);
+      const sinceArg = flag(rest, "since");
+      const unitMs: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+      let windowStart: number | null = null;
+      if (sinceArg !== undefined && sinceArg !== "now" && sinceArg !== "tail") {
+        const m = /^(\d+)(s|m|h|d|w)$/.exec(sinceArg);
+        const secs = m ? (Number(m[1]) * unitMs[m[2]!]!) / 1000 : Number(sinceArg);
+        if (!Number.isFinite(secs) || secs <= 0) {
+          console.error(`bad --since "${sinceArg}" (use 30m, 2h, 1d, or a seconds count)`);
+          process.exitCode = 2;
+          break;
+        }
+        windowStart = Date.now() - secs * 1000;
+      }
+      let cursor: { at: number; keys: string[] } | null = null;
+      if (windowStart !== null) {
+        // Replay the window from its first millisecond, then follow.
+        cursor = { at: windowStart - 1, keys: [] };
+      } else if (follow) {
+        // Tail mode starts at the newest event, not at the beginning of time.
+        const probe = (await call("watchTail")) as {
+          result?: { cursor?: { at: number; keys: string[] } };
+        };
+        cursor = probe.result?.cursor ?? { at: Date.now(), keys: [] };
+      }
+      if (follow) {
+        process.stderr.write(
+          `watching${filterText ? ` ${filterText}` : " everything"} — ctrl-c to stop\n`,
+        );
+      }
+      const printEvent = (ev: Record<string, unknown>): void => {
+        if (asJson) {
+          console.log(JSON.stringify(ev));
+          return;
+        }
+        const when = new Date(Number(ev.at)).toISOString().replace("T", " ").slice(0, 19);
+        const sats = Number(ev.sats) > 0 ? `${Number(ev.sats)} sats` : "";
+        const arrow = ev.dir === "in" ? "←" : ev.dir === "out" ? "→" : "·";
+        const who = ev.origin ? ` [${ev.origin}]` : "";
+        const note = ev.detail ? ` — ${ev.detail}` : "";
+        console.log(`${when} ${arrow} ${String(ev.type).padEnd(26)}${sats.padStart(11)}${who}${note}`);
+      };
+      for (;;) {
+        const res = (await call("watchPoll", {
+          filter: filterText,
+          limit,
+          ...(cursor ? { cursor } : {}),
+          ...(follow ? { waitMs: 30_000 } : {}),
+        })) as {
+          result?: { events?: Array<Record<string, unknown>>; cursor?: { at: number; keys: string[] } };
+          error?: { code?: string; message?: string };
+        };
+        if (res.error) {
+          print(res);
+          break;
+        }
+        for (const ev of res.result?.events ?? []) printEvent(ev);
+        if (res.result?.cursor) cursor = res.result.cursor;
+        if (!follow) break;
+      }
+      break;
+    }
     case "market": {
       const [mSub, ...mRest] = rest;
       const mPos = mRest.filter((a) => !a.startsWith("--"));
@@ -1614,7 +1693,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

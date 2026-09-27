@@ -116,6 +116,19 @@ const TOOLS = [
     },
   },
   {
+    name: "watch_poll",
+    description: "Subscribe to the whole wallet as one filtered event stream: payment requests/approvals, budget changes, stream payments, incoming payments, x402 receipts, board/memory posts, and cast recordings. Pass the returned `cursor` back unchanged on the next call. Hold with `wait_seconds` (max 60) so you sleep until something happens instead of polling balances, requests, and boards separately. `filter` is optional: text like \"type=payment sats>=100 since=1h\" (fields: type, source, origin, status, dir, detail, sats, at; ops = != ~ > >= < <=; | separates alternatives; since/until take durations like 15m, 2h, 7d).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        filter: { type: "string", description: "filter DSL, e.g. \"type=payment|stream sats>=100 since=1h\"" },
+        cursor: { type: "object", description: "cursor from the previous call: { at: <ms>, keys: [\"source|key\"] }" },
+        limit: { type: "number", description: "max events per call (default 25, max 200)" },
+        wait_seconds: { type: "number", description: "long-poll up to this many seconds (default 0, max 60)" },
+      },
+    },
+  },
+  {
     name: "market_browse",
     description: "Browse the atomic market: active listings of ordinals and BSV21 tokens with prices, sellers, and fees. Read-only.",
     inputSchema: {
@@ -537,6 +550,13 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
           return text(await callDaemon("eventsPoll", {
             origin: agent,
             ...(Number.isFinite(Number(args.since)) ? { since: Number(args.since) } : {}),
+            ...(Number.isFinite(Number(args.wait_seconds)) ? { waitMs: Math.floor(Number(args.wait_seconds) * 1000) } : {}),
+          }));
+        case "watch_poll":
+          return text(await callDaemon("watchPoll", {
+            ...(typeof args.filter === "string" && args.filter ? { filter: args.filter } : {}),
+            ...(args.cursor && typeof args.cursor === "object" ? { cursor: args.cursor } : {}),
+            ...(Number.isFinite(Number(args.limit)) ? { limit: Number(args.limit) } : {}),
             ...(Number.isFinite(Number(args.wait_seconds)) ? { waitMs: Math.floor(Number(args.wait_seconds) * 1000) } : {}),
           }));
         case "market_browse":

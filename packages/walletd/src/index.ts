@@ -36,6 +36,7 @@ import { CAST_BOARD, MAX_SEGMENT_BYTES, MAX_UPLOAD_BYTES, bumpLiveSegments, endS
 import { spendTo } from "./engine.ts";
 import { streamBeatRef, tickStreams } from "./streams.ts";
 import { tickCapsules } from "./capsule.ts";
+import { parseWatchFilter, watchPoll, watchTailCursor, type WatchCursor } from "./watch.ts";
 
 const PORT = Number(process.env.BSV_WALLETD_PORT ?? 2121);
 const RUNTIME_DIR = process.env.XDG_RUNTIME_DIR ?? path.join(os.homedir(), ".local/share/bsv-os");
@@ -84,6 +85,79 @@ export function setWireBackend(b: { db: Knex; chain: ChainProvider } | null): vo
 function isLoopbackPeer(req: IncomingMessage): boolean {
   const a = req.socket.remoteAddress ?? "";
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+}
+
+/** GET /v1/watch — the `bsv watch` tail as Server-Sent Events. Loopback-only. */
+async function watchSseHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? "/", "https://127.0.0.1");
+  const filter = url.searchParams.get("filter") ?? "";
+  try {
+    // Reject a bad filter with a 400 instead of streaming nothing forever.
+    parseWatchFilter(filter);
+  } catch (e) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "BAD_FILTER", message: e instanceof Error ? e.message : String(e) } }));
+    return;
+  }
+  const db = wireBackend?.db;
+  if (!db) {
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "NO_BACKEND", message: "wallet engine offline" } }));
+    return;
+  }
+  const limit = Math.min(200, Math.max(1, Math.floor(Number(url.searchParams.get("limit") ?? 25)) || 25));
+  let cursor: WatchCursor | null = null;
+  const raw = url.searchParams.get("cursor");
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { at?: unknown; keys?: unknown };
+      if (!Number.isFinite(Number(parsed.at))) throw new Error("cursor.at must be a timestamp");
+      cursor = { at: Number(parsed.at), keys: Array.isArray(parsed.keys) ? parsed.keys.map(String) : [] };
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "BAD_CURSOR", message: e instanceof Error ? e.message : String(e) } }));
+      return;
+    }
+  } else {
+    // No cursor means "from now": a stream is for what happens next, not a
+    // replay of the archive (ask for an explicit cursor to replay).
+    try {
+      cursor = await watchTailCursor(db);
+    } catch (e) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "NO_BACKEND", message: e instanceof Error ? e.message : String(e) } }));
+      return;
+    }
+  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  res.write("retry: 3000\n\n");
+  let gone = false;
+  // `res` close = the client went away. (Request 'close' fires as soon as
+  // the GET is complete, which would end every stream instantly.)
+  res.on("close", () => {
+    gone = true;
+  });
+  res.on("error", () => {
+    gone = true;
+  });
+  while (!gone) {
+    let batch;
+    try {
+      batch = await watchPoll(db, { filter, cursor, limit, waitMs: 15_000 });
+    } catch (e) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: e instanceof Error ? e.message : String(e) })}\n\n`);
+      break;
+    }
+    for (const ev of batch.events) res.write(`event: watch\ndata: ${JSON.stringify(ev)}\n\n`);
+    if (batch.cursor) cursor = batch.cursor;
+    // Idle: a comment frame keeps proxies and `curl -N` honest about liveness.
+    if (batch.timedOut) res.write(": keep-alive\n\n");
+  }
+  res.end();
 }
 
 /** POST /cast/media — store one recording, return its playback URL. */
@@ -546,6 +620,12 @@ function handler() {
     if (!isLoopbackPeer(req)) {
       res.writeHead(403, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { code: "FORBIDDEN", message: "wallet RPC is loopback-only; remote buyers use /v1/serve/<method>" } }));
+      return;
+    }
+    // `bsv watch` as SSE: the same filtered, cursor-based tail the JSON-RPC
+    // serves, for `curl -N`, the panel, and anything that is not an agent.
+    if (typeof req.url === "string" && req.url.split("?")[0] === "/v1/watch" && req.method === "GET") {
+      await watchSseHttp(req, res);
       return;
     }
     // Cast media store: recordings upload here, live segments append here,

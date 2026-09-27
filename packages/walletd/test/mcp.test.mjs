@@ -13,7 +13,7 @@ async function pair(stub) {
   return { client, server };
 }
 
-test("lists the thirty-eight wallet tools", async () => {
+test("lists the wallet tools", async () => {
   const { client, server } = await pair(async () => ({}));
   const tools = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, [
@@ -25,7 +25,7 @@ test("lists the thirty-eight wallet tools", async () => {
     "market_browse", "market_buy", "market_list", "market_sync",
     "memory_forget", "memory_recall", "memory_remember", "p2p_peers",
     "policy_probe", "stream_beat", "stream_list", "stream_start",
-    "stream_stop", "stream_ticks", "wallet_balance", "wallet_status", "x402_pay",
+    "stream_stop", "stream_ticks", "wallet_balance", "wallet_status", "watch_poll", "x402_pay",
   ]);
   await client.close();
   await server.close();
@@ -63,6 +63,27 @@ test("market tools stamp the agent origin and validate input", async () => {
     client.callTool({ name: "market_sync", arguments: { listing: "a.b", txid: "zz" } }),
     /txid/,
   );
+  await client.close();
+  await server.close();
+});
+
+test("watch_poll forwards the filter DSL and the cursor verbatim", async () => {
+  const seen = [];
+  const { client, server } = await pair(async (method, params) => {
+    seen.push({ method, params });
+    return { events: [], cursor: { at: 5, keys: ["policy|1"] } };
+  });
+  await client.callTool({
+    name: "watch_poll",
+    arguments: { filter: "type=payment sats>=100", cursor: { at: 4, keys: ["stream|9"] }, limit: 10, wait_seconds: 5 },
+  });
+  assert.deepEqual(seen[0], {
+    method: "watchPoll",
+    params: { filter: "type=payment sats>=100", cursor: { at: 4, keys: ["stream|9"] }, limit: 10, waitMs: 5000 },
+  });
+  // Bare call: no filter, no wait — a plain tail.
+  await client.callTool({ name: "watch_poll", arguments: {} });
+  assert.deepEqual(seen[1], { method: "watchPoll", params: {} });
   await client.close();
   await server.close();
 });
