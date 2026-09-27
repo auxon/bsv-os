@@ -371,18 +371,7 @@ export const memes = {
           `</div>`
         : "") +
       (list.length
-        ? `<div class="memes">` +
-          list
-            .map((m) => {
-              const src = mediaUrl(m.url ?? m.mediaUrl ?? m.icon, "webp") ?? mediaUrl(m.url ?? m.mediaUrl);
-              return (
-                `<button class="meme" data-ext="${esc(src ?? "")}" ${src ? "" : "disabled"}>` +
-                  (src ? `<img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span>${esc(m.name ?? "?")}</span>`) +
-                `</button>`
-              );
-            })
-            .join("") +
-          `</div>`
+        ? `<div class="memes">` + list.map(memeTile).join("") + `</div>`
         : empty("No memes in this folder."))
     );
   },
@@ -402,6 +391,42 @@ export const memes = {
     });
   },
 };
+
+/**
+ * One meme tile.
+ *
+ * The field names matter and got this wrong the first time: a meme item's
+ * `url` is the twetch.com *web page* for it, not an image. Feeding that to
+ * <img src> renders a broken image, because an HTML page is not a picture.
+ * The actual bytes are `previewUrl` / `mediaUrl`, and for `format: "gif"` you
+ * want the full `mediaUrl` (the preview is a static first frame). Video
+ * formats need <video>, not <img>. `url` is only ever the outbound link.
+ */
+const VIDEO_FORMATS = new Set(["mp4", "webm", "mov", "m4v"]);
+
+function memeTile(m) {
+  const format = String(m?.format ?? "").toLowerCase();
+  const isVideo = VIDEO_FORMATS.has(format);
+  const src = isVideo ? mediaUrl(m.mediaUrl) : format === "gif" ? mediaUrl(m.mediaUrl) : mediaUrl(m.previewUrl) ?? mediaUrl(m.mediaUrl);
+  const page = m.url ?? `https://twetch.com/meme-library/meme/${m.sha256 ?? ""}`;
+  let media;
+  if (!src) {
+    media = `<span class="meme-fallback">no preview</span>`;
+  } else if (isVideo) {
+    media = `<video src="${esc(src)}" poster="${esc(mediaUrl(m.previewUrl) ?? "")}" muted loop playsinline preload="metadata"></video>`;
+  } else {
+    media = `<img src="${esc(src)}" alt="${esc(m.title ?? "meme")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'meme-fallback',textContent:'preview unavailable'}))">`;
+  }
+  return (
+    `<button class="meme" data-ext="${esc(page)}" title="${esc(m.title ?? "meme")}">` +
+      media +
+      `<span class="meme-cap">` +
+        `<span class="meme-title">${esc(m.title ?? "untitled")}</span>` +
+        `<span class="meme-sub">${esc([m.folder, m.format, m.tokenNumber ? `#${m.tokenNumber}` : null].filter(Boolean).join(" · "))}</span>` +
+      `</span>` +
+    `</button>`
+  );
+}
 
 // ── Market ──────────────────────────────────────────────────────────────
 export const market = {

@@ -145,8 +145,27 @@ function fixtures() {
       profile: { user: { id: 32324, name: "Richard A. Hein", handle: "rh", numFollowers: 12, numFollowing: 30, profile: "https://twetch.com/u/32324" }, posts: [{ id: 1, txid: "aa".repeat(32), userId: 32324, content: "hi", postedAtMs: 1790500000000, numLikes: 0, numReplies: 0, numBranches: 0, user: { id: 32324, name: "Richard A. Hein" } }] },
     },
     "twetch-memes": {
-      folders: [{ slug: "laugh", label: "Laugh", count: 467 }, { slug: "wow", label: "Wow", count: 469 }],
-      memes: [{ url: "aa".repeat(32) }, { url: "bb".repeat(32) }],
+      folders: [{ slug: "laugh", label: "Laugh", count: 467 }, { slug: "reaction-memes", label: "Reaction Memes", count: 2880 }],
+      memes: [
+        {
+          id: `${"3b".repeat(32)}:b://${"00".repeat(32)}@0`,
+          title: "Monkey Looking Awkwardly",
+          folder: "Reaction Memes",
+          folderSlug: "reaction-memes",
+          format: "gif",
+          mediaUrl: "https://api.twetch.com/v1/media/0026212e-o0.jpg?v=3",
+          previewUrl: "https://api.twetch.com/v1/media/0026212e-o0.jpg?v=3",
+          sha256: "3b7cf206d97e75a4a5a7d5ee77f0f93669f29a919c55de51869fba688ab9233d",
+          tokenNumber: 7889,
+          url: "https://twetch.com/meme-library/meme/3b7cf206/monkey-looking-awkwardly",
+        },
+        {
+          title: "A Clip", folder: "Reaction Memes", folderSlug: "reaction-memes", format: "mp4",
+          mediaUrl: "https://api.twetch.com/v1/media/clip-o0.mp4?v=3",
+          previewUrl: "https://api.twetch.com/v1/media/clip-o0.jpg?v=3",
+          url: "https://twetch.com/meme-library/meme/clip",
+        },
+      ],
       folder: "laugh",
     },
     "twetch-market": {
@@ -256,6 +275,50 @@ test("setup shows real progress from daemon state, not a local flag", async () =
   const claimed = view.render({ ...base, data: { hasWallet: true, locked: false, name: "x", claimed: true, funded: true, faucetAmount: 25000, appCount: 1, oidc: null } });
   assert.ok(!/Claim 25,000 sats/.test(claimed), "a claimed faucet is not offered again");
   assert.ok(/one-time grant per wallet/.test(claimed), "and says why");
+});
+
+test("meme tiles use the media URL, never the twetch.com page URL", async () => {
+  // The bug: a meme item's `url` is its twetch.com WEB PAGE. The first version
+  // read `m.url` first, and the media resolver passes any https URL straight
+  // through, so the browser was handed an HTML page as <img src> and every
+  // tile rendered broken. Real payload shape, captured from the live daemon.
+  const views = await loadViews();
+  const memes = views.find((v) => v.id === "twetch-memes");
+  const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const data = {
+    folder: "reaction-memes",
+    folders: [{ slug: "reaction-memes", label: "Reaction Memes", count: 2880 }],
+    memes: [{
+      title: "Monkey", folder: "Reaction Memes", format: "gif",
+      mediaUrl: "https://api.twetch.com/v1/media/abc-o0.jpg?v=3",
+      previewUrl: "https://api.twetch.com/v1/media/abc-o0.jpg?v=3",
+      url: "https://twetch.com/meme-library/meme/3b7cf206/monkey",
+    }],
+  };
+  const html = memes.render({ ...base, data });
+
+  // The image source must be the media host...
+  const srcs = [...html.matchAll(/<img[^>]+src="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(srcs.length > 0, "a tile rendered an img");
+  for (const src of srcs) {
+    assert.ok(!/twetch\.com\/meme-library/.test(src), `img src must not be the web page (${src})`);
+    assert.ok(/api\.twetch\.com\/v1\/media\//.test(src), `img src should be the media host (${src})`);
+  }
+  // ...and the page URL is still reachable, as the outbound link.
+  assert.ok(/data-ext="https:\/\/twetch\.com\/meme-library/.test(html), "the page URL is the outbound link");
+  // A gif wants the full media, not the static first frame.
+  assert.ok(/abc-o0/.test(html), "gif uses the media url");
+  // A broken image must degrade to text, not an empty box.
+  assert.ok(/onerror=/.test(html), "tiles have an error fallback");
+  // Titles and folder metadata should be visible.
+  assert.ok(/Monkey/.test(html), "title is shown");
+  assert.ok(/Reaction Memes/.test(html), "folder is shown");
+  // Video formats need <video>, not <img>.
+  const vid = memes.render({ ...base, data: { ...data, memes: [{ ...data.memes[0], format: "mp4", mediaUrl: "https://api.twetch.com/v1/media/clip.mp4" }] } });
+  assert.ok(/<video /.test(vid), "mp4 renders as <video>");
+  // A folder with no usable media still renders a labelled placeholder.
+  const none = memes.render({ ...base, data: { ...data, memes: [{ title: "Broken", url: "https://twetch.com/x" }] } });
+  assert.ok(/meme-fallback/.test(none), "missing media shows a placeholder");
 });
 
 test("twetch market only offers Buy when swapBuyFor would accept it", async () => {
