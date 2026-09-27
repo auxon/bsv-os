@@ -23,8 +23,11 @@ import appViews from "./views/apps.js";
 import workViews from "./views/work.js";
 import { inscribe } from "./views/inscribe.js";
 import twetchViews from "./views/twetch.js";
+import { setup } from "./views/setup.js";
 
-const VIEWS = [...walletViews, ...moneyViews, inscribe, ...socialViews, twetchViews, ...appViews, ...workViews];
+// setup comes first: it is where a new machine starts, and the other views
+// mostly dead-end until a wallet exists.
+const VIEWS = [setup, ...walletViews, ...moneyViews, inscribe, ...socialViews, twetchViews, ...appViews, ...workViews];
 const BY_ID = new Map(VIEWS.map((v) => [v.id, v]));
 
 const GROUP_ORDER = ["Wallet", "Money", "Twetch", "Identity", "Apps", "Work"];
@@ -231,6 +234,15 @@ async function boot() {
   buildNav();
   wire();
   await refreshStatus();
+
+  // First run: a machine with no wallet has nothing useful to show, and every
+  // view would just say "run bsv create". Send it to Setup once — then leave
+  // the user alone, because bouncing them back would be hostile.
+  if (state.auth && !state.auth.hasWallet && state.viewId !== "setup") {
+    state.viewId = "setup";
+    history.replaceState(null, "", "#/setup");
+  }
+
   await loadView(state.viewId);
   await refreshStatus();
 

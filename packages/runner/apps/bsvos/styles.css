@@ -265,3 +265,18 @@ pre.code {
 }
 .meme:hover { border-color: var(--line-2); }
 .meme img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ── setup wizard ──────────────────────────────────────────────────── */
+.steps { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+.step { gap: 8px; }
+.step.done { border-color: #1e4b2e; }
+.step.done .step-num { background: #14312d; color: var(--teal); border-color: #1f4b44; }
+.step.todo .step-num { background: var(--panel-2); color: var(--gold); border-color: #4b3f1f; }
+.step-head { display: flex; align-items: center; gap: 11px; }
+.step-head h3 { margin: 0; }
+.step-num {
+  width: 26px; height: 26px; flex: 0 0 auto;
+  border-radius: 50%; border: 1px solid var(--line);
+  display: grid; place-items: center;
+  font-size: 12.5px; font-weight: 700;
+}

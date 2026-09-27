@@ -85,9 +85,18 @@ bsv app open 127.0.0.1      # add & if it blocks your prompt; see below
 
 That launches the shell in a sandboxed Chrome window: wallet, approvals,
 policy, agents, send/receive/pay, payment requests, receipts, identity and
-messaging, the app store, and work boards. From then on the **Apps** view can
-open everything else. `bsv app open` blocks for the window's lifetime by
-design — background it (`&`) or use **Apps → Open** instead.
+messaging, Twetch, the app store, and work boards. From then on the **Apps**
+view can open everything else. `bsv app open` blocks for the window's
+lifetime by design — background it (`&`) or use **Apps → Open** instead.
+
+**A machine with no wallet lands on the Setup wizard**, which walks the
+remaining steps: unlock, name yourself, claim starter sats, pick a first
+app, and connect Twetch. Progress is read from the daemon on every visit, so
+you can stop and resume. Enrolling a wallet is the one step it will not do
+in the browser — that stays `bsv create` in a terminal, because
+`createWallet` returns the 12-word phrase and a browser must never be in
+that path. The wizard hands you the command with a copy button and offers to
+check again.
 
 #### 6. Optional: Twetch sign-in
 
@@ -236,11 +245,17 @@ working as designed.
 
 ## The bsvOS shell
 
-`bsv app open 127.0.0.1` opens the system shell on macOS: wallet and balance,
-spend approvals, policy, agent sub-wallets, send/receive/pay, payment
-requests, receipts, baskets, collectibles and tokens, identity and
-certificates, people/inbox/peers, the app store, gigs, NightShift, overlays,
-files, starter sats and recovery status.
+`bsv app open 127.0.0.1` opens the system shell on macOS: a first-run setup
+wizard, wallet and balance, spend approvals, policy, agent sub-wallets,
+send/receive/pay, payment requests, receipts, baskets, collectibles and
+tokens, **media inscribing**, identity and certificates, people/inbox/peers,
+a **Twetch section** (feed, alerts, profile, memes, market), the app store,
+gigs, NightShift, overlays, files, starter sats and recovery status.
+
+Inscribing takes any file up to 256 KiB and hex-encodes it in the page, so
+no filesystem path is ever sent. Fees run about 1 sat per byte, so a large
+file is not cheap — the view shows the estimate against your balance and
+disables the button when you cannot cover it.
 
 It is not a port of the QML panel. Every `bsv` subcommand the panel shelled
 out to is a daemon RPC method, so the shell calls the daemon directly over its

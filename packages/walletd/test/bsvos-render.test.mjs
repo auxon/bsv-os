@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // The shell's views build HTML strings. A parse gate proves the syntax; this
 // proves every view actually *renders* against realistic daemon payloads
@@ -12,6 +13,8 @@ import fs from "node:fs";
 globalThis.location = { origin: "https://127.0.0.1:2121", hash: "#/overview" };
 
 const appDir = new URL("../../runner/apps/bsvos/", import.meta.url);
+/** Read a file from the app bundle. readFileSync will not take a URL object. */
+const readApp = (rel) => fs.readFileSync(fileURLToPath(new URL(rel, appDir)), "utf8");
 
 async function loadViews() {
   const wallet = await import(new URL("views/wallet.js", appDir).href);
@@ -21,7 +24,8 @@ async function loadViews() {
   const work = await import(new URL("views/work.js", appDir).href);
   const { inscribe } = await import(new URL("views/inscribe.js", appDir).href);
   const twetch = await import(new URL("views/twetch.js", appDir).href);
-  return [...wallet.default, ...money.default, inscribe, ...social.default, ...twetch.default, ...apps.default, ...work.default];
+  const { setup } = await import(new URL("views/setup.js", appDir).href);
+  return [setup, ...wallet.default, ...money.default, inscribe, ...social.default, ...twetch.default, ...apps.default, ...work.default];
 }
 
 /** A ctx whose data is a realistic (non-empty) daemon payload for that view. */
@@ -148,6 +152,11 @@ function fixtures() {
       marketView: "listings",
       items: [{ id: 7271893, name: "Egg #441", number: 441, imageUrl: "https://api.twetch.com/v1/media/801ea7eb.jpg?v=4", priceSats: 480000000, outpoint: "cf5f4aef:845", sellerAddress: "142SdkqtZqqJ" }],
     },
+    setup: {
+      hasWallet: true, locked: false, identityKey: "03dd", name: "rah",
+      funded: true, claimed: false, faucetAmount: 25000, appCount: 3,
+      oidc: { issuer: "https://id.entangleit.com", clientId: "twetch_abc", redirectPort: 2122 },
+    },
     inscribe: {
       picked: { name: "cat.png", size: 4096, contentType: "image/png", sha256: "ab".repeat(32), hex: "89504e47", previewUrl: "blob:x", tooBig: false },
       recent: [{ contentType: "image/png", contentLength: 2048, outpoint: "aa:0", contentUrl: "https://ordinals.com/x" }],
@@ -177,7 +186,47 @@ test("every shell view renders without throwing on realistic data", async () => 
   // 27 of these mirror a Quickshell panel section; the rest are additions the
   // panel never had (inscribe, market, and the five Twetch views). The
   // panel-parity list lives in bsvos-app.test.mjs and is a subset check.
-  assert.equal(seen.size, 33, "33 views: 27 panel sections plus inscribe, market and 5 Twetch views");
+  assert.equal(seen.size, 34, "34 views: 27 panel sections plus setup, inscribe, market and 5 Twetch views");
+});
+
+test("setup never puts a recovery phrase in front of a browser", async () => {
+  // createWallet and importWallet are plain RPCs and createWallet RETURNS the
+  // 12-word phrase. The wizard must orchestrate that step in the terminal and
+  // must not call either from the page, or the phrase lands in a browser.
+  const views = await loadViews();
+  const view = views.find((v) => v.id === "setup");
+  assert.ok(view, "setup view exists");
+  const src = readApp("views/setup.js");
+  // Match the CALL, not the word: the file's header comment explains exactly
+  // why these two are never invoked, and must keep doing so.
+  assert.ok(!/rpc\(\s*"(?:create|import)Wallet"/.test(src), "setup never calls createWallet/importWallet");
+  assert.ok(/createWallet and importWallet are plain RPCs/.test(src), "the reason is still documented");
+  // It must instead hand the command over and offer to re-check.
+  assert.ok(/bsv create/.test(src), "names the terminal command");
+  assert.ok(/data-copy-cmd/.test(src), "offers to copy the command");
+  assert.ok(/data-recheck/.test(src), "polls for completion instead of doing it here");
+  // Everything that IS safe must be in-app.
+  assert.ok(/rpc\("unlock"/.test(src), "unlock is in-app (keyring, no TTY)");
+  assert.ok(/rpc\("profileSet"/.test(src), "naming is in-app");
+  assert.ok(/rpc\("faucetClaim"/.test(src), "faucet claim is in-app");
+  assert.ok(/confirmDialog\("Claim starter sats"/.test(src), "the claim is confirmed");
+});
+
+test("setup shows real progress from daemon state, not a local flag", async () => {
+  const views = await loadViews();
+  const view = views.find((v) => v.id === "setup");
+  const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const done = view.render({ ...base, data: { hasWallet: true, locked: false, name: "rah", claimed: true, appCount: 3, oidc: { clientId: "x", redirectPort: 2122 } } });
+  assert.ok(/6 of 6/.test(done), "a finished machine reads 6 of 6");
+  assert.ok(/All set/.test(done), "and says so");
+  const fresh = view.render({ ...base, data: { hasWallet: false, locked: true, name: "", claimed: false, appCount: 1, oidc: null } });
+  assert.ok(/0 of 6/.test(fresh), "a fresh machine reads 0 of 6");
+  assert.ok(/bsv create/.test(fresh), "and points at the terminal");
+  assert.ok(!fresh.includes("undefined") && !fresh.includes("NaN"), "no undefined/NaN in either state");
+  // A claimed faucet must not offer a second claim.
+  const claimed = view.render({ ...base, data: { hasWallet: true, locked: false, name: "x", claimed: true, funded: true, faucetAmount: 25000, appCount: 1, oidc: null } });
+  assert.ok(!/Claim 25,000 sats/.test(claimed), "a claimed faucet is not offered again");
+  assert.ok(/one-time grant per wallet/.test(claimed), "and says why");
 });
 
 test("twetch market only offers Buy when swapBuyFor would accept it", async () => {
@@ -186,7 +235,7 @@ test("twetch market only offers Buy when swapBuyFor would accept it", async () =
   // the raw value dies on BAD_PARAM, so the view must normalise and gate.
   const views = await loadViews();
   const market = views.find((v) => v.id === "twetch-market");
-  const src = fs.readFileSync(new URL("views/twetch.js", appDir), "utf8");
+  const src = readApp("views/twetch.js");
   assert.ok(/replace\(":", "\."\)/.test(src), "outpoint separator is normalised");
   assert.ok(/priceSats: price/.test(src), "priceSats is sent");
   assert.ok(/sellerAddress: b\.dataset\.seller/.test(src), "sellerAddress is sent");
@@ -240,7 +289,7 @@ test("the inscribe view never sends a file path, only hex", async () => {
   const views = await loadViews();
   const view = views.find((v) => v.id === "inscribe");
   assert.ok(view, "inscribe view exists");
-  const src = fs.readFileSync(new URL("views/inscribe.js", appDir), "utf8");
+  const src = readApp("views/inscribe.js");
   // ordInscribe takes dataHex + contentType; a path would be un-sendable from
   // a browser and would leak the filesystem layout.
   assert.ok(/rpc\("ordInscribe", \{/.test(src), "uses ordInscribe");
