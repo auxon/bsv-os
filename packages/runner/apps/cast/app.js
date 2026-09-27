@@ -58,12 +58,93 @@ function setStatus(text, cls = "") {
 // ── media loading (native + HLS livestreams) ─────────────────────────────
 
 function teardownMedia() {
+  state.mseGen = (state.mseGen || 0) + 1;
   try {
     if (state.hls) state.hls.destroy();
   } catch { /* ignore */ }
   state.hls = null;
+  try {
+    if (player.src && player.src.startsWith("blob:")) URL.revokeObjectURL(player.src);
+  } catch { /* ignore */ }
   player.removeAttribute("src");
   player.load();
+}
+
+// MSE fallback: WebM recorders emit mid-stream clusters that no HLS demuxer
+// accepts, but appended after the init chunk they play fine. Used when HLS
+// fails with a parsing error, or (via mime) for known-webm broadcasts.
+async function msePlay(playlistUrl) {
+  const gen = (state.mseGen || 0) + 1;
+  state.mseGen = gen;
+  const alive = () => (state.mseGen || 0) === gen;
+  const m = /\/cast\/live\/([a-z0-9]{6,16})\/index\.m3u8/.exec(playlistUrl);
+  let mime = "video/webm";
+  if (m) {
+    try {
+      const info = await rpc("castLiveGet", { id: m[1] });
+      if (info && typeof info.mime === "string" && info.mime) mime = info.mime.split(";")[0];
+    } catch { /* default stands */ }
+  }
+  if (!window.MediaSource || !MediaSource.isTypeSupported(mime)) {
+    hintEl.textContent = `cannot play this broadcast here (${mime} unsupported)`;
+    return;
+  }
+  hintEl.textContent = "playing via MSE fallback (WebM broadcast)…";
+  const base = playlistUrl.replace(/index\.m3u8.*$/, "");
+  const ms = new MediaSource();
+  player.src = URL.createObjectURL(ms);
+  await new Promise((res, rej) => {
+    ms.addEventListener("sourceopen", res, { once: true });
+    setTimeout(() => rej(new Error("media source timeout")), 10000);
+  }).catch(() => {});
+  if (!alive()) return;
+  let sb;
+  try {
+    sb = ms.addSourceBuffer(mime);
+  } catch {
+    hintEl.textContent = `cannot buffer ${mime} here`;
+    return;
+  }
+  const seen = new Set();
+  const append = (buf) => new Promise((res, rej) => {
+    const done = () => {
+      sb.removeEventListener("updateend", done);
+      res();
+    };
+    sb.addEventListener("updateend", done);
+    try {
+      sb.appendBuffer(buf);
+    } catch (e) {
+      sb.removeEventListener("updateend", done);
+      rej(e);
+    }
+  });
+  try {
+    for (;;) {
+      if (!alive()) return;
+      const txt = await (await fetch(playlistUrl, { cache: "no-store" })).text();
+      const files = [...txt.matchAll(/^(init\.mp4|seg-\d+\.m4s)$/gm)].map((x) => x[1]);
+      for (const f of files) {
+        if (!alive()) return;
+        if (seen.has(f)) continue;
+        seen.add(f);
+        const buf = await (await fetch(base + f, { cache: "no-store" })).arrayBuffer();
+        if (!alive()) return;
+        await append(buf);
+      }
+      if (txt.includes("ENDLIST")) break;
+      await new Promise((r) => setTimeout(r, 4000));
+    }
+    if (alive() && ms.readyState === "open") {
+      try {
+        ms.endOfStream();
+      } catch { /* ignore */ }
+    }
+    hintEl.textContent = "";
+    await player.play().catch(() => {});
+  } catch (e) {
+    if (alive()) hintEl.textContent = `MSE stopped: ${e instanceof Error ? e.message : e}`;
+  }
 }
 
 function loadMedia(url) {
@@ -73,7 +154,16 @@ function loadMedia(url) {
   if (isHls && window.Hls && window.Hls.isSupported()) {
     const hls = new window.Hls({ maxBufferLength: 30 });
     hls.on(window.Hls.Events.ERROR, (_ev, data) => {
-      if (data && data.fatal) hintEl.textContent = `stream error: ${data.type} ${data.details}`;
+      if (!data || !data.fatal) return;
+      if (data.details === "fragParsingError") {
+        try {
+          hls.destroy();
+        } catch { /* ignore */ }
+        if (state.hls === hls) state.hls = null;
+        void msePlay(url);
+      } else {
+        hintEl.textContent = `stream error: ${data.type} ${data.details}`;
+      }
     });
     hls.loadSource(url);
     hls.attachMedia(player);
@@ -335,8 +425,9 @@ const rec = {
 };
 
 function pickMime(live) {
+  // Live prefers fmp4 (HLS-compatible); WebM falls back to MSE playback.
   const cands = live
-    ? ["video/mp4", 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"']
+    ? ["video/mp4", 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', "video/webm;codecs=vp9,opus", "video/webm"]
     : ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm", "audio/webm"];
   if ($("r-miconly").checked) return "audio/webm";
   for (const c of cands) {
@@ -379,7 +470,7 @@ function recStart(live) {
   if (!rec.stream) return false;
   rec.mime = pickMime(live);
   if (!rec.mime) {
-    setStatus(live ? "live needs mp4 recording (Chrome) — record a file instead" : "recording unsupported here", "warn");
+    setStatus("recording unsupported here", "warn");
     return false;
   }
   rec.chunks = [];
@@ -493,14 +584,16 @@ async function liveChunk(blob) {
   if (!rec.liveId) return;
   const first = rec.liveCount === 0;
   try {
-    const res = await fetch(`/cast/live/${rec.liveId}/segment${first ? "?init=1" : ""}`, {
+    const qs = first ? `?init=1&mime=${encodeURIComponent(rec.mime)}` : "";
+    const res = await fetch(`/cast/live/${rec.liveId}/segment${qs}`, {
       method: "POST",
       headers: { "content-type": "video/mp4" },
       body: blob,
     });
     if (!res.ok) throw new Error(`segment ${res.status}`);
     rec.liveCount++;
-    $("r-live-status").textContent = `broadcasting · ${rec.liveCount} chunks · viewers: ${location.origin}/#${rec.liveId} — open the episode to watch + pay`;
+    const kind = rec.mime.includes("mp4") ? "HLS" : "MSE/WebM";
+    $("r-live-status").textContent = `broadcasting (${kind}) · ${rec.liveCount} chunks — open the episode to watch + pay`;
   } catch (e) {
     $("r-live-status").textContent = `upload stalled: ${e instanceof Error ? e.message : e}`;
   }
@@ -510,10 +603,6 @@ $("r-golive").addEventListener("click", async () => {
   const epId = $("r-live-ep").value;
   if (!epId || !rec.stream) {
     $("r-live-status").textContent = !epId ? "pick an episode" : "preview the camera first";
-    return;
-  }
-  if (!pickMime(true)) {
-    $("r-live-status").textContent = "live needs mp4 recording (Chrome) — record a file instead";
     return;
   }
   $("r-golive").disabled = true;

@@ -265,6 +265,8 @@ export interface LiveSession {
   episode: string;
   status: "live" | "ended";
   segments: number;
+  /** Recorder mime (e.g. video/webm) — players pick HLS (mp4) vs MSE (webm). */
+  mime: string;
   startedAt: number;
   stoppedAt: number | null;
 }
@@ -298,23 +300,31 @@ export function livePlaylist(segments: number, ended: boolean, targetDuration = 
 }
 
 export async function migrateCastLive(db: Knex): Promise<void> {
-  if (await db.schema.hasTable("cast_live")) return;
+  if (await db.schema.hasTable("cast_live")) {
+    if (!(await db.schema.hasColumn("cast_live", "mime"))) {
+      await db.schema.alterTable("cast_live", (t) => {
+        t.string("mime", 64).notNullable().defaultTo("");
+      });
+    }
+    return;
+  }
   await db.schema.createTable("cast_live", (t) => {
     t.string("id", 16).primary();
     t.string("episode", 16).notNullable();
     t.string("status").notNullable().defaultTo("live");
     t.integer("segments").notNullable().defaultTo(0);
+    t.string("mime", 64).notNullable().defaultTo("");
     t.integer("started_at").notNullable();
     t.integer("stopped_at").nullable();
   });
 }
 
-interface LiveRow { id: string; episode: string; status: string; segments: number; started_at: number; stopped_at: number | null }
+interface LiveRow { id: string; episode: string; status: string; segments: number; mime: string; started_at: number; stopped_at: number | null }
 
 function toLive(r: LiveRow): LiveSession {
   return {
     id: r.id, episode: r.episode, status: r.status === "ended" ? "ended" : "live",
-    segments: r.segments, startedAt: r.started_at, stoppedAt: r.stopped_at,
+    segments: r.segments, mime: r.mime ?? "", startedAt: r.started_at, stoppedAt: r.stopped_at,
   };
 }
 
@@ -329,7 +339,7 @@ export function newLiveId(): string {
 export async function startLive(db: Knex, episodeId: string, now = Date.now()): Promise<LiveSession> {
   const row = (await db("cast_episodes").where({ id: episodeId }).first()) as EpisodeRow | undefined;
   if (!row) fail("NOT_FOUND", `no episode: ${String(episodeId).slice(0, 16)}`);
-  const live: LiveRow = { id: newLiveId(), episode: episodeId, status: "live", segments: 0, started_at: now, stopped_at: null };
+  const live: LiveRow = { id: newLiveId(), episode: episodeId, status: "live", segments: 0, mime: "", started_at: now, stopped_at: null };
   await db("cast_live").insert(live);
   await db("cast_episodes").where({ id: episodeId }).update({ is_live: 1 });
   return toLive(live);
@@ -342,6 +352,13 @@ export async function getLive(db: Knex, id: string): Promise<LiveSession> {
   return toLive(row);
 }
 
+/** Record the browser's recorder mime on first ingest (drives player choice). */
+export async function setLiveMime(db: Knex, id: string, mime: string): Promise<void> {
+  const clean = String(mime ?? "").split(";")[0]!.trim().toLowerCase().slice(0, 64);
+  if (!/^(video|audio)\/[a-z0-9.+-]+$/.test(clean)) fail("BAD_PARAM", "bad mime");
+  await db("cast_live").where({ id }).update({ mime: clean });
+}
+
 export async function bumpLiveSegments(db: Knex, id: string): Promise<number> {
   const s = await getLive(db, id);
   if (s.status !== "live") fail("BAD_STATE", "live session ended");
@@ -350,8 +367,7 @@ export async function bumpLiveSegments(db: Knex, id: string): Promise<number> {
   return s.segments;
 }
 
-export async function endLive(db: Knex, id: string, now = Date.now()): Promise<LiveSession> {
-  const s = await getLive(db, id);
+export async function endLive(db: Knex, id: string, now = Date.now()): Promise<LiveSession> {  const s = await getLive(db, id);
   if (s.status === "ended") return s;
   await db("cast_live").where({ id }).update({ status: "ended", stopped_at: now });
   await db("cast_episodes").where({ id: s.episode }).update({ is_live: 0 });

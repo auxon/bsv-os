@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import knex from "knex";
 import { migrate } from "../src/storage.ts";
 import {
-  addEpisode, getSession, listEpisodes, listSessions, parseSplits,
-  sessionBeats, sessionsDue, startSession, stopSession,
+  addEpisode, getLive, getSession, listEpisodes, listSessions, parseSplits,
+  sessionBeats, sessionsDue, setLiveMime, startLive, startSession, stopSession,
 } from "../src/cast.ts";
 
 async function memdb() {
@@ -191,6 +191,7 @@ test("live ingest: ids, playlist shape, validators", async () => {
     const s = await startLive(db, ep.id, 1000);
     assert.match(s.id, /^[a-z0-9]{12}$/);
     assert.equal(s.status, "live");
+    assert.equal(s.mime, "");
     assert.equal((await getLive(db, s.id)).episode, ep.id);
     assert.equal(await bumpLiveSegments(db, s.id), 0);
     assert.equal(await bumpLiveSegments(db, s.id), 1);
@@ -205,11 +206,24 @@ test("live ingest: ids, playlist shape, validators", async () => {
   }
 });
 
+test("live mime is recorded for player choice", async () => {
+  const db = await memdb();
+  try {
+    const ep = await addEpisode(db, { title: "M", splits: [{ address: A1, pct: 100 }] });
+    const s = await startLive(db, ep.id, 1000);
+    await setLiveMime(db, s.id, "video/webm;codecs=vp9,opus");
+    assert.equal((await getLive(db, s.id)).mime, "video/webm");
+    await assert.rejects(setLiveMime(db, s.id, "not a mime"), /bad mime/);
+  } finally {
+    await db.destroy();
+  }
+});
+
 test("recorder UI talks to loopback ingest +observed beats only", async () => {
   const fs = await import("node:fs");
   const dir = new URL("../../runner/apps/cast/", import.meta.url);
   const js = fs.readFileSync(new URL("app.js", dir), "utf8");
-  for (const token of ["getUserMedia", "MediaRecorder", "/cast/media", "/cast/live/", "castLiveStart", "castLiveStop", "castSetMedia", "?init=1"]) {
+  for (const token of ["getUserMedia", "MediaRecorder", "/cast/media", "/cast/live/", "castLiveStart", "castLiveStop", "castSetMedia", "?init=1", "MediaSource", "msePlay", "fragParsingError", "castLiveGet"]) {
     assert.ok(js.includes(token), token);
   }
   // upload endpoint is same-origin relative — never a remote host

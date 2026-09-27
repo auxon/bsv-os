@@ -32,7 +32,7 @@ import { tickOrders } from "./nightshift.ts";
 import { buildPost, getBoard, getPosts, publishPost } from "./boards.ts";
 import { identityPubkeyHex } from "./custody.ts";
 import { liveRelay } from "./msgs.ts";
-import { CAST_BOARD, MAX_SEGMENT_BYTES, MAX_UPLOAD_BYTES, bumpLiveSegments, getLive, liveDir, liveFileValid, liveIdValid, livePlaylist, mediaExt, mediaFileValid, mediaRoot, newMediaId, sessionBeats, sessionsDue } from "./cast.ts";
+import { CAST_BOARD, MAX_SEGMENT_BYTES, MAX_UPLOAD_BYTES, bumpLiveSegments, getLive, liveDir, liveFileValid, liveIdValid, livePlaylist, mediaExt, mediaFileValid, mediaRoot, newMediaId, sessionBeats, sessionsDue, setLiveMime } from "./cast.ts";
 import { spendTo } from "./engine.ts";
 import { streamBeatRef, tickStreams } from "./streams.ts";
 import { tickCapsules } from "./capsule.ts";
@@ -177,7 +177,19 @@ async function castSegmentHttp(req: IncomingMessage, res: ServerResponse, id: st
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (isInit) {
+      // Sanity: init must open a real container (ftyp = mp4, EBML = webm).
+      const isMp4 = buf.length > 8 && buf.subarray(4, 8).toString("latin1") === "ftyp";
+      const isWebm = buf.length > 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3;
+      if (!isMp4 && !isWebm) return json(400, { error: { code: "BAD_PARAM", message: "init chunk is not mp4/webm" } });
       fs.writeFileSync(path.join(dir, "init.mp4"), buf, { mode: 0o600 });
+      const mime = url.searchParams.get("mime") ?? "";
+      if (mime) {
+        try {
+          await setLiveMime(wireBackend.db, id, mime);
+        } catch {
+          /* mime is advisory; the bytes decide playback */
+        }
+      }
       return json(200, { segment: "init.mp4", bytes: buf.length });
     }
     const n = await bumpLiveSegments(wireBackend.db, id);
