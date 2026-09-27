@@ -89,14 +89,14 @@ async function msePlay(playlistUrl) {
   state.mseGen = gen;
   const alive = () => (state.mseGen || 0) === gen;
   const m = /\/cast\/live\/([a-z0-9]{6,16})\/index\.m3u8/.exec(playlistUrl);
-  let base = "video/webm";
+  let botMime = "video/webm";
   if (m) {
     try {
       const info = await rpc("castLiveGet", { id: m[1] });
-      if (info && typeof info.mime === "string" && info.mime) base = info.mime.split(";")[0];
+      if (info && typeof info.mime === "string" && info.mime) botMime = info.mime.split(";")[0];
     } catch { /* default stands */ }
   }
-  const mime = (window.MediaSource ? mseMimeCandidates(base) : []).find((c) => {
+  const mime = (window.MediaSource ? mseMimeCandidates(botMime) : []).find((c) => {
     try {
       return MediaSource.isTypeSupported(c);
     } catch {
@@ -104,7 +104,7 @@ async function msePlay(playlistUrl) {
     }
   });
   if (!mime) {
-    hintEl.textContent = `cannot play this broadcast here (${base} unsupported)`;
+    hintEl.textContent = `cannot play this broadcast here (${botMime} unsupported)`;
     return;
   }
   hintEl.textContent = "playing via MSE fallback (WebM broadcast)…";
