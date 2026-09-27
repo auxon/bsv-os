@@ -3,6 +3,12 @@
 Omarchy remix with a system BRC-100 wallet. Every app, agent, and shell
 interaction can transact; keys never leave the daemon.
 
+Two front ends for the same daemon:
+
+- **Linux (Omarchy):** a Quickshell bar pill + panel — `packages/shell/plugin/`.
+- **macOS:** the **bsvOS shell app** — a bundled runner app that is the
+  replacement for that panel, plus the `bsv` CLI for everything.
+
 ## Install
 
 Fresh aarch64 Omarchy machine, one command:
@@ -17,30 +23,131 @@ Dev checkout path: `scripts/post-install.sh` (clones, builds, runs tests).
 Full walkthrough: [UserGuide.md](UserGuide.md). Building agents and apps
 that spend: [AGENT-ECONOMY.md](AGENT-ECONOMY.md).
 
-### macOS (daemon + CLI + runner apps)
+### macOS
 
-The wallet daemon is Node/TypeScript and runs on macOS (Keychain instead of
-libsecret). From a checkout:
+The wallet daemon is Node/TypeScript, so it runs natively on macOS (Keychain
+instead of libsecret). You get the full daemon, every CLI feature, sandboxed
+runner app windows in Chrome, P2P and torrents — plus **bsvOS**, a bundled
+app that is the macOS replacement for the Linux Quickshell panel (see
+[below](#the-bsvos-shell)).
+
+#### 1. Prerequisites
 
 ```bash
-bash scripts/install-macos.sh        # clone/update, build, launchd agent, bsv on PATH
-bash scripts/install-macos.sh status # service + wallet status
-bash scripts/install-macos.sh uninstall
+brew install node                     # needs Node >= 22
+xcode-select --install                # command-line tools (git, compilers)
 ```
 
-Requires Node ≥ 22 (`brew install node`) and Xcode command-line tools.
-What you get: the full daemon (`127.0.0.1:2121` + socket), every CLI feature
-(boards, memory, streams, cast, capsules, x402), runner app windows (opened
-in Google Chrome from `/Applications`), P2P and torrents.
+Google Chrome (from `/Applications`) is needed for runner app windows; the
+daemon and CLI work without it.
 
-macOS notes:
+#### 2. Install
 
-- Wallet data lives in `~/.local/share/bsv-os` (same layout as Linux).
-- First `bsv unlock` triggers a one-time Keychain access prompt for `node`.
-- The Hyprland/Quickshell panel is Linux-only — `bsv` is the console there.
-- Hosted extras (public Cast/x402 URLs) need a tunnel, e.g. `brew install cloudflared`.
-- Hosted extras (public Cast/x402 URLs) need a tunnel, e.g.
+One command, no checkout needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/auxon/bsv-os/main/scripts/install-macos.sh | bash
+```
+
+Or from a clone: `bash scripts/install-macos.sh`. The script is idempotent —
+it clones `~/bsv-os` or fast-forwards an existing one, builds
+`bsv-walletd`, symlinks `bsv` into `~/.local/bin`, and installs + starts the
+launchd agent `com.bsv-os.walletd` (KeepAlive). Logs:
+`~/Library/Logs/bsv-walletd.log` and `.err.log`.
+
+#### 3. Put `bsv` on your PATH  ← easy to miss
+
+The installer symlinks `bsv` but will only *warn* that `~/.local/bin` is not
+on your PATH, so `bsv` may not resolve in a new shell. Add it once:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
+```
+
+#### 4. Create and unlock the wallet
+
+```bash
+bsv create      # prints a 12-word recovery phrase — ONCE. Write it down now.
+bsv unlock      # one-time macOS Keychain prompt for `node`; approve it
+```
+
+`bsv create` is deliberately terminal-only: the recovery phrase is read from a
+hidden prompt (never argv) and must never pass through a browser. Already have
+a phrase? `bsv import` restores it the same way. The wallet locks itself after
+15 minutes idle (`BSV_WALLETD_LOCK_MS`); reading keeps working while locked,
+spending does not.
+
+#### 5. Open the bsvOS shell
+
+```bash
+bsv app open 127.0.0.1      # add & if it blocks your prompt; see below
+```
+
+That launches the shell in a sandboxed Chrome window: wallet, approvals,
+policy, agents, send/receive/pay, payment requests, receipts, identity and
+messaging, the app store, and work boards. From then on the **Apps** view can
+open everything else. `bsv app open` blocks for the window's lifetime by
+design — background it (`&`) or use **Apps → Open** instead.
+
+#### 6. Optional: Twetch sign-in
+
+System sign-in is a separate step, because it needs an OAuth client
+registered at the issuer. In `https://id.entangleit.com/console` create an
+app and **tick "public client"** (PKCE, no secret) with the redirect URI
+exactly:
+
+```
+http://127.0.0.1:2122/callback
+```
+
+Paste the `twetch_…` client id into **Identity** in the shell. That is all —
+a public client id is not a secret, so the shell can store it. Gotchas:
+
+- An app created *without* "public client" is confidential and will be
+  rejected (`invalid_client`). It cannot be flipped to public afterwards;
+  create a new one.
+- Public clients get `authorization_code` only, so no refresh token — the
+  session goes stale at expiry and you re-sign-in.
+- A confidential client stays terminal-only:
+  `bsv login --client-id=<id> --client-secret=<secret>`.
+
+#### 7. Verify
+
+```bash
+bsv status      # authenticated / locked / hasWallet
+bsv balance     # live chain lookup
+bsv doctor      # wallet, caps, requests, broadcasts, jev, panel-skew
+```
+
+#### Managing the install
+
+```bash
+bash scripts/install-macos.sh            # update: re-run to pull + rebuild
+bash scripts/install-macos.sh status     # launchd + daemon + wallet status
+bash scripts/install-macos.sh uninstall  # stop + remove the agent (data is kept)
+```
+
+#### macOS notes and limits
+
+- Wallet data, the pinned TLS cert/key, and the socket live in
+  `~/.local/share/bsv-os` (same layout as Linux). Back this up, not your
+  recovery phrase.
+- The daemon binds `127.0.0.1` only; the JSON-RPC and app bundle are
+  loopback-gated. `/health` and `/v1/serve/*` are the only remotely-reachable
+  routes if you ever set `BSV_WALLETD_BIND=0.0.0.0`.
+- The Quickshell panel in `packages/shell/plugin/` is Linux-only and untouched;
+  on macOS the shell app above replaces it.
+- **One app slot per host.** An installed app is keyed by hostname, and the
+  daemon binds only `127.0.0.1:2121`, so there are two identities: `127.0.0.1`
+  (the shell, permanently) and `localhost` (shared by Cast / Twetch / Explorer /
+  Colosseum — installing one replaces the others). Switch in **Apps**.
+- **Deliberately terminal-only:** recovery ceremonies, seed-phrase entry, and
+  torrent seeding (a browser has no filesystem path to offer). The shell shows
+  their status and links the terminal command.
+- Hosted extras (public Cast/x402 URLs) need a tunnel:
   `brew install cloudflared`.
+- Depth on the runner, the bridge, and app identity:
+  [packages/runner/README.md](packages/runner/README.md).
 
 ## Layout
 
@@ -126,6 +233,28 @@ bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|r
 First spend from a new origin is denied pending approval (`bsv allow cli`
 for local flows) — that denial-then-approval loop is the whole policy model
 working as designed.
+
+## The bsvOS shell
+
+`bsv app open 127.0.0.1` opens the system shell on macOS: wallet and balance,
+spend approvals, policy, agent sub-wallets, send/receive/pay, payment
+requests, receipts, baskets, collectibles and tokens, identity and
+certificates, people/inbox/peers, the app store, gigs, NightShift, overlays,
+files, starter sats and recovery status.
+
+It is not a port of the QML panel. Every `bsv` subcommand the panel shelled
+out to is a daemon RPC method, so the shell calls the daemon directly over its
+own origin — which means real error codes instead of "see the terminal", and a
+handful of round trips instead of 22 process spawns per refresh. macOS
+differences the panel could not survive (`wl-copy`, `xdg-open`, the native file
+dialog) are handled with the clipboard API, `window.open`, and in-browser
+SHA-256 straight into the `anchorFile` RPC.
+
+The panel's always-visible bar pill becomes a status header plus real macOS
+notifications when a spend request arrives — so keep the window open.
+
+Setup, boundaries and the full panel-parity table:
+[packages/runner/README.md](packages/runner/README.md#the-shell-app-appsbsvos).
 
 ## MCP (agents automate the wallet through policy, never around it)
 
