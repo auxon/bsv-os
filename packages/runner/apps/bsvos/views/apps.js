@@ -159,7 +159,9 @@ export async function openApp(ctx, domain) {
 
 export const market = {
   id: "market",
-  title: "Market",
+  // Distinct from the Twetch group's NFT Market, so the sidebar never shows two
+  // tabs with the same name.
+  title: "Atomic Market",
   group: "Apps",
   note: "Browse and buy ordinals and BSV21 tokens with atomic swaps.",
   async load(ctx) {

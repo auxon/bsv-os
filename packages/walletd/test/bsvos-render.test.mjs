@@ -321,6 +321,38 @@ test("meme tiles use the media URL, never the twetch.com page URL", async () => 
   assert.ok(/meme-fallback/.test(none), "missing media shows a placeholder");
 });
 
+test("twetchUser is called with the key the handler actually reads", async () => {
+  // The handler is `const id = Math.floor(Number(raw.id) || 0)` — it reads `id`,
+  // but its error message says "userId required". Sending the key the error
+  // text suggests therefore always fails, which is what broke the profile tab.
+  const src = readApp("views/twetch.js");
+  assert.ok(src.includes('tryRpc("twetchUser", { id: Number(userId) })'), "sends id, the key the handler reads");
+  assert.ok(!/twetchUser",[ ]*\{[ ]*userId:/.test(src), "does not send userId");
+  // Cross-check against the daemon source so the two cannot drift.
+  const rpcSrc = fs.readFileSync(fileURLToPath(new URL("../src/rpc.ts", import.meta.url)), "utf8");
+  const at = rpcSrc.indexOf("twetchUser: async");
+  assert.ok(at > 0, "twetchUser handler found");
+  const handler = rpcSrc.slice(at, rpcSrc.indexOf("},", at));
+  assert.ok(/raw\.id\b/.test(handler), "the handler really does read raw.id");
+});
+
+test("no two tabs in the sidebar share a title", async () => {
+  // Two tabs both called "Market" (Twetch's NFT market and the BRC-100 atomic
+  // market) made it impossible to tell from the sidebar which one you were
+  // opening.
+  const { VIEWS } = await import(new URL("views/index.js", appDir).href);
+  const titles = VIEWS.map((v) => v.title);
+  const dupes = titles.filter((t, i) => titles.indexOf(t) !== i);
+  assert.deepEqual([...new Set(dupes)], [], "every view title is unique");
+  const markets = VIEWS.filter((v) => /market/i.test(v.title));
+  assert.equal(markets.length, 2, "there are two markets");
+  assert.deepEqual(
+    markets.map((m) => m.title).sort(),
+    ["Atomic Market", "NFT Market"],
+    "and they are named differently",
+  );
+});
+
 test("meme filters survive a reload instead of being overwritten", async () => {
   // The reported bug: clicking a folder fetched a filtered list and then
   // called ctx.reload(), which re-ran load() with NO folder — so the

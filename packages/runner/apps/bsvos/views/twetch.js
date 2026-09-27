@@ -302,7 +302,11 @@ export const profile = {
       ctx.data.profile = null;
       return;
     }
-    const u = await tryRpc("twetchUser", { userId: Number(userId) });
+    // The handler reads raw.id — NOT raw.userId — even though its error text
+    // says "userId required", which is what led to sending the wrong key and
+    // getting an error box on every profile. Verified live: {"id":32324} works,
+    // {"userId":32324} is BAD_PARAM.
+    const u = await tryRpc("twetchUser", { id: Number(userId) });
     ctx.data.profile = u.ok ? u.value : null;
     ctx.data.profileError = u.ok ? null : u.error;
   },
@@ -578,7 +582,9 @@ function memeTile(m) {
 // ── Market ──────────────────────────────────────────────────────────────
 export const market = {
   id: "twetch-market",
-  title: "Market",
+  // The Apps group also has a tab called Market (the BRC-100 atomic market at
+  // market.entangleit.com). Two identical titles in one sidebar is a trap.
+  title: "NFT Market",
   group: "Twetch",
   note: "Ordinals listed on Twetch. Buying spends through the wallet's policy.",
   async load(ctx) {
