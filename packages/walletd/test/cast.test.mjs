@@ -156,6 +156,9 @@ test("player app bundle: served files, no remote code", async () => {
   assert.ok(js.includes("\\/cast\\/live\\/"), "own-ingest routing marker present");
   assert.ok(js.includes("void msePlay(url)"), "own ingest goes to msePlay");
   assert.ok(js.includes("bufferSeekOverHole"), "hole clamp for foreign m3u8s");
+  assert.ok(js.includes("initFacts"), "init sniffing decides kind+container");
+  assert.ok(js.includes("bytesHave"), "track bytes are scanned for video codecs");
+  assert.ok(js.includes("elementError"), "async pipeline errors abort the attempt");
   const manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", dir), "utf8"));
   assert.equal(manifest.start_url, "https://localhost:2121/cast/");
 });

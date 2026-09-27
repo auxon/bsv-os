@@ -93,56 +93,92 @@ function mseMimeCandidates(base) {
 // the recorder produced. WebM recorders emit mid-stream clusters no HLS
 // demuxer accepts; mp4 recorders can leave holes hls.js seeks over. Both
 // classes vanish when we append init + fragments in arrival order.
+//
+// Codec negotiation is staged: the recorder's stored mime gives the kind
+// (audio/video), the init bytes give the container (ftyp vs EBML) and the
+// real track set (codec IDs) — appending with a mime that promises a track
+// the bytes lack makes Chromium abort the whole media pipeline
+// ("Initialization segment misses expected vp9 track"), so we try mimes in
+// order, resetting the element between candidates.
+
+function bytesHave(u8, needle) {
+  const n = needle.length;
+  outer: for (let i = 0; i + n <= u8.length && i < 65536; i++) {
+    for (let j = 0; j < n; j++) {
+      if (u8[i + j] !== needle.charCodeAt(j)) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+function initFacts(initBuf, botMime) {
+  let kind = botMime.startsWith("audio/") ? "audio" : botMime.startsWith("video/") ? "video" : "";
+  let container = botMime.includes("mp4") ? "mp4" : botMime.includes("webm") ? "webm" : "";
+  if (initBuf && initBuf.byteLength > 12) {
+    const u8 = new Uint8Array(initBuf);
+    if (u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70) container = "mp4";
+    else if (u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3) container = "webm";
+    const video = ["V_VP8", "V_VP9", "V_AV1", "avc1", "hvc1", "av01", "mp4v"].some((c) => bytesHave(u8, c));
+    const audio = ["A_OPUS", "A_VORBIS", "Opus", "mp4a", "opus"].some((c) => bytesHave(u8, c));
+    if (video) kind = "video";
+    else if (audio) kind = "audio";
+  }
+  if (!kind) kind = "video";
+  if (!container) container = "webm";
+  return { kind, container };
+}
+
 async function msePlay(playlistUrl) {
   const gen = (state.mseGen || 0) + 1;
   state.mseGen = gen;
   const alive = () => (state.mseGen || 0) === gen;
   const m = /\/cast\/live\/([a-z0-9]{6,16})\/index\.m3u8/.exec(playlistUrl);
-  let botMime = "video/webm";
+  let botMime = "";
   if (m) {
     try {
       const info = await rpc("castLiveGet", { id: m[1] });
       if (info && typeof info.mime === "string" && info.mime) botMime = info.mime.split(";")[0];
-    } catch { /* default stands */ }
+    } catch { /* fall back to bytes */ }
   }
   const base = playlistUrl.replace(/index\.m3u8.*$/, "");
-  // Sniff the init chunk: stored sessions from before mime recording carry
-  // no label, and ftyp vs EBML decides which codec family can buffer them.
   let initBuf = null;
   try {
     const res = await fetch(base + "init.mp4", { cache: "no-store" });
     if (res.ok) initBuf = await res.arrayBuffer();
   } catch { /* live may not have init yet */ }
   if (!alive()) return;
-  if (initBuf && initBuf.byteLength > 8) {
-    const u8 = new Uint8Array(initBuf);
-    const ftyp = u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70;
-    const ebml = u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3;
-    if (ftyp) botMime = u8[8] === 0x69 && u8[9] === 0x73 && u8[10] === 0x6f && u8[11] === 0x6d ? "audio/mp4" : "video/mp4";
-    else if (ebml) botMime = "video/webm";
-  }
-  const family = (b) => (b.startsWith("audio") || b.startsWith("video")) ? b : "video/webm";
+
+  const { kind, container } = initFacts(initBuf, botMime);
+  const primary = `${kind}/${container}`;
+  const cross = `${kind === "video" ? "audio" : "video"}/${container}`;
   const cands = [
-    ...mseMimeCandidates(family(botMime)),
-    ...mseMimeCandidates(family(botMime).startsWith("video") ? "audio/" + botMime.split("/")[1] : "video/" + botMime.split("/")[1]),
-  ];
-  const mime = (window.MediaSource ? cands : []).find((c) => {
+    ...mseMimeCandidates(primary),
+    ...mseMimeCandidates(cross),
+  ].filter((c) => {
     try {
-      return MediaSource.isTypeSupported(c);
+      return window.MediaSource && MediaSource.isTypeSupported(c);
     } catch {
       return false;
     }
   });
-  if (!mime) {
-    hintEl.textContent = `cannot play this broadcast here (${botMime} unsupported)`;
+  if (!cands.length) {
+    hintEl.textContent = `cannot play this broadcast here (${primary} unsupported)`;
     return;
   }
   hintEl.textContent = "playing broadcast (direct stream)…";
 
-  // Attempt loop: a detached SourceBuffer (media element reset underneath us)
-  // aborts the attempt; one clean retry handles races with play/pause/seek.
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  const resetElement = () => {
+    try {
+      player.removeAttribute("src");
+      player.load();
+    } catch { /* ignore */ }
+  };
+
+  let lastError = null;
+  for (const cand of cands.slice(0, 5)) {
     if (!alive()) return;
+    resetElement();
     const ms = new MediaSource();
     const objUrl = URL.createObjectURL(ms);
     player.src = objUrl;
@@ -151,23 +187,34 @@ async function msePlay(playlistUrl) {
       setTimeout(() => res(false), 10000);
     });
     if (!alive()) return;
-    if (!opened) break;
+    if (!opened) {
+      lastError = new Error("media source did not open");
+      break;
+    }
     let sb;
     try {
-      sb = ms.addSourceBuffer(mime);
-    } catch {
-      hintEl.textContent = `cannot buffer ${mime} here`;
-      return;
+      sb = ms.addSourceBuffer(cand);
+    } catch (e) {
+      lastError = e;
+      continue;
     }
+    let elementError = null;
+    const onErr = () => {
+      elementError = player.error ? `media pipeline: ${player.error.message || player.error.code}` : "media error";
+    };
+    player.addEventListener("error", onErr);
     const attached = () => {
       try {
-        return ms.readyState === "open" && ms.sourceBuffers.length > 0;
+        return ms.readyState === "open" && ms.sourceBuffers.length > 0 && !elementError;
       } catch {
         return false;
       }
     };
-    let appendError = null;
     const append = (buf) => new Promise((res, rej) => {
+      if (elementError) {
+        rej(new Error(elementError));
+        return;
+      }
       if (!attached()) {
         rej(new Error("source buffer detached"));
         return;
@@ -187,11 +234,14 @@ async function msePlay(playlistUrl) {
     const seen = new Set();
     try {
       if (initBuf) {
-        seen.add("init.mp4"); // prefetched + sniffed above
+        seen.add("init.mp4");
         await append(initBuf);
+        await new Promise((r) => setTimeout(r, 250)); // let async demuxer errors surface
+        if (elementError) throw new Error(elementError);
       }
       for (;;) {
         if (!alive()) return;
+        if (elementError) throw new Error(elementError);
         const txt = await (await fetch(playlistUrl, { cache: "no-store" })).text();
         const files = [...txt.matchAll(/^(init\.mp4|seg-\d+\.m4s)$/gm)].map((x) => x[1]);
         for (const f of files) {
@@ -201,10 +251,12 @@ async function msePlay(playlistUrl) {
           const buf = await (await fetch(base + f, { cache: "no-store" })).arrayBuffer();
           if (!alive()) return;
           await append(buf);
+          if (elementError) throw new Error(elementError);
         }
         if (txt.includes("ENDLIST")) break;
         await new Promise((r) => setTimeout(r, 4000));
       }
+      player.removeEventListener("error", onErr);
       if (alive() && attached()) {
         try {
           ms.endOfStream();
@@ -212,21 +264,19 @@ async function msePlay(playlistUrl) {
       }
       hintEl.textContent = "";
       await player.play().catch(() => {});
-      return; // clean finish: done, no retry
+      return; // worked: done
     } catch (e) {
-      appendError = e;
+      lastError = e;
     }
+    player.removeEventListener("error", onErr);
     if (!alive()) return; // teardown raced us — silent
     try {
       URL.revokeObjectURL(objUrl);
     } catch { /* ignore */ }
-    if (attempt === 2) {
-      hintEl.textContent = `MSE stopped: ${appendError instanceof Error ? appendError.message : appendError}`;
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 800));
   }
-  hintEl.textContent = "stream stalled — press play to retry";
+  if (!alive()) return;
+  hintEl.textContent = `MSE stopped: ${lastError instanceof Error ? lastError.message : lastError ?? "no playable codec"}`;
 }
 
 function loadMedia(url) {
