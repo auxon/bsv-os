@@ -80,7 +80,8 @@ table: the daemon merges the tables it already keeps, orders them by
 `(timestamp, source, key)`, filters server-side, and hands out cursors that
 survive restarts. Shipped 2026-09-27 (`bsv watch`).
 
-Two more ideas from the audit remain open, and are the honest descendants:
+Two more ideas from the audit have now followed, and are the honest
+descendants:
 
 1. **Time as a ledger dimension.** Bonsai's `Timechain<TId,TData>` treats
    time and duration as part of the record. bsvOS had two implementations of
@@ -93,12 +94,21 @@ Two more ideas from the audit remain open, and are the honest descendants:
    used by the stream ticker, with `bsv commitments` /
    `commitment_list` answering "what is this wallet on the hook for?" across
    streams, cast sessions, and capsules in one call. Shipped 2026-09-27.
-2. **Proof without disclosure.** "MPC for critical data" reduces, in practice,
-   to something bsvOS genuinely lacks: proving `balance ≥ X` without revealing
-   which UTXOs. Today x402 publishes amounts and links addresses on-chain.
-   A Merkle root committed in an OP_RETURN plus selective disclosure would
-   make the seller story much stronger — and naive versions leak through
-   later spending patterns, so it is a real design problem, not a weekend.
+2. **Proof without disclosure.** "MPC for critical data" reduced, in practice,
+   to what could be built soundly: `bsv funds attest` signs a claim of
+   "≥ N sats" bound to a Merkle root over the spendable UTXO set, with an
+   expiry, publishing no balance and no UTXO list; `bsv funds prove` gives a
+   real Merkle inclusion proof for a single UTXO, which a third party can
+   verify with no wallet access. The `≥ N` part stays a *signed claim*, not a
+   zero-knowledge proof — the docs and the verifier both say so, and
+   `verifyFundsAttestation` reports every check by name. Shipped
+   2026-09-27 (`packages/walletd/src/attest.ts`).
+
+What remains genuinely unsolved, and should not be promised: proving a
+balance threshold *cryptographically*. That needs range proofs (Bulletproofs
+or zk-SNARKs) over commitments the chain can verify, and BSV has no such
+consensus primitive. Naive substitutes leak: a "balance ≥ X" claim published
+on-chain is trivially cross-checked against later spending.
 
 ## What was deliberately not done
 
