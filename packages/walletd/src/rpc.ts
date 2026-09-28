@@ -115,8 +115,19 @@ import {
   setIdentityConfig,
   startLogin,
 } from "./identity.ts";
+import { setTrustIdentityProvider, trustMode, trustState, trustUrl } from "./trust.ts";
 
 export const VERSION = "0.1.0";
+
+// Trust policy lookups use the wallet's identity key as the subject. Locked
+// means no subject, so policy falls back to the base thresholds (fail closed).
+setTrustIdentityProvider(() => {
+  try {
+    return identityPubkeyHex();
+  } catch {
+    return null;
+  }
+});
 
 interface MonitorBackend {
   db: Knex;
@@ -564,6 +575,29 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     return jevDecideCall(state, questions as Record<string, JevQuestion>, {
       model: typeof model === "string" && model ? model : undefined,
     });
+  },
+  /**
+   * EntangleIT Trust profile for this wallet: fetched from TRUST_URL and
+   * verified offline. Terms only widen the Jev auto band inside caps; this
+   * handler is read-only and never spends. Needs the wallet unlocked for the
+   * identity key (the subject).
+   */
+  trustTerms: async (params) => {
+    const { refresh } = p(params) as { refresh?: unknown };
+    let identityKey: string | null = null;
+    try {
+      identityKey = identityPubkeyHex();
+    } catch {
+      /* locked: report below */
+    }
+    if (!identityKey) {
+      return {
+        configured: Boolean(trustUrl()), mode: trustMode(), subject: null,
+        verified: false, profile: null, level: null, terms: null,
+        expiresAt: null, reasons: [], error: "wallet locked",
+      };
+    }
+    return trustState({ identityKey, force: refresh === true });
   },
   agentMint: async (params) => {
     const b = needBackend();

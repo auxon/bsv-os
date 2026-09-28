@@ -14,7 +14,11 @@ export type PolicyEventType =
   | "request.approved"
   | "request.denied"
   | "budget.minted"
-  | "budget.revoked";
+  | "budget.revoked"
+  /** A verified Trust profile widened the auto-approval band (enforce). */
+  | "trust.applied"
+  /** A verified Trust profile WOULD have widened it (log mode). */
+  | "trust.delta";
 
 export interface PolicyEvent {
   id: number;

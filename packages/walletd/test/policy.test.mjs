@@ -127,6 +127,64 @@ test("auto mode denies + records anything short of a confident allow", async () 
   }
 });
 
+test("trust widens the auto band inside the cap (injected profile)", async () => {
+  const db = await memdb();
+  const savedMode = process.env.TRUST_MODE;
+  process.env.TRUST_MODE = "enforce";
+  try {
+    await setPolicy(db, "bot", "auto", 500);
+    // Below the base bars (p 0.7 / conf 0.6), above them at multiplier 2.
+    const mid = fakeJev({ prob: 0.66, risk: 0.1, conf: 0.56 });
+    const base = await check(db, "bot", 100, "send", { jev: mid, trust: null });
+    assert.equal(base.verdict, "deny", "base thresholds deny");
+    const lifted = await check(db, "bot", 100, "send", {
+      jev: mid,
+      trust: { level: "proven", terms: { approvalMultiplier: 2 } },
+    });
+    assert.equal(lifted.verdict, "allow");
+    assert.match(lifted.reason, /allowed by Jev/);
+    assert.match(lifted.reason, /trust proven ×2/);
+    // The widening is recorded for audit.
+    const ev = await db("policy_events").where({ type: "trust.applied" }).first();
+    assert.ok(ev, "trust.applied event recorded");
+    assert.match(ev.detail, /proven ×2/);
+    // Trust never exceeds the cap, however high the level.
+    const over = await check(db, "bot", 501, "send", {
+      jev: fakeJev(),
+      trust: { level: "elite", terms: { approvalMultiplier: 4 } },
+    });
+    assert.equal(over.verdict, "deny");
+    assert.match(over.reason, /cap/);
+  } finally {
+    if (savedMode === undefined) delete process.env.TRUST_MODE;
+    else process.env.TRUST_MODE = savedMode;
+    await db.destroy();
+  }
+});
+
+test("TRUST_MODE=log records the delta but applies nothing", async () => {
+  const db = await memdb();
+  const savedMode = process.env.TRUST_MODE;
+  process.env.TRUST_MODE = "log";
+  try {
+    await setPolicy(db, "bot", "auto", 500);
+    const mid = fakeJev({ prob: 0.66, risk: 0.1, conf: 0.56 });
+    const r = await check(db, "bot", 100, "send", {
+      jev: mid,
+      trust: { level: "proven", terms: { approvalMultiplier: 2 } },
+    });
+    assert.equal(r.verdict, "deny", "log mode does not loosen policy");
+    assert.equal(r.pending, true);
+    const ev = await db("policy_events").where({ type: "trust.delta" }).first();
+    assert.ok(ev, "trust.delta recorded");
+    assert.match(ev.detail, /would allow/);
+  } finally {
+    if (savedMode === undefined) delete process.env.TRUST_MODE;
+    else process.env.TRUST_MODE = savedMode;
+    await db.destroy();
+  }
+});
+
 test("auto mode fails closed when Jev cannot answer", async () => {
   const db = await memdb();
   try {

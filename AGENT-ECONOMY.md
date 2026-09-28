@@ -447,13 +447,17 @@ path.
   daily limits and sub-agent budgets stay untouched.
 - **BSVBounties**: worker bond = base − `bondDiscountBps`.
 - **x402 gateway**: discount = `min(route ceiling, profile.discountCeilingBps)`.
-- **bsvOS**: *specified, not yet shipped* (see
-  `~/trust/docs/INTEGRATION.md`). The plan is a `trust_terms` MCP tool; the
-  Jev advisor uses `approvalMultiplier` only to widen its `--auto` band
-  **inside** the origin's existing cap or sub-wallet budget. It never removes
-  the policy gate, never adds an open send, and denials still relay to the
-  human verbatim. Until then, trust moves the server-side rails (agentpay,
-  bounties, gateway) but not your local policy bands.
+- **bsvOS**: *shipped*. Set `TRUST_URL` to the Trust worker and the daemon
+  fetches this wallet's profile (`bsv trust terms`, the `trust_terms` MCP
+  tool), verifies it offline, and uses `approvalMultiplier` only to widen the
+  Jev `--auto` band **inside** the origin's existing cap or sub-wallet
+  budget: 5 points off the verdict-probability and confidence bars per step,
+  floored, risk bar fixed. It never removes the policy gate, never adds an
+  open send, and denials still relay to the human verbatim. `TRUST_MODE=log`
+  records what a profile would change (`trust.delta` events) without applying
+  it; the default is `enforce`. Fail closed: missing URL, locked wallet,
+  unreachable worker, bad signature, wrong subject, or expiry means the base
+  thresholds apply.
 
 **What it is not:** no token, nothing transferable, nothing purchasable —
 only settled spend and completed work move it. Attestations are signed

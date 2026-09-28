@@ -1,0 +1,61 @@
+{
+  "note": "Signed by ~/trust src/core.ts signProfile with a throwaway P-256 key; verify offline in bsvOS.",
+  "issuer": {
+    "alg": "ES256",
+    "keyId": "85dc1616d0be8b23",
+    "publicJwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "cA5jKCBoUrRQQbCLUGIkZTQD1uBrxGkYuMrXAA6AqWA",
+      "y": "NTIZYHTNN1N88CK8gy6FYkISA3i0YZpUDcXaQMn6Bwk"
+    }
+  },
+  "signed": {
+    "profile": {
+      "v": 1,
+      "iss": "trust.entangleit.com",
+      "sub": "key:03abababababababababababababababababababababababababababababababab",
+      "members": [
+        "key:03abababababababababababababababababababababababababababababababab",
+        "wallet:dummy-wallet-id"
+      ],
+      "issuedAt": "2026-09-01T00:00:00.000Z",
+      "expiresAt": "2126-01-01T00:00:00.000Z",
+      "level": "trusted",
+      "score": 78,
+      "confidence": 0.86,
+      "axes": {
+        "spend": {
+          "settledPayments": 120,
+          "distinctServices": 14,
+          "distinctPayTo": 14,
+          "spentCents": 900,
+          "refundedCents": 0,
+          "firstPaymentAt": "2026-06-01T00:00:00.000Z",
+          "lastPaymentAt": "2026-08-30T00:00:00.000Z"
+        },
+        "work": {
+          "score": 82,
+          "provisional": false,
+          "slashes": 0,
+          "completed": 12,
+          "disputesLost": 0,
+          "verifyPassRate": 0.97
+        }
+      },
+      "terms": {
+        "approvalMultiplier": 3,
+        "bondDiscountBps": 10000,
+        "discountCeilingBps": 2500
+      },
+      "reasons": [
+        "spend_verified",
+        "work_verified"
+      ]
+    },
+    "signature": "x_J7Kho20XTYnaJU0GHMXYRyIqNxntJIrTeSrbIPQbEAMSSfO9JI-oQvOpSI91lHu_psURqW-I84rHN26MqjLw",
+    "keyId": "85dc1616d0be8b23",
+    "alg": "ES256"
+  },
+  "canonical": "{\"axes\":{\"spend\":{\"distinctPayTo\":14,\"distinctServices\":14,\"firstPaymentAt\":\"2026-06-01T00:00:00.000Z\",\"lastPaymentAt\":\"2026-08-30T00:00:00.000Z\",\"refundedCents\":0,\"settledPayments\":120,\"spentCents\":900},\"work\":{\"completed\":12,\"disputesLost\":0,\"provisional\":false,\"score\":82,\"slashes\":0,\"verifyPassRate\":0.97}},\"confidence\":0.86,\"expiresAt\":\"2126-01-01T00:00:00.000Z\",\"iss\":\"trust.entangleit.com\",\"issuedAt\":\"2026-09-01T00:00:00.000Z\",\"level\":\"trusted\",\"members\":[\"key:03abababababababababababababababababababababababababababababababab\",\"wallet:dummy-wallet-id\"],\"reasons\":[\"spend_verified\",\"work_verified\"],\"score\":78,\"sub\":\"key:03abababababababababababababababababababababababababababababababab\",\"terms\":{\"approvalMultiplier\":3,\"bondDiscountBps\":10000,\"discountCeilingBps\":2500},\"v\":1}"
+}

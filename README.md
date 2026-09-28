@@ -198,6 +198,7 @@ bsv share <file>            # hash + anchor a file (label + explorer link)
 bsv allow <origin> [cap] [--auto] | bsv deny <origin> | bsv requests | bsv policies
 bsv jev status              # advisor on/off, model, auto-approval thresholds
 bsv jev decide --state <json|text|@file> --questions <json|@file>  # one calibrated decision
+bsv trust terms             # this wallet's verified Trust profile + terms (TRUST_URL; --refresh)
 bsv agent mint <name> --budget=N [--daily=N] [--expiry=30d|YYYY-MM-DD]
 bsv agent list | bsv agent show <name> | bsv agent revoke <name>
 bsv pending                 # monitor queue
@@ -282,11 +283,13 @@ Setup, boundaries and the full panel-parity table:
 bsv mcp --agent=research-agent   # stdio server: Claude Code, OpenCode, etc.
 ```
 
-Eight tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
+Core tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
 `list_pending`, `x402_pay` (metered fetch, spends the agent's own budget
 through policy), `jev_decide` (calibrated decision calls, ~$0.00002 each),
-and `jev_status`. Every call is stamped with the agent name, so daemon policy
-and the custody lock apply per-agent. A first-run denial surfaces as
+`jev_status`, and `trust_terms` (this wallet's verified Trust profile; see
+below). The full agent surface is tabulated in [SKILLS.md](SKILLS.md). Every
+call is stamped with the agent name, so daemon policy and the custody lock
+apply per-agent. A first-run denial surfaces as
 `ask your human to run: bsv allow research-agent` — the agent loop closes
 without ever touching keys.
 
@@ -385,6 +388,25 @@ With `OPENROUTER_API_KEY` set in the daemon environment (see
 
 Turn the advisor off with `BSV_WALLETD_JEV=off`; `bsv jev decide` stays
 available for agents and apps (the key never leaves the daemon).
+
+## Trust terms (reputation that loosens, never uncaps)
+Set `TRUST_URL` to an EntangleIT Trust worker and the daemon fetches this
+wallet's signed profile, verifies it offline against the issuer key, and lets
+a verified `approvalMultiplier` widen the Jev auto-approval band — by 5
+points of verdict probability and confidence per step, floored, and always
+**inside** the origin's existing cap or sub-wallet budget. The risk bar never
+moves, and `min(cap, terms)` means trust can reduce prompts, not limits.
+
+- `bsv trust terms` shows the level, terms, expiry, and reasons (`--refresh`
+  bypasses the cache); agents get the same via the `trust_terms` MCP tool.
+- `TRUST_MODE=log` records what a verified profile would have changed
+  (`trust.delta` events) without applying it; `off` ignores profiles in
+  policy entirely; the default is `enforce`.
+- Fail closed: no `TRUST_URL`, locked wallet, unreachable worker, bad
+  signature, wrong subject, or expiry means the base thresholds apply
+  unchanged. Note the daemon reads its environment from whatever
+  `EnvironmentFile` the unit resolves (a drop-in overrides the base file):
+  `systemctl --user show bsv-walletd -p EnvironmentFiles`.
 
 ## Roadmap
 

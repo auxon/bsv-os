@@ -525,6 +525,16 @@ async function main(): Promise<void> {
       }));
       break;
     }
+    case "trust": {
+      const [tSub] = rest;
+      if (tSub === "terms" || tSub === "status" || tSub === undefined) {
+        print(await call("trustTerms", rest.includes("--refresh") ? { refresh: true } : {}));
+      } else {
+        console.error("usage: bsv trust <terms|status> [--refresh]");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "overlay": {
       const [ovSub, ...ovRest] = rest;
       const ovArg = ovRest.find((a) => !a.startsWith("--"));
@@ -1835,7 +1845,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

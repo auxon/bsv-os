@@ -510,6 +510,17 @@ the daemon can sell answers over x402 (50 sats each). Put the facts in the
 state, keep each question narrow, and never put secrets (seed words, WIFs)
 in the state — it goes to the model provider.
 
+#### Trust terms (optional)
+
+Point the daemon at an EntangleIT Trust worker (`TRUST_URL=https://…` in the
+daemon environment) and it can fetch this wallet's signed reputation profile
+and verify it locally. A verified profile makes auto mode a little more
+forgiving for *this* wallet — a `trusted` profile relaxes the verdict bars,
+never the cap — and `bsv trust terms` shows the level, terms, and expiry.
+Nothing is trusted unverified: no URL, a locked wallet, a bad signature, or
+an expired profile all fall back to the strict defaults. `TRUST_MODE=log`
+records what would change without applying it.
+
 ## 6. Safety rules (read once, remember forever)
 
 1. **Recovery phrase = everything.** Paper or password manager. Never in

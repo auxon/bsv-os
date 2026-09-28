@@ -14,12 +14,19 @@
  * approves), and mode `auto` lets a routine, confident allow verdict spend
  * within caps without waking the human. Everything Jev-related fails
  * closed: no answer means a pending request, never a silent spend.
+ *
+ * Trust layer: mode `auto` additionally consults the wallet's verified
+ * EntangleIT Trust profile (TRUST_URL). Terms only widen the Jev band by
+ * the approval multiplier, always INSIDE the origin's cap or sub-wallet
+ * budget; every failure falls back to the base thresholds. `TRUST_MODE=log`
+ * records what would have changed without applying it.
  */
 import type { Knex } from "knex";
 import { checkBudget } from "./agents.ts";
 import { logEvent } from "./events.ts";
 import {
   autoApprove,
+  autoThresholds,
   describeScore,
   jevEnabled,
   scoreSpend,
@@ -27,6 +34,7 @@ import {
   type SpendContext,
   type SpendScore,
 } from "./jev.ts";
+import { trustAdjustedThresholds, trustMode, trustTermsForPolicy, type TrustTerms } from "./trust.ts";
 
 export type PolicyMode = "allow" | "deny" | "ask" | "auto";
 export type Verdict = "allow" | "deny";
@@ -51,6 +59,11 @@ export interface CheckOpts {
   jev?: JevDecide;
   /** Probe mode: judge exactly like a real spend but never write policy_requests. */
   dryRun?: boolean;
+  /**
+   * Test/embedding override for the Trust profile. `undefined` = consult the
+   * configured Trust worker (see trust.ts); `null` = no profile.
+   */
+  trust?: { level: string; terms: Pick<TrustTerms, "approvalMultiplier"> } | null;
 }
 
 interface RequestRow {
@@ -218,14 +231,41 @@ export async function check(
       ? await maybeScore(origin, amountSats, action, opts)
       : scoreFromRow(seen);
   if (mode === "auto") {
-    if (score && autoApprove(score)) {
-      return { verdict: "allow", reason: `allowed by Jev: ${describeScore(score)}`, pending: false, jev: score, mode, capSats, budgetCovered: false };
+    // Trust widens the Jev band by the approval multiplier, inside the cap.
+    // Injected trust (tests) applies; otherwise TRUST_MODE decides. Any
+    // Trust failure is null here and the base thresholds apply unchanged.
+    const base = autoThresholds();
+    const trust = opts.trust !== undefined
+      ? opts.trust
+      : trustMode() === "off"
+        ? null
+        : await trustTermsForPolicy();
+    const trustModeValue = trustMode();
+    const applies = Boolean(trust) && trustModeValue === "enforce";
+    const thresholds = applies && trust ? trustAdjustedThresholds(base, trust.terms.approvalMultiplier) : base;
+    if (score && autoApprove(score, thresholds)) {
+      if (applies && trust && !opts.dryRun && !autoApprove(score, base)) {
+        await logEvent(db, "trust.applied", {
+          origin, amountSats, action,
+          detail: `${trust.level} ×${trust.terms.approvalMultiplier}: ${describeScore(score)}`,
+        });
+      }
+      const note = applies && trust ? ` · trust ${trust.level} ×${trust.terms.approvalMultiplier}` : "";
+      return { verdict: "allow", reason: `allowed by Jev: ${describeScore(score)}${note}`, pending: false, jev: score, mode, capSats, budgetCovered: false };
+    }
+    // log mode: record what a verified profile would have changed, apply nothing.
+    if (trust && !applies && trustModeValue === "log" && score && !opts.dryRun && autoApprove(score, trustAdjustedThresholds(base, trust.terms.approvalMultiplier))) {
+      await logEvent(db, "trust.delta", {
+        origin, amountSats, action,
+        detail: `${trust.level} ×${trust.terms.approvalMultiplier} would allow: ${describeScore(score)}`,
+      });
     }
     if (!opts.dryRun) await upsertRequest(db, origin, amountSats, action, score, seen);
     const why = score ? describeScore(score) : "Jev unavailable (no answer)";
+    const trustHint = trust && !applies ? ` · trust ${trust.level} (${trustModeValue} mode)` : "";
     return {
       verdict: "deny",
-      reason: `${why} — human approval required: bsv allow ${origin}`,
+      reason: `${why} — human approval required: bsv allow ${origin}${trustHint}`,
       pending: true,
       jev: score,
       mode,

@@ -26,7 +26,7 @@ test("lists the wallet tools", async () => {
     "market_browse", "market_buy", "market_list", "market_sync",
     "memory_forget", "memory_recall", "memory_remember", "p2p_peers",
     "policy_probe", "stream_beat", "stream_list", "stream_start",
-    "stream_stop", "stream_ticks", "wallet_balance", "wallet_status", "watch_poll", "x402_pay",
+    "stream_stop", "stream_ticks", "trust_terms", "wallet_balance", "wallet_status", "watch_poll", "x402_pay",
   ]);
   await client.close();
   await server.close();

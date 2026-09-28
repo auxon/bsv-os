@@ -91,6 +91,11 @@ const TOOLS = [
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
+    name: "trust_terms",
+    description: "This wallet's EntangleIT Trust profile: level and terms (approval multiplier, bond discount, discount ceiling), fetched from the Trust worker and verified offline against the issuer key. Terms only widen the Jev auto-approval band inside existing caps — they never uncap. Requires TRUST_URL in the daemon environment; reports configured:false otherwise.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
     name: "policy_probe",
     description: "Dry-run the spending gate for a hypothetical spend: runs caps, your sub-wallet budget, and Jev, and reports the verdict (allow/deny), reason, and Jev score — without writing a request or moving money. Use before spending to see whether an action would pass and what approval it needs.",
     inputSchema: {
@@ -593,6 +598,8 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
         }
         case "jev_status":
           return text(await callDaemon("jevStatus"));
+        case "trust_terms":
+          return text(await callDaemon("trustTerms"));
         case "events_poll":
           return text(await callDaemon("eventsPoll", {
             origin: agent,
