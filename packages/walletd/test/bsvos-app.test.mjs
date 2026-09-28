@@ -60,6 +60,13 @@ test("a long-lived shell window notices when its build changes underneath it", (
   const block = src.slice(at, src.indexOf("res.end(body);", at));
   assert.ok(block.includes("etag,"), "the ETag is sent as a header");
   assert.ok(block.includes("stat.mtimeMs"), "the ETag moves when the file changes");
+  // But a per-file ETag on the entry module missed fixes that landed in
+  // views/ (they never moved app.js, so the banner never fired). The stamp
+  // the banner compares must cover the whole bundle, served at one path.
+  assert.ok(app.includes('fetch("__build"'), "the shell revalidates the bundle stamp");
+  assert.ok(!app.includes('fetch("app.js"'), "not just the entry module");
+  assert.ok(/runnerAppStamp\(/.test(src), "the daemon computes a bundle stamp");
+  assert.ok(src.includes('appMatch[2] === "/__build"'), "and serves it at /<app>/__build");
   // ...and the nav the user could not see must still be wired.
   // app.js must consume the registry, not reassemble it: that is exactly what
   // let a missing spread operator hide from the entire test suite.

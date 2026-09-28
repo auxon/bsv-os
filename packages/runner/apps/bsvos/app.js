@@ -226,11 +226,13 @@ function wire() {
 
 /**
  * Notice when the daemon is serving a different build of this app than the one
- * currently loaded. Cheap: one conditional GET of app.js, no body read.
+ * currently loaded. Cheap: one conditional GET of the bundle stamp, no body
+ * read. The stamp covers every served file, not just app.js — a fix that lands
+ * in views/ or lib/ must move it, or the window never learns to reload.
  */
 async function watchForNewBuild() {
   const stamp = async () => {
-    const res = await fetch("app.js", { method: "GET", cache: "no-store", headers: { "if-none-match": loadedEtag ?? "" } });
+    const res = await fetch("__build", { method: "GET", cache: "no-store", headers: { "if-none-match": loadedEtag ?? "" } });
     return res.headers.get("etag");
   };
   try {

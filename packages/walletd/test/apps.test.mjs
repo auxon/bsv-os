@@ -4,7 +4,7 @@ import knex from "knex";
 import {
   appIdFor, applyAppUpdate, checkAppUpdates, diffPermissions, getApp, installApp,
   intentFromMemo, isLoopbackHost, listApps, manifestSha256, manifestUrlFor, readCatalog, removeApp,
-  resolveRunnerAppFile, stableStringify, storeList, validateIntents, validateManifest,
+  resolveRunnerAppFile, runnerAppStamp, stableStringify, storeList, validateIntents, validateManifest,
 } from "../src/apps.ts";
 import fs from "node:fs";
 import os from "node:os";
@@ -485,6 +485,30 @@ test("intentFromMemo maps the action tag to label + description", () => {
   assert.deepEqual(intentFromMemo(undefined, undefined), {});
   assert.deepEqual(intentFromMemo([], undefined), {});
   assert.deepEqual(intentFromMemo("not-an-array", undefined), {});
+});
+
+test("runnerAppStamp covers every file in the bundle, nested ones included", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runner-stamp-"));
+  try {
+    fs.writeFileSync(path.join(dir, "index.html"), "<!doctype html>");
+    fs.mkdirSync(path.join(dir, "views"));
+    fs.writeFileSync(path.join(dir, "views", "apps.js"), "export default [];");
+    const first = runnerAppStamp(dir);
+    assert.match(first, /^[a-f0-9]{64}$/);
+    assert.equal(runnerAppStamp(dir), first, "stable while nothing changes");
+    // The failure this guards: a fix in a view module did not move the old
+    // app.js ETag, so no open window was ever told to reload.
+    fs.writeFileSync(path.join(dir, "views", "apps.js"), "export default [1];");
+    assert.notEqual(runnerAppStamp(dir), first, "a nested file change moves the bundle stamp");
+    // mtime alone (a touch) must move it too, not only content changes.
+    const newer = fs.statSync(path.join(dir, "views", "apps.js")).mtimeMs / 1000 + 10;
+    fs.utimesSync(path.join(dir, "views", "apps.js"), newer, newer);
+    const touched = runnerAppStamp(dir);
+    assert.notEqual(touched, first, "a touch moves the bundle stamp");
+    assert.equal(runnerAppStamp(dir), touched, "and it is stable again");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("resolveRunnerAppFile serves app assets and refuses traversal", () => {

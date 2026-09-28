@@ -151,6 +151,40 @@ export function resolveRunnerAppFile(dir: string, relPath: string): { file: stri
   return { file: resolved, mime: RUNNER_APP_MIME[path.extname(resolved).toLowerCase()] ?? "application/octet-stream" };
 }
 
+/**
+ * Stamp for a bundled app directory: every file's name + size + mtime, hashed.
+ * The shell's staleness banner compares this so a change anywhere in the
+ * bundle moves it — a per-file ETag on one entry point could not see a fix
+ * that landed in views/ or lib/, which is how a dead-button fix shipped
+ * without any window being told to reload.
+ */
+export function runnerAppStamp(dir: string): string {
+  const parts: string[] = [];
+  const walk = (rel: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(rel ? path.join(dir, rel) : dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const next = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(next);
+      } else if (entry.isFile()) {
+        try {
+          const st = fs.statSync(path.join(dir, next));
+          parts.push(`${next}:${st.size}:${Math.floor(st.mtimeMs)}`);
+        } catch {
+          /* vanished mid-walk */
+        }
+      }
+    }
+  };
+  walk("");
+  return createHash("sha256").update(parts.join("\n")).digest("hex");
+}
+
 export function manifestSha256(manifest: unknown): string {
   return createHash("sha256").update(stableStringify(manifest), "utf8").digest("hex");
 }

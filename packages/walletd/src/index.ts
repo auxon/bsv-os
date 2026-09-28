@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
 import { dispatch, setBackend, setP2P, setTorrents } from "./rpc.ts";
-import { resolveRunnerAppFile } from "./apps.ts";
+import { resolveRunnerAppFile, runnerAppStamp } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { dataDir, migrate, openDb } from "./storage.ts";
@@ -668,6 +668,21 @@ function handler() {
     if (appMatch && RUNNER_APPS.has(appMatch[1]!)) {
       const name = appMatch[1]!;
       const dir = runnerAppDir(name);
+      // Bundle stamp for the shell's staleness banner: every served file's
+      // name+size+mtime, so a view-module fix moves it too (per-file ETags
+      // only cover the file you ask for; the banner used to watch app.js).
+      if (dir && appMatch[2] === "/__build") {
+        const stamp = runnerAppStamp(dir);
+        const etag = `W/"${stamp}"`;
+        if (req.headers["if-none-match"] === etag) {
+          res.writeHead(304, { etag, "cache-control": "no-store" });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", etag });
+        res.end(JSON.stringify({ stamp }));
+        return;
+      }
       const asset = dir ? resolveRunnerAppFile(dir, appMatch[2] ?? "/") : null;
       if (!asset) {
         res.writeHead(404, { "content-type": "text/plain" });
