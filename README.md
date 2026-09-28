@@ -390,8 +390,10 @@ Turn the advisor off with `BSV_WALLETD_JEV=off`; `bsv jev decide` stays
 available for agents and apps (the key never leaves the daemon).
 
 ## Trust terms (reputation that loosens, never uncaps)
-Set `TRUST_URL` to an EntangleIT Trust worker and the daemon fetches this
-wallet's signed profile, verifies it offline against the issuer key, and lets
+Set `TRUST_URL` (the live worker is `https://entangleit.com/trust`;
+source: [github.com/auxon/trust](https://github.com/auxon/trust)) and the
+daemon fetches this wallet's signed profile, verifies it offline against the
+issuer key, and lets
 a verified `approvalMultiplier` widen the Jev auto-approval band — by 5
 points of verdict probability and confidence per step, floored, and always
 **inside** the origin's existing cap or sub-wallet budget. The risk bar never

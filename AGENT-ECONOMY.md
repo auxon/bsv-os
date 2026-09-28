@@ -380,9 +380,11 @@ Two axes feed it, both from settled facts:
   distinct services/payees, volume, age).
 - **Verified work** — settled BSVBounties jobs (completed, pass rate).
 
-The scoring service is the **EntangleIT Trust worker** (`~/trust`, live at
-`entangleit.com/trust`). bsvOS is a *consumer* of its signed profiles; it
-does not re-score anything locally.
+The scoring service is the **EntangleIT Trust worker**
+([github.com/auxon/trust](https://github.com/auxon/trust), live at
+`entangleit.com/trust`; reconcile runs every 15 minutes from its Actions
+workflow). bsvOS is a *consumer* of its signed profiles; it does not
+re-score anything locally.
 
 ### 7.1 Levels and what they unlock
 
