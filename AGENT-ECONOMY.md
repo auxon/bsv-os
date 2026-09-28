@@ -367,7 +367,100 @@ The Twetch flow generalizes:
 
 ---
 
-## 7. Runner apps: the app pattern
+## 7. Reputation and terms (EntangleIT Trust)
+
+An agent has no résumé. In this economy it does not need one: what a wallet
+has *done* is already on-chain, and the rails can turn verified history into
+terms. That is the reputation system — not a score you buy, but a level that
+changes how much friction you meet.
+
+Two axes feed it, both from settled facts:
+
+- **Verified spend** — payments settled through the agentpay ledger (count,
+  distinct services/payees, volume, age).
+- **Verified work** — settled BSVBounties jobs (completed, pass rate).
+
+The scoring service is the **EntangleIT Trust worker** (`~/trust`, live at
+`entangleit.com/trust`). bsvOS is a *consumer* of its signed profiles; it
+does not re-score anything locally.
+
+### 7.1 Levels and what they unlock
+
+| Level | Requires | Approval threshold | Worker bond | Discount ceiling |
+| --- | --- | --- | --- | --- |
+| `new` | — | ×1 | 0% | 0% |
+| `building` | either axis verified | ×1 | 0% | 0% |
+| `proven` | spend **and** work verified | ×2 | 50% | 1% |
+| `trusted` | ≥50 payments, ≥10 payees, ≥$5.00 spent, ≥5 jobs, ≥90% pass, ≥30 days | ×3 | 100% | 2.5% |
+| `elite` | ≥200 payments, ≥25 payees, ≥$25 spent, ≥20 jobs, ≥95% pass, ≥90 days | ×4 | 100% | 5% |
+
+Terms are the point: a `trusted` agent needs roughly a third of the human
+approvals on the rails, posts **no bond** to take bounties, and can be
+discounted up to 2.5% by an x402 seller.
+
+### 7.2 The rules that keep it honest
+
+- **Pure and deterministic** (`src/score.ts`): verified axes → level →
+  terms. No model decides a level.
+- **Ratchet**: at most one level up per 7-day window; drops immediately when
+  evidence drops (a slash, a lost dispute).
+- **Fail closed**: missing or malformed metrics never fast-path.
+- **Jev is advisory only**: a gray-zone `hold` band can step terms *down* one
+  level; it can never grant eligibility or raise terms. No answer = no change.
+- **Signed and portable**: profiles are ES256 over canonical JSON, issued by
+  `TRUST_ISSUER`. Verify offline with `GET /trust/v1/key`, or
+  `POST /trust/v1/verify`; check `expiresAt` and that `sub` is the identity
+  you asked about. A paid lookup (`GET /v1/profile/:subject`, 5 sats over
+  x402) returns the signed profile. MCP tools: `trust_profile`,
+  `trust_terms`, `trust_verify`, `trust_bind`, `trust_leaderboard`.
+- **Bindings, not secrets**: `wallet:<id>` ↔ `account:<worker>` bindings use
+  a signed challenge plus a matching agentpay attestation; nothing secret
+  changes hands.
+- **Signals**: `POST /v1/reconcile` (every 15 minutes; reads the shared
+  EntangleIT D1 + BSVBounties reputation) is the default path;
+  `POST /v1/ingest` (signed observations) is the near-real-time upgrade.
+  Trust writes only its own `tr_*` tables — chain and marketplace data stay
+  owned by their products.
+
+### 7.3 What a bsvOS machine can prove today
+
+- `bsv x402 attest` — BRC-42-signed **spend statements**: up to 100 txids
+  (status, label, at) over N days, counts included, no per-tx amounts. They
+  are pointers a verifier resolves itself, and verification is deliberately
+  custody-gated ("needs a private side").
+- `bsv funds attest|verify|prove` — the "can pay" claim: a signed ≥ N sats
+  statement over a Merkle root of the UTXO set, with expiry and one-UTXO
+  selective disclosure. A signed claim, not a zk proof.
+- `bsv cert put|list|show|revoke` — an identity certificate wallet with
+  selective disclosure (`--fields`) and a disclosure audit log.
+- The chain itself: posts, inscriptions, and market history are
+  self-authenticating (AIP), which is why the work axis can be verified
+  rather than self-reported.
+
+### 7.4 How consumers use terms
+
+Rule zero: every consumer takes **`min(its own cap, terms)`** — trust
+loosens, never uncaps — and any Trust problem falls back to the *stricter*
+path.
+
+- **agentpay**: effective approval threshold = base × `approvalMultiplier`;
+  daily limits and sub-agent budgets stay untouched.
+- **BSVBounties**: worker bond = base − `bondDiscountBps`.
+- **x402 gateway**: discount = `min(route ceiling, profile.discountCeilingBps)`.
+- **bsvOS**: *specified, not yet shipped* (see
+  `~/trust/docs/INTEGRATION.md`). The plan is a `trust_terms` MCP tool; the
+  Jev advisor uses `approvalMultiplier` only to widen its `--auto` band
+  **inside** the origin's existing cap or sub-wallet budget. It never removes
+  the policy gate, never adds an open send, and denials still relay to the
+  human verbatim. Until then, trust moves the server-side rails (agentpay,
+  bounties, gateway) but not your local policy bands.
+
+**What it is not:** no token, nothing transferable, nothing purchasable —
+only settled spend and completed work move it. Attestations are signed
+claims and pointers, not zero-knowledge proofs; the bsvOS spend attestation
+is verified with the verifier's own key material, on purpose.
+
+## 8. Runner apps: the app pattern
 
 - Serve the UI from the agent (or the runner) over **HTTPS on a loopback
   address**; the runner sandbox only loads loopback origins, and the whole
@@ -393,7 +486,7 @@ The Twetch flow generalizes:
 
 ---
 
-## 8. The Sell4Sats blueprint
+## 9. The Sell4Sats blueprint
 
 The canonical commerce agent, end to end:
 
@@ -424,7 +517,7 @@ Study it as a template: swap the channel, keep the skeleton.
 
 ---
 
-## 9. Testing playbook
+## 10. Testing playbook
 
 The daemon's tests are the template (`packages/walletd/test/`):
 
@@ -449,7 +542,7 @@ watcher transitions, AI parsing/fallback.
 
 ---
 
-## 10. On-chain verification recipes
+## 11. On-chain verification recipes
 
 When it matters, verify from the chain, not from your own logs.
 
@@ -477,7 +570,7 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" \
 
 ---
 
-## 11. Ops: build, restart, deploy
+## 12. Ops: build, restart, deploy
 
 ```bash
 # daemon
@@ -503,7 +596,7 @@ systemctl --user restart sell4sats
 
 ---
 
-## 12. The gotcha table
+## 13. The gotcha table
 
 | Gotcha | Reality |
 | --- | --- |
@@ -525,7 +618,7 @@ systemctl --user restart sell4sats
 
 ---
 
-## 13. Cookbook
+## 14. Cookbook
 
 ```bash
 # money
@@ -534,7 +627,7 @@ bsv unlock | bsv lock
 bsv policies | bsv requests
 bsv probe <origin> <action> <sats> [--label=..]  # dry-run the gate first — no money moves
 bsv events --wait 60                             # wake on approvals instead of polling
-bsv doctor                                       # machine-check the gotchas (§12)
+bsv doctor                                       # machine-check the gotchas (§13)
 bsv market browse [--kind=ordinal|bsv21]         # what's for sale, with prices + fees
 bsv market fees                                  # operator fee sellers list with
 bsv market buy <listing> [--origin=agent] [--max=sats]   # atomic buy from a budget
@@ -578,7 +671,7 @@ curl -s -X POST "$MARKET/v1/market/list" -H 'content-type: application/json' -d 
 
 ---
 
-## 14. Starting a new agent-economy app: checklist
+## 15. Starting a new agent-economy app: checklist
 
 1. **Name the origin** (`yourapp`) and decide the budget: cap or minted
    sub-wallet. Write the approval command into your README on day one.
