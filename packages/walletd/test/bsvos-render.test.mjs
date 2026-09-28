@@ -543,6 +543,40 @@ test("a bundled app that does not hold the host slot offers a switch, not a blin
   assert.ok(!/data-install="https:\/\/old\.example\//.test(stale), "and is not offered as a re-install");
 });
 
+test("clicking Install resolves the entry instead of throwing a scope error", async () => {
+  // The bug this guards: installUrlOf was defined inside render(), but the
+  // click handler in bind() uses it — so every Install/Switch click threw
+  // `installUrlOf is not defined` before the confirm dialog and the buttons
+  // silently did nothing.
+  const views = await loadViews();
+  const appsView = views.find((v) => v.id === "apps");
+  let click = null;
+  const root = { addEventListener: (type, fn) => { if (type === "click") click = fn; } };
+  const ctx = {
+    data: {
+      store: [{
+        domain: "localhost", name: "bsvOS Explorer", blurb: "read-only", devOnly: false,
+        status: "not-installed", installed: false, live: null, changes: [],
+        installUrl: "https://localhost:2121/explorer/", holder: "Cast",
+      }],
+    },
+    run: (f) => f(), toast() {}, fail() {}, reload: async () => {},
+  };
+  appsView.bind(root, ctx);
+  assert.equal(typeof click, "function", "bind registered a click handler");
+  const event = {
+    target: {
+      closest: (sel) => (sel === "[data-install]" ? { dataset: { install: "https://localhost:2121/explorer/" } } : null),
+    },
+  };
+  // With the scope fixed this proceeds to the confirmation dialog (which
+  // needs a real document, absent here). What must NOT happen is the scope
+  // error: that is the silent-dead-button failure.
+  let outcome = null;
+  await click(event).catch((e) => { outcome = e; });
+  assert.ok(!/installUrlOf/.test(String(outcome)), `handler looked up the install URL (got: ${outcome})`);
+});
+
 test("views with no data degrade to empty states, not crashes", async () => {
   const views = await loadViews();
   for (const v of views) {

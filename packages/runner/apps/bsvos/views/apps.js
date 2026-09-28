@@ -25,6 +25,16 @@ const STATUS = {
   invalid: ["bad", "bad manifest"],
 };
 
+/**
+ * The store is variant-aware: bundled apps share the `localhost` host at
+ * different paths, so an entry that is not the installed variant is a switch
+ * (installing it replaces whatever holds the host), never an update.
+ *
+ * Module scope on purpose: bind()'s click handler needs it too, and a copy
+ * living inside render() made every Install/Switch click a ReferenceError.
+ */
+const installUrlOf = (s) => s.installUrl ?? `https://${s.domain}/`;
+
 export const apps = {
   id: "apps",
   title: "Apps",
@@ -58,10 +68,6 @@ export const apps = {
       );
     };
 
-    // The store is variant-aware: bundled apps share the `localhost` host at
-    // different paths, so an entry that is not the installed variant is a
-    // switch (installing it replaces whatever holds the host), never an update.
-    const installUrlOf = (s) => s.installUrl ?? `https://${s.domain}/`;
     const storeCard = (s) => {
       const [tone, label] = STATUS[s.status] ?? ["", s.status ?? "unknown"];
       const isSelf = s.domain === SELF_DOMAIN;
