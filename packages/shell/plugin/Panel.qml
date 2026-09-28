@@ -29,6 +29,16 @@ Panel {
   property bool hasWallet: false
   property bool locked: true
   property bool daemonUp: false
+  // Tabs: the same six sections as the shell app's sidebar (minus Twetch,
+  // which lives in its own app). Wallet is first because approvals land there.
+  property string tab: "Wallet"
+  readonly property var tabs: [
+    { id: "Wallet", label: "Wallet" },
+    { id: "Money", label: "Money" },
+    { id: "Identity", label: "Identity" },
+    { id: "Apps", label: "Apps" },
+    { id: "Work", label: "Work" },
+  ]
   property string address: ""
   property string balanceText: "—"
   property string qrDataUrl: ""
@@ -164,6 +174,8 @@ Panel {
   // routes toggle() through open(), so an override that calls back into
   // toggle() recurses forever. reveal() is our refresh-then-show entry.
   function reveal() {
+    // Approvals land on the Wallet tab; never summon onto another one.
+    root.tab = "Wallet";
     refresh();
     if (!root.opened) root.toggle();
   }
@@ -1247,6 +1259,13 @@ Panel {
     return "?";
   }
 
+  // Pending approvals are the one count worth carrying on the tab itself.
+  function tabLabel(t) {
+    return t.id === "Wallet" && root.requests.length > 0
+      ? `${t.label} · ${root.requests.length}`
+      : t.label;
+  }
+
   function storeLine(e) {
     const bits = [];
     if (e.blurb) bits.push(e.blurb);
@@ -1335,62 +1354,369 @@ Panel {
       Layout.fillWidth: true
     }
 
-    // P4/F3: system sign-in. One tap opens the hosted Twetch page; the
-    // daemon stores the verified session and binds the unlocked wallet key.
-    PanelSectionHeader { text: "Identity" }
-
-    Text {
-      visible: root.identity === null
-      text: "Not signed in. First run needs a client created at id.entangleit.com/console — then `bsv login --client-id=…` in a terminal."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    Button {
-      visible: root.identity === null
-      text: root.identityBusy ? "Waiting for Twetch…" : "Sign in with Twetch"
-      enabled: !root.identityBusy && root.daemonUp
-      onClicked: {
-        root.identityBusy = true;
-        loginProc.running = true;
-      }
-    }
-
+    // Tabs: the dashboard used to be one long scroll. Each major section
+    // now lives under one tab (the same grouping as the shell app's
+    // sidebar), while the status header and the bottom actions stay put.
     RowLayout {
-      visible: root.identity !== null
-      spacing: 8
       Layout.fillWidth: true
+      spacing: 4
 
-      Image {
-        visible: root.identityAvatar() !== ""
-        source: root.identityAvatar()
-        sourceSize.width: 36
-        sourceSize.height: 36
-        Layout.preferredWidth: 36
-        Layout.preferredHeight: 36
+      Repeater {
+        model: root.tabs
+
+        Button {
+          // Compressible: the row must never push the panel wider than its
+          // card, or the last tab is clipped off the screen edge.
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          Layout.preferredWidth: 1
+          text: root.tabLabel(modelData)
+          fontSize: Style.font.caption
+          horizontalPadding: 6
+          selected: root.tab === modelData.id
+          active: root.tab === modelData.id
+          onClicked: root.tab = modelData.id
+        }
       }
+    }
+
+    ColumnLayout {
+      visible: root.tab === "Wallet"
+      Layout.fillWidth: true
+      spacing: 10
+
+      PanelSectionHeader { text: `Approvals (${root.requests.length})` }
 
       ColumnLayout {
-        spacing: 2
+        spacing: 8
+        visible: root.requests.length > 0
         Layout.fillWidth: true
 
+        Repeater {
+          model: root.requests
+          ColumnLayout {
+            spacing: 4
+            Layout.fillWidth: true
+            property bool showBudget: false
+            property int reqAmount: Math.max(0, Math.floor(Number(modelData.amount_sats ?? 0)))
+
+            RowLayout {
+              spacing: 8
+              Layout.fillWidth: true
+
+              ColumnLayout {
+                spacing: 2
+                Layout.fillWidth: true
+
+                Text {
+                  text: `${modelData.origin ?? "?"} · ${modelData.action ?? "spend"}${modelData.amount_sats ? ` · ${modelData.amount_sats} sats` : ""}`
+                  color: Color.foreground
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.Wrap
+                  Layout.fillWidth: true
+                }
+
+                Text {
+                  visible: !!modelData.jev
+                  text: modelData.jev
+                    ? `Jev: ${modelData.jev.verdict} p=${modelData.jev.prob.toFixed(2)} · risk ${modelData.jev.riskLevel} ${modelData.jev.risk.toFixed(2)} · conf ${modelData.jev.confidence.toFixed(2)}`
+                    : ""
+                  color: modelData.jev && modelData.jev.verdict === "deny" ? Color.urgent : Color.muted
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.Wrap
+                  Layout.fillWidth: true
+                }
+              }
+
+              Button {
+                text: "Approve"
+                onClicked: root.allow(modelData.origin)
+              }
+
+              Button {
+                text: "Budget…"
+                visible: reqAmount > 0
+                onClicked: showBudget = !showBudget
+              }
+
+              Button {
+                text: "Deny"
+                onClicked: root.deny(modelData.origin)
+              }
+            }
+
+            RowLayout {
+              spacing: 8
+              Layout.fillWidth: true
+              visible: showBudget && reqAmount > 0
+
+              Text {
+                text: `Allowance · 30d, daily = budget ÷ 10:`
+                color: Color.muted
+                font.pixelSize: Style.font.body
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+              }
+
+              Button {
+                text: `10× ${root.fmtSats(reqAmount * 10)}`
+                onClicked: root.mintBudget(modelData.origin, reqAmount * 10)
+              }
+
+              Button {
+                text: `100× ${root.fmtSats(reqAmount * 100)}`
+                onClicked: root.mintBudget(modelData.origin, reqAmount * 100)
+              }
+
+              Button {
+                text: `1000× ${root.fmtSats(reqAmount * 1000)}`
+                onClicked: root.mintBudget(modelData.origin, reqAmount * 1000)
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No pending approvals."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.requests.length === 0
+      }
+
+      PanelSectionHeader { text: `Transactions (${root.transactions.length})` }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.transactions.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.transactions
+          ColumnLayout {
+            spacing: 0
+            Layout.fillWidth: true
+
+            Text {
+              text: `${String(modelData.txid ?? "?").slice(0, 12)}… · ${modelData.status ?? "?"}${modelData.label ? ` · ${modelData.label}` : ""}`
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              text: modelData.hint ?? ""
+              color: Color.muted
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+              visible: (modelData.hint ?? "") !== ""
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No transactions yet — anchors and spends will land here."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.transactions.length === 0
+      }
+
+      PanelSectionHeader { text: `Policy (${root.policies.length})` }
+
+      ColumnLayout {
+        spacing: 8
+        visible: root.policies.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.policies
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.origin ?? "?"} · ${modelData.mode ?? "?"}${(modelData.spend_cap_sats ?? 0) > 0 ? ` · cap ${modelData.spend_cap_sats} sats` : ""}`
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: modelData.mode === "deny" ? "Approve" : "Revoke"
+              onClicked: modelData.mode === "deny" ? root.allow(modelData.origin) : root.deny(modelData.origin)
+            }
+          }
+        }
+      }
+
+      PanelSectionHeader { text: `Agents (${root.agents.length})` }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.agents.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.agents
+          ColumnLayout {
+            spacing: 0
+            Layout.fillWidth: true
+
+            RowLayout {
+              spacing: 8
+              Layout.fillWidth: true
+
+              Text {
+                text: `${modelData.name ?? "?"} · ${modelData.remaining ?? 0}/${modelData.budget_sats ?? 0} sats${(modelData.daily_sats ?? 0) > 0 ? ` · ${modelData.window_remaining ?? 0}/${modelData.daily_sats} today` : ""}${(modelData.expiry_at ?? 0) > 0 ? ` · expires ${new Date(modelData.expiry_at).toLocaleDateString()}` : ""} · ${modelData.active ? "active" : (modelData.revoked ? "revoked" : "expired")}`
+                color: modelData.active ? Color.foreground : Color.muted
+                font.pixelSize: Style.font.body
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+              }
+
+              Button {
+                text: "Revoke"
+                visible: modelData.active === true
+                onClicked: root.revokeAgent(modelData.name)
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No agent allowances — mint one with: bsv agent mint <name> --budget=<sats>."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.agents.length === 0
+      }
+
+    }
+
+    ColumnLayout {
+      visible: root.tab === "Money"
+      Layout.fillWidth: true
+      spacing: 10
+
+      PanelSectionHeader { text: `Money (${root.baskets.length})` }
+
+      ColumnLayout {
+        spacing: 4
+        visible: root.baskets.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.baskets
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: modelData.name ?? "?"
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              text: `${((modelData.balance ?? 0) / 1e8).toFixed(8)} BSV · ${modelData.memberCount ?? 0} utxo`
+              color: Color.muted
+              font.pixelSize: Style.font.body
+              Layout.fillWidth: true
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No baskets yet — create one with: bsv basket create <name>."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.baskets.length === 0
+      }
+
+      PanelSectionHeader { text: "Receive" }
+
+      ColumnLayout {
+        spacing: 8
+        Layout.fillWidth: true
+        visible: root.address !== ""
+
         Text {
-          text: `@${root.identity ? (root.identity.handle || root.identity.sub) : "?"}`
+          text: root.address
           color: Color.foreground
           font.pixelSize: Style.font.body
-          font.bold: true
-          elide: Text.ElideRight
+          font.family: "monospace"
+          wrapMode: Text.WrapAnywhere
           Layout.fillWidth: true
         }
 
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Image {
+            source: root.qrDataUrl
+            width: 200
+            height: 200
+            fillMode: Image.PreserveAspectFit
+            visible: root.qrDataUrl !== ""
+          }
+
+          Button {
+            text: "Copy"
+            onClicked: {
+              copyProc.copyText = root.address;
+              if (!copyProc.running) copyProc.running = true;
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No address — unlock the wallet to receive."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.address === ""
+      }
+
+      PanelSectionHeader { text: "Send" }
+
+      ColumnLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: sendAddressField
+          placeholderText: "Destination address"
+          font.family: "monospace"
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: sendSatsField
+          placeholderText: "Amount in sats"
+          inputMethodHints: Qt.ImhDigitsOnly
+          Layout.fillWidth: true
+        }
+
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Button {
+            text: "Send"
+            enabled: sendAddressField.text.trim() !== "" && Number(sendSatsField.text) > 0
+            onClicked: root.sendTo(sendAddressField.text.trim(), Math.floor(Number(sendSatsField.text)))
+          }
+        }
+
         Text {
-          text: root.identity && root.identity.stale === true
-            ? "session expired — sign in again"
-            : root.identity && root.identity.walletIdentityKey
-              ? `bound to ${String(root.identity.walletIdentityKey).slice(0, 10)}…`
-              : "no wallet key bound yet — unlock the wallet and it fills in"
+          text: "Policy-gated like everything else — the tx lands in Transactions above, failures print to the terminal (`bsv send`)."
           color: Color.muted
           font.pixelSize: Style.font.caption
           wrapMode: Text.Wrap
@@ -1398,136 +1724,227 @@ Panel {
         }
       }
 
-      Button {
-        visible: root.identity !== null
-        text: root.identityBusy ? "Signing in…" : "Sign in again"
-        enabled: !root.identityBusy && root.daemonUp
-        onClicked: {
-          root.identityBusy = true;
-          loginProc.running = true;
-        }
-      }
+      PanelSectionHeader { text: `Collectibles (${root.ordinals.length})` }
 
-      Button {
-        text: "Sign out"
-        onClicked: identityLogoutProc.running = true
-      }
-    }
+      ColumnLayout {
+        spacing: 6
+        visible: root.ordinals.length > 0
+        Layout.fillWidth: true
 
-    // F16: one-tap Twetch account import. Derives the posting key from the
-    // enrolled seed inside the daemon and verifies it against Twetch's
-    // key index — the seed and the WIF never leave the machine.
-    RowLayout {
-      visible: root.daemonUp && root.hasWallet && !(root.twetchAccount && root.twetchAccount.imported === true)
-      spacing: 8
-      Layout.fillWidth: true
+        Repeater {
+          model: root.ordinals
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
 
-      Button {
-        text: root.twetchImportBusy ? "Importing…" : "Import to Twetch"
-        enabled: !root.twetchImportBusy && root.daemonUp
-        onClicked: {
-          root.twetchImportNote = "";
-          root.twetchImportBusy = true;
-          twetchImportProc.running = true;
+            Text {
+              text: `${modelData.contentType ?? "?"} · ${modelData.contentLength ?? "?"} bytes · ${String(modelData.outpoint ?? "?").slice(0, 12)}…`
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "View"
+              onClicked: {
+                openExplorerProc.url = modelData.contentUrl;
+                openExplorerProc.running = true;
+              }
+            }
+          }
         }
       }
 
       Text {
-        text: "derive the posting key from your wallet seed (m/44'/0'/0'/0/0)"
+        text: "No inscriptions held — sends stay in the CLI (`bsv ord send`)."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.ordinals.length === 0
+      }
+
+      PanelSectionHeader { text: `Tokens (${root.ftokens.length})` }
+
+      ColumnLayout {
+        spacing: 4
+        visible: root.ftokens.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.ftokens
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: modelData.symbol ?? "?"
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              text: `${modelData.balance ?? 0} · ${modelData.utxoCount ?? 0} utxo`
+              color: Color.muted
+              font.pixelSize: Style.font.body
+              Layout.fillWidth: true
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No BSV21 positions."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.ftokens.length === 0
+      }
+
+      PanelSectionHeader { text: "Pay someone" }
+
+      Text {
+        text: "Sats to a person, with the note sent encrypted when they have an identity key. Addresses are learned from nearby peers, never derived from keys."
         color: Color.muted
         font.pixelSize: Style.font.caption
         wrapMode: Text.Wrap
         Layout.fillWidth: true
       }
-    }
 
-    Text {
-      visible: root.twetchAccount && root.twetchAccount.imported === true && root.twetchImportNote === ""
-      text: root.twetchAccount && root.twetchAccount.address
-        ? `Twetch posting key: ${String(root.twetchAccount.address).slice(0, 10)}…`
-        : "Twetch posting key imported"
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
+      ColumnLayout {
+        spacing: 8
+        Layout.fillWidth: true
 
-    Text {
-      visible: root.twetchImportNote !== ""
-      text: root.twetchImportNote
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    PanelSectionHeader { text: `Approvals (${root.requests.length})` }
-
-    ColumnLayout {
-      spacing: 8
-      visible: root.requests.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.requests
-        ColumnLayout {
-          spacing: 4
+        TextField {
+          id: payWhoField
+          placeholderText: "@name, identity key, or address"
+          font.family: "monospace"
+          text: root.payWho
+          onTextEdited: root.payWho = text
           Layout.fillWidth: true
-          property bool showBudget: false
-          property int reqAmount: Math.max(0, Math.floor(Number(modelData.amount_sats ?? 0)))
+        }
 
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          TextField {
+            id: paySatsField
+            placeholderText: "sats"
+            inputMethodHints: Qt.ImhDigitsOnly
+            text: root.paySats
+            onTextEdited: root.paySats = text
+            Layout.fillWidth: true
+          }
+
+          Button {
+            text: "Pay"
+            enabled: Number(root.paySats) > 0 && root.payWho.trim() !== "" && !payProc.running
+            onClicked: {
+              payProc.who = root.payWho.trim();
+              payProc.sats = Math.max(1, Math.floor(Number(root.paySats) || 0));
+              payProc.note = root.payNote;
+              payProc.running = true;
+            }
+          }
+        }
+
+        TextField {
+          id: payNoteField
+          placeholderText: "note (optional, sent as an encrypted DM)"
+          text: root.payNote
+          onTextEdited: root.payNote = text
+          Layout.fillWidth: true
+        }
+
+        Text {
+          text: root.payText
+          color: root.payOk ? Color.muted : Color.urgent
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+          visible: root.payText !== ""
+        }
+      }
+
+      PanelSectionHeader { text: "Payment requests" }
+
+      Text {
+        text: "Ask anyone for sats (or pay an ask): the request is signed by your identity key, so it is safe over DM, QR, or a pasted message. Nothing is auto-paid."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      Text {
+        text: "No incoming asks — paste a code above to import one."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        Layout.fillWidth: true
+        visible: root.requestsIn.length === 0
+      }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.requestsIn.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.requestsIn
           RowLayout {
             spacing: 8
             Layout.fillWidth: true
 
-            ColumnLayout {
-              spacing: 2
+            Text {
+              text: `← ${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${modelData.status}`
+              color: modelData.status === "pending" ? Color.foreground : Color.muted
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
               Layout.fillWidth: true
-
-              Text {
-                text: `${modelData.origin ?? "?"} · ${modelData.action ?? "spend"}${modelData.amount_sats ? ` · ${modelData.amount_sats} sats` : ""}`
-                color: Color.foreground
-                font.pixelSize: Style.font.body
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-              }
-
-              Text {
-                visible: !!modelData.jev
-                text: modelData.jev
-                  ? `Jev: ${modelData.jev.verdict} p=${modelData.jev.prob.toFixed(2)} · risk ${modelData.jev.riskLevel} ${modelData.jev.risk.toFixed(2)} · conf ${modelData.jev.confidence.toFixed(2)}`
-                  : ""
-                color: modelData.jev && modelData.jev.verdict === "deny" ? Color.urgent : Color.muted
-                font.pixelSize: Style.font.body
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-              }
             }
 
             Button {
               text: "Approve"
-              onClicked: root.allow(modelData.origin)
+              visible: modelData.status === "pending"
+              onClicked: {
+                requestPayProc.id = modelData.id;
+                requestPayProc.running = true;
+              }
             }
 
             Button {
-              text: "Budget…"
-              visible: reqAmount > 0
-              onClicked: showBudget = !showBudget
+              text: "Decline"
+              visible: modelData.status === "pending"
+              onClicked: root.runAppAction(["request", "decline", modelData.id])
             }
 
             Button {
-              text: "Deny"
-              onClicked: root.deny(modelData.origin)
+              text: "Receipt"
+              visible: modelData.status === "paid" && !receiptIssueProc.running
+              onClicked: {
+                receiptIssueProc.request = modelData.id;
+                receiptIssueProc.running = true;
+              }
             }
           }
+        }
+      }
 
+      ColumnLayout {
+        spacing: 6
+        visible: root.requestsOut.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.requestsOut
           RowLayout {
             spacing: 8
             Layout.fillWidth: true
-            visible: showBudget && reqAmount > 0
 
             Text {
-              text: `Allowance · 30d, daily = budget ÷ 10:`
+              text: `→ ${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${modelData.status}`
               color: Color.muted
               font.pixelSize: Style.font.body
               wrapMode: Text.Wrap
@@ -1535,881 +1952,14 @@ Panel {
             }
 
             Button {
-              text: `10× ${root.fmtSats(reqAmount * 10)}`
-              onClicked: root.mintBudget(modelData.origin, reqAmount * 10)
-            }
-
-            Button {
-              text: `100× ${root.fmtSats(reqAmount * 100)}`
-              onClicked: root.mintBudget(modelData.origin, reqAmount * 100)
-            }
-
-            Button {
-              text: `1000× ${root.fmtSats(reqAmount * 1000)}`
-              onClicked: root.mintBudget(modelData.origin, reqAmount * 1000)
-            }
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No pending approvals."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.requests.length === 0
-    }
-
-    PanelSectionHeader { text: `Transactions (${root.transactions.length})` }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.transactions.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.transactions
-        ColumnLayout {
-          spacing: 0
-          Layout.fillWidth: true
-
-          Text {
-            text: `${String(modelData.txid ?? "?").slice(0, 12)}… · ${modelData.status ?? "?"}${modelData.label ? ` · ${modelData.label}` : ""}`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-          }
-
-          Text {
-            text: modelData.hint ?? ""
-            color: Color.muted
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-            visible: (modelData.hint ?? "") !== ""
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No transactions yet — anchors and spends will land here."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.transactions.length === 0
-    }
-
-    PanelSectionHeader { text: `Policy (${root.policies.length})` }
-
-    ColumnLayout {
-      spacing: 8
-      visible: root.policies.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.policies
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.origin ?? "?"} · ${modelData.mode ?? "?"}${(modelData.spend_cap_sats ?? 0) > 0 ? ` · cap ${modelData.spend_cap_sats} sats` : ""}`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: modelData.mode === "deny" ? "Approve" : "Revoke"
-            onClicked: modelData.mode === "deny" ? root.allow(modelData.origin) : root.deny(modelData.origin)
-          }
-        }
-      }
-    }
-
-    PanelSectionHeader { text: `Agents (${root.agents.length})` }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.agents.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.agents
-        ColumnLayout {
-          spacing: 0
-          Layout.fillWidth: true
-
-          RowLayout {
-            spacing: 8
-            Layout.fillWidth: true
-
-            Text {
-              text: `${modelData.name ?? "?"} · ${modelData.remaining ?? 0}/${modelData.budget_sats ?? 0} sats${(modelData.daily_sats ?? 0) > 0 ? ` · ${modelData.window_remaining ?? 0}/${modelData.daily_sats} today` : ""}${(modelData.expiry_at ?? 0) > 0 ? ` · expires ${new Date(modelData.expiry_at).toLocaleDateString()}` : ""} · ${modelData.active ? "active" : (modelData.revoked ? "revoked" : "expired")}`
-              color: modelData.active ? Color.foreground : Color.muted
-              font.pixelSize: Style.font.body
-              wrapMode: Text.Wrap
-              Layout.fillWidth: true
-            }
-
-            Button {
-              text: "Revoke"
-              visible: modelData.active === true
-              onClicked: root.revokeAgent(modelData.name)
-            }
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No agent allowances — mint one with: bsv agent mint <name> --budget=<sats>."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.agents.length === 0
-    }
-
-    PanelSectionHeader { text: `Money (${root.baskets.length})` }
-
-    ColumnLayout {
-      spacing: 4
-      visible: root.baskets.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.baskets
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: modelData.name ?? "?"
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Text {
-            text: `${((modelData.balance ?? 0) / 1e8).toFixed(8)} BSV · ${modelData.memberCount ?? 0} utxo`
-            color: Color.muted
-            font.pixelSize: Style.font.body
-            Layout.fillWidth: true
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No baskets yet — create one with: bsv basket create <name>."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.baskets.length === 0
-    }
-
-    PanelSectionHeader { text: "Receive" }
-
-    ColumnLayout {
-      spacing: 8
-      Layout.fillWidth: true
-      visible: root.address !== ""
-
-      Text {
-        text: root.address
-        color: Color.foreground
-        font.pixelSize: Style.font.body
-        font.family: "monospace"
-        wrapMode: Text.WrapAnywhere
-        Layout.fillWidth: true
-      }
-
-      RowLayout {
-        spacing: 8
-        Layout.fillWidth: true
-
-        Image {
-          source: root.qrDataUrl
-          width: 200
-          height: 200
-          fillMode: Image.PreserveAspectFit
-          visible: root.qrDataUrl !== ""
-        }
-
-        Button {
-          text: "Copy"
-          onClicked: {
-            copyProc.copyText = root.address;
-            if (!copyProc.running) copyProc.running = true;
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No address — unlock the wallet to receive."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.address === ""
-    }
-
-    PanelSectionHeader { text: "Send" }
-
-    ColumnLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: sendAddressField
-        placeholderText: "Destination address"
-        font.family: "monospace"
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: sendSatsField
-        placeholderText: "Amount in sats"
-        inputMethodHints: Qt.ImhDigitsOnly
-        Layout.fillWidth: true
-      }
-
-      RowLayout {
-        spacing: 8
-        Layout.fillWidth: true
-
-        Button {
-          text: "Send"
-          enabled: sendAddressField.text.trim() !== "" && Number(sendSatsField.text) > 0
-          onClicked: root.sendTo(sendAddressField.text.trim(), Math.floor(Number(sendSatsField.text)))
-        }
-      }
-
-      Text {
-        text: "Policy-gated like everything else — the tx lands in Transactions above, failures print to the terminal (`bsv send`)."
-        color: Color.muted
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.Wrap
-        Layout.fillWidth: true
-      }
-    }
-
-    PanelSectionHeader { text: `Collectibles (${root.ordinals.length})` }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.ordinals.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.ordinals
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.contentType ?? "?"} · ${modelData.contentLength ?? "?"} bytes · ${String(modelData.outpoint ?? "?").slice(0, 12)}…`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "View"
-            onClicked: {
-              openExplorerProc.url = modelData.contentUrl;
-              openExplorerProc.running = true;
-            }
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No inscriptions held — sends stay in the CLI (`bsv ord send`)."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.ordinals.length === 0
-    }
-
-    PanelSectionHeader { text: `Tokens (${root.ftokens.length})` }
-
-    ColumnLayout {
-      spacing: 4
-      visible: root.ftokens.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.ftokens
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: modelData.symbol ?? "?"
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          Text {
-            text: `${modelData.balance ?? 0} · ${modelData.utxoCount ?? 0} utxo`
-            color: Color.muted
-            font.pixelSize: Style.font.body
-            Layout.fillWidth: true
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No BSV21 positions."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.ftokens.length === 0
-    }
-
-    PanelSectionHeader { text: "Market" }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      Text {
-        text: "Atomic Market — browse listings, buy ordinals and tokens (payment + asset in one tx), list your own. Installed BRC-100 app."
-        color: Color.muted
-        font.pixelSize: Style.font.body
-        wrapMode: Text.Wrap
-        Layout.fillWidth: true
-      }
-
-      Button {
-        text: "Open"
-        onClicked: root.openApp("market.entangleit.com")
-      }
-    }
-
-    PanelSectionHeader { text: `Store (${root.store.length})` }
-
-    ColumnLayout {
-      spacing: 8
-      visible: root.store.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.store
-        ColumnLayout {
-          spacing: 2
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.name ?? modelData.domain ?? "?"} · ${modelData.domain ?? ""}`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            font.bold: true
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Text {
-            text: root.storeLine(modelData)
-            color: Color.muted
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          RowLayout {
-            spacing: 8
-
-            Button {
-              text: modelData.holder ? "Switch" : "Install"
-              visible: !modelData.installed && (modelData.status === "not-installed" || modelData.status === "invalid")
-              onClicked: root.runAppAction(["app", "install", modelData.installUrl ?? modelData.domain])
-            }
-
-            Button {
-              text: "Open"
-              visible: !!modelData.installed
-              onClicked: root.openApp(modelData.domain)
-            }
-
-            Button {
-              text: modelData.status === "widened" ? "Approve update" : "Update"
-              visible: !!modelData.installed && (modelData.status === "available" || modelData.status === "widened" || modelData.status === "adopted")
-              onClicked: modelData.status === "widened"
-                ? root.runAppAction(["app", "update", modelData.domain, "--approve-widening"])
-                : root.runAppAction(["app", "update", modelData.domain])
-            }
-
-            Button {
-              text: "Remove"
-              visible: !!modelData.installed
-              onClicked: root.runAppAction(["app", "remove", modelData.domain])
-            }
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No store entries — the catalog ships with the OS package."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.store.length === 0
-    }
-
-    PanelSectionHeader { text: "Share" }
-
-    Text {
-      text: "Anchor any file's fingerprint on-chain — same policy gate as the terminal."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    RowLayout {
-      spacing: 8
-
-      Button {
-        text: "Anchor a file…"
-        enabled: root.hasWallet && !root.locked
-        // The native dialog lives outside the popout focus grab: close
-        // the panel first so the grab doesn't eat the dialog.
-        onClicked: { root.close(); fileDialog.open(); }
-      }
-
-      Button {
-        text: "Open in explorer"
-        visible: (root.shareResult?.explorer ?? "") !== ""
-        onClicked: {
-          openExplorerProc.url = root.shareResult.explorer;
-          openExplorerProc.running = true;
-        }
-      }
-    }
-
-    Text {
-      text: root.shareText
-      color: root.shareOk ? Color.foreground : Color.urgent
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.shareText !== ""
-    }
-
-    FileDialog {
-      id: fileDialog
-      title: "Anchor a file on BSV"
-      fileMode: FileDialog.OpenFile
-      onAccepted: {
-        // fileUrl looks like file:///home/… — strip the scheme for the CLI.
-        const path = String(fileDialog.fileUrl).replace(/^file:\/\//, "");
-        shareProc.path = decodeURIComponent(path);
-        shareProc.running = true;
-      }
-    }
-
-    PanelSectionHeader { text: `Identity (${root.certs.length})` }
-
-    Text {
-      text: root.identityKey !== "" ? `id: ${root.identityKey.slice(0, 12)}…${root.identityKey.slice(-6)}` : "identity locked — unlock to present certs"
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 8
-      visible: root.certs.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.certs
-        ColumnLayout {
-          spacing: 2
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.type ?? "?"} · ${String(modelData.certifier ?? "?").slice(0, 12)}… · ${modelData.valid ? (modelData.verified ? "verified" : "self-asserted") : (modelData.revoked ? "revoked" : "expired")}`
-            color: modelData.valid ? Color.foreground : Color.muted
-            font.pixelSize: Style.font.body
-            font.bold: true
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Text {
-            text: `fields: ${Object.keys(modelData.fields ?? {}).join(", ")}`
-            color: Color.muted
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          RowLayout {
-            spacing: 8
-
-            TextField {
-              id: fieldBox
-              placeholderText: "fields a,b (blank = all)"
-              Layout.fillWidth: true
-            }
-
-            Button {
-              text: "Present"
+              text: "Show code"
               onClicked: {
-                certProc.certId = modelData.id;
-                certProc.fields = fieldBox.text.trim();
-                certProc.running = true;
+                requestCodeProc.id = modelData.id;
+                requestCodeProc.running = true;
               }
             }
-
-            Button {
-              text: "Revoke"
-              visible: !modelData.revoked
-              onClicked: root.runAppAction(["cert", "revoke", modelData.id])
-            }
           }
         }
-      }
-    }
-
-    Text {
-      text: root.certText
-      color: root.certOk ? Color.foreground : Color.urgent
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.certText !== ""
-    }
-
-    Text {
-      text: "No certificates — hold one with: bsv cert put --type=<t> --certifier=<key> --field <k>=<v>."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.certs.length === 0
-    }
-
-    PanelSectionHeader { text: `People (${root.contacts.length})` }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: myNameField
-        placeholderText: root.myName !== "" ? `You announce as “${root.myName}” — change` : "Your name on the network"
-        text: ""
-        onAccepted: {
-          if (text.trim() !== "") {
-            profileSetProc.name = text.trim();
-            profileSetProc.running = true;
-          }
-        }
-        Layout.fillWidth: true
-      }
-
-      Button {
-        text: "Save"
-        enabled: myNameField.text.trim() !== "" && !profileSetProc.running
-        onClicked: {
-          profileSetProc.name = myNameField.text.trim();
-          profileSetProc.running = true;
-        }
-      }
-    }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.contacts.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.contacts
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.display ?? modelData.name}${modelData.address ? " · " + String(modelData.address).slice(0, 10) + "…" : " · no address yet"}`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "Message"
-            onClicked: root.msgTo = String(modelData.identityKey)
-          }
-
-          Button {
-            text: "Pay"
-            onClicked: root.payWho = `@${modelData.name}`
-          }
-        }
-      }
-    }
-
-    Text {
-      text: "No people yet — add someone by name, or message a nearby peer first and save them."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.contacts.length === 0
-    }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: contactNameField
-        placeholderText: "name"
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: contactKeyField
-        placeholderText: "identity key (66 hex)"
-        font.family: "monospace"
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: contactAddrField
-        placeholderText: "address (optional)"
-        font.family: "monospace"
-        Layout.fillWidth: true
-      }
-
-      Button {
-        text: "Add"
-        enabled: contactNameField.text.trim() !== "" && contactKeyField.text.trim() !== "" && !contactAddProc.running
-        onClicked: {
-          contactAddProc.name = contactNameField.text.trim();
-          contactAddProc.key = contactKeyField.text.trim();
-          contactAddProc.address = contactAddrField.text.trim();
-          contactAddProc.running = true;
-          contactNameField.text = "";
-          contactKeyField.text = "";
-          contactAddrField.text = "";
-        }
-      }
-    }
-
-    PanelSectionHeader { text: `Inbox (${root.messages.length})` }
-
-    Text {
-      text: "ECDH direct messages. Ciphertext at rest — Read decrypts, Ack clears. Sends go direct to nearby peers, otherwise over the encrypted relay."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.messages.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.messages
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}… · ${modelData.transport === "p2p" ? "direct" : modelData.transport === "local" ? "note to self" : "relay"}${modelData.acked ? "" : " · new"}`
-            color: modelData.acked ? Color.muted : Color.foreground
-            font.pixelSize: Style.font.body
-            font.bold: !modelData.acked
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "Read"
-            onClicked: {
-              msgShowProc.msgId = modelData.id;
-              msgShowProc.running = true;
-            }
-          }
-
-          Button {
-            text: "Reply"
-            visible: /^[0-9a-fA-F]{66}$/.test(String(modelData.peer ?? ""))
-            onClicked: root.msgTo = String(modelData.peer)
-          }
-
-          Button {
-            text: "Ack"
-            visible: !modelData.acked && modelData.direction !== "out"
-            onClicked: root.runAppAction(["msg", "ack", modelData.id])
-          }
-        }
-      }
-    }
-
-    Text {
-      text: root.msgText
-      color: root.msgOk ? Color.foreground : Color.urgent
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.msgText !== ""
-    }
-
-    Text {
-      text: "No messages — message a nearby peer below, or paste any identity key into Compose."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.messages.length === 0
-    }
-
-    PanelSectionHeader { text: `Nearby peers (${root.peers.length})` }
-
-    Text {
-      text: root.p2pEnabled
-        ? "Wallets broadcasting on this network. Direct sends need no relay; both sides must be unlocked."
-        : "Direct channel off — messages use the relay. Enable by starting the daemon without BSV_P2P=0."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.peers.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.peers
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.online ? "●" : "○"} ${modelData.nameVerified && modelData.name ? modelData.name + " · " : ""}${String(modelData.identityKey ?? "?").slice(0, 12)}… · ${modelData.address ?? "?"}:${modelData.port ?? "?"}`
-            color: modelData.online ? Color.foreground : Color.muted
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "Message"
-            enabled: modelData.online
-            onClicked: root.msgTo = String(modelData.identityKey)
-          }
-
-          Button {
-            text: "Pay"
-            enabled: modelData.online && (modelData.payTo ?? "") !== ""
-            onClicked: root.payWho = String(modelData.identityKey)
-          }
-
-          Button {
-            text: "Save"
-            visible: !!modelData.nameVerified && modelData.name !== ""
-            onClicked: {
-              contactAddProc.name = modelData.name;
-              contactAddProc.key = modelData.identityKey;
-              contactAddProc.address = modelData.payTo ?? "";
-              contactAddProc.running = true;
-            }
-          }
-        }
-      }
-    }
-
-    PanelSectionHeader { text: "Compose" }
-
-    ColumnLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: msgToField
-        placeholderText: "Recipient: @name, identity key, or tap a peer"
-        font.family: "monospace"
-        text: root.msgTo
-        onTextEdited: root.msgTo = text
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: msgBodyField
-        placeholderText: "Message"
-        text: root.msgBody
-        onTextEdited: root.msgBody = text
-        onAccepted: {
-          if (root.msgTo.trim() !== "" && root.msgBody.trim() !== "" && !msgSendProc.running) {
-            msgSendProc.to = root.msgTo.trim();
-            msgSendProc.body = root.msgBody;
-            msgSendProc.running = true;
-          }
-        }
-        Layout.fillWidth: true
-      }
-
-      RowLayout {
-        spacing: 8
-        Layout.fillWidth: true
-
-        Button {
-          text: "Send"
-          enabled: root.msgTo.trim() !== "" && root.msgBody.trim() !== "" && !msgSendProc.running
-          onClicked: {
-            msgSendProc.to = root.msgTo.trim();
-            msgSendProc.body = root.msgBody;
-            msgSendProc.running = true;
-          }
-        }
-
-        Text {
-          text: root.msgSendText
-          color: root.msgSendOk ? Color.muted : Color.urgent
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
-          Layout.fillWidth: true
-          visible: root.msgSendText !== ""
-        }
-      }
-    }
-
-    PanelSectionHeader { text: "Pay someone" }
-
-    Text {
-      text: "Sats to a person, with the note sent encrypted when they have an identity key. Addresses are learned from nearby peers, never derived from keys."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: payWhoField
-        placeholderText: "@name, identity key, or address"
-        font.family: "monospace"
-        text: root.payWho
-        onTextEdited: root.payWho = text
-        Layout.fillWidth: true
       }
 
       RowLayout {
@@ -2417,342 +1967,931 @@ Panel {
         Layout.fillWidth: true
 
         TextField {
-          id: paySatsField
-          placeholderText: "sats"
-          inputMethodHints: Qt.ImhDigitsOnly
-          text: root.paySats
-          onTextEdited: root.paySats = text
+          id: reqImportField
+          placeholderText: "Paste a bsvpay1:… code from chat, mail, or a QR"
+          font.family: "monospace"
           Layout.fillWidth: true
         }
 
         Button {
-          text: "Pay"
-          enabled: Number(root.paySats) > 0 && root.payWho.trim() !== "" && !payProc.running
+          text: "Import"
+          enabled: reqImportField.text.trim() !== "" && !requestImportProc.running
           onClicked: {
-            payProc.who = root.payWho.trim();
-            payProc.sats = Math.max(1, Math.floor(Number(root.paySats) || 0));
-            payProc.note = root.payNote;
-            payProc.running = true;
+            requestImportProc.code = reqImportField.text.trim();
+            requestImportProc.running = true;
+            reqImportField.text = "";
           }
         }
       }
 
-      TextField {
-        id: payNoteField
-        placeholderText: "note (optional, sent as an encrypted DM)"
-        text: root.payNote
-        onTextEdited: root.payNote = text
+      RowLayout {
+        spacing: 8
         Layout.fillWidth: true
+
+        TextField {
+          id: reqWhoField
+          placeholderText: "@name, identity key, or address"
+          font.family: "monospace"
+          text: root.reqWho
+          onTextEdited: root.reqWho = text
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: reqSatsField
+          placeholderText: "sats"
+          inputMethodHints: Qt.ImhDigitsOnly
+          text: root.reqSats
+          onTextEdited: root.reqSats = text
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: reqMemoField
+          placeholderText: "memo"
+          text: root.reqMemo
+          onTextEdited: root.reqMemo = text
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Request"
+          enabled: root.reqWho.trim() !== "" && Number(root.reqSats) > 0 && !requestCreateProc.running
+          onClicked: {
+            requestCreateProc.who = root.reqWho.trim();
+            requestCreateProc.sats = Math.max(1, Math.floor(Number(root.reqSats) || 0));
+            requestCreateProc.memo = root.reqMemo;
+            requestCreateProc.running = true;
+          }
+        }
       }
 
       Text {
-        text: root.payText
-        color: root.payOk ? Color.muted : Color.urgent
+        text: root.reqText
+        color: root.reqOk ? Color.muted : Color.urgent
         font.pixelSize: Style.font.caption
         wrapMode: Text.Wrap
         Layout.fillWidth: true
-        visible: root.payText !== ""
+        visible: root.reqText !== ""
       }
-    }
 
-    PanelSectionHeader { text: "Payment requests" }
+      RowLayout {
+        spacing: 8
+        visible: root.reqQr !== ""
+        Layout.fillWidth: true
 
-    Text {
-      text: "Ask anyone for sats (or pay an ask): the request is signed by your identity key, so it is safe over DM, QR, or a pasted message. Nothing is auto-paid."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    Text {
-      text: "No incoming asks — paste a code above to import one."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      Layout.fillWidth: true
-      visible: root.requestsIn.length === 0
-    }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.requestsIn.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.requestsIn
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `← ${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${modelData.status}`
-            color: modelData.status === "pending" ? Color.foreground : Color.muted
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "Approve"
-            visible: modelData.status === "pending"
-            onClicked: {
-              requestPayProc.id = modelData.id;
-              requestPayProc.running = true;
-            }
-          }
-
-          Button {
-            text: "Decline"
-            visible: modelData.status === "pending"
-            onClicked: root.runAppAction(["request", "decline", modelData.id])
-          }
-
-          Button {
-            text: "Receipt"
-            visible: modelData.status === "paid" && !receiptIssueProc.running
-            onClicked: {
-              receiptIssueProc.request = modelData.id;
-              receiptIssueProc.running = true;
-            }
-          }
+        Image {
+          source: root.reqQr
+          width: 160
+          height: 160
+          fillMode: Image.PreserveAspectFit
         }
-      }
-    }
 
-    ColumnLayout {
-      spacing: 6
-      visible: root.requestsOut.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.requestsOut
-        RowLayout {
-          spacing: 8
+        ColumnLayout {
+          spacing: 4
           Layout.fillWidth: true
 
           Text {
-            text: `→ ${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${modelData.status}`
+            text: root.reqCode
             color: Color.muted
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideMiddle
             Layout.fillWidth: true
           }
 
           Button {
-            text: "Show code"
+            text: "Copy code"
             onClicked: {
-              requestCodeProc.id = modelData.id;
-              requestCodeProc.running = true;
-            }
-          }
-        }
-      }
-    }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: reqImportField
-        placeholderText: "Paste a bsvpay1:… code from chat, mail, or a QR"
-        font.family: "monospace"
-        Layout.fillWidth: true
-      }
-
-      Button {
-        text: "Import"
-        enabled: reqImportField.text.trim() !== "" && !requestImportProc.running
-        onClicked: {
-          requestImportProc.code = reqImportField.text.trim();
-          requestImportProc.running = true;
-          reqImportField.text = "";
-        }
-      }
-    }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: reqWhoField
-        placeholderText: "@name, identity key, or address"
-        font.family: "monospace"
-        text: root.reqWho
-        onTextEdited: root.reqWho = text
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: reqSatsField
-        placeholderText: "sats"
-        inputMethodHints: Qt.ImhDigitsOnly
-        text: root.reqSats
-        onTextEdited: root.reqSats = text
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: reqMemoField
-        placeholderText: "memo"
-        text: root.reqMemo
-        onTextEdited: root.reqMemo = text
-        Layout.fillWidth: true
-      }
-
-      Button {
-        text: "Request"
-        enabled: root.reqWho.trim() !== "" && Number(root.reqSats) > 0 && !requestCreateProc.running
-        onClicked: {
-          requestCreateProc.who = root.reqWho.trim();
-          requestCreateProc.sats = Math.max(1, Math.floor(Number(root.reqSats) || 0));
-          requestCreateProc.memo = root.reqMemo;
-          requestCreateProc.running = true;
-        }
-      }
-    }
-
-    Text {
-      text: root.reqText
-      color: root.reqOk ? Color.muted : Color.urgent
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.reqText !== ""
-    }
-
-    RowLayout {
-      spacing: 8
-      visible: root.reqQr !== ""
-      Layout.fillWidth: true
-
-      Image {
-        source: root.reqQr
-        width: 160
-        height: 160
-        fillMode: Image.PreserveAspectFit
-      }
-
-      ColumnLayout {
-        spacing: 4
-        Layout.fillWidth: true
-
-        Text {
-          text: root.reqCode
-          color: Color.muted
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideMiddle
-          Layout.fillWidth: true
-        }
-
-        Button {
-          text: "Copy code"
-          onClicked: {
-            copyProc.copyText = root.reqCode;
-            if (!copyProc.running) copyProc.running = true;
-          }
-        }
-      }
-    }
-
-    PanelSectionHeader { text: `Receipts (${root.receipts.length})` }
-
-    Text {
-      text: "Purchase receipts inscribed as 1Sat ordinals and delivered to the seller in the same transaction — signed by your identity key, provable by anyone."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.receipts.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.receipts
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${String(modelData.id).slice(0, 12)}…`
-            color: Color.muted
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "View NFT"
-            onClicked: {
-              receiptShowProc.id = modelData.id;
-              receiptShowProc.running = true;
-            }
-          }
-
-          Button {
-            text: "Copy id"
-            onClicked: {
-              copyProc.copyText = `${modelData.id}:0`;
+              copyProc.copyText = root.reqCode;
               if (!copyProc.running) copyProc.running = true;
             }
           }
         }
       }
+
+      PanelSectionHeader { text: `Receipts (${root.receipts.length})` }
+
+      Text {
+        text: "Purchase receipts inscribed as 1Sat ordinals and delivered to the seller in the same transaction — signed by your identity key, provable by anyone."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.receipts.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.receipts
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.amount} sats${modelData.memo ? " · " + modelData.memo : ""} · ${String(modelData.id).slice(0, 12)}…`
+              color: Color.muted
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "View NFT"
+              onClicked: {
+                receiptShowProc.id = modelData.id;
+                receiptShowProc.running = true;
+              }
+            }
+
+            Button {
+              text: "Copy id"
+              onClicked: {
+                copyProc.copyText = `${modelData.id}:0`;
+                if (!copyProc.running) copyProc.running = true;
+              }
+            }
+          }
+        }
+      }
+
+      // Receipt NFT detail: the inscribed payload, decoded and verified.
+      ColumnLayout {
+        spacing: 4
+        visible: root.receiptDetail !== undefined && root.receiptDetail.outpoint !== undefined
+        Layout.fillWidth: true
+
+        Text {
+          text: root.receiptDetail.payload
+            ? `Receipt NFT · ${root.receiptDetail.payload.amount} sats`
+            : "Receipt NFT · payload unreadable"
+          color: Color.foreground
+          font.pixelSize: Style.font.body
+          font.bold: true
+          Layout.fillWidth: true
+        }
+
+        Text {
+          text: root.receiptDetail.payload && root.receiptDetail.payload.memo
+            ? root.receiptDetail.payload.memo
+            : "(no memo)"
+          color: Color.muted
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+
+        Text {
+          text: root.receiptDetail.payload
+            ? `${String(root.receiptDetail.payload.from).slice(0, 12)}… → ${String(root.receiptDetail.payload.to).slice(0, 12)}… · ${fmtDate(root.receiptDetail.payload.at)}`
+            : ""
+          color: Color.muted
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+
+        Text {
+          text: root.receiptDetail.verified ? "✓ signature valid" : "✗ signature INVALID"
+          color: root.receiptDetail.verified ? Color.foreground : Color.urgent
+          font.pixelSize: Style.font.caption
+          Layout.fillWidth: true
+        }
+
+        Text {
+          text: `carrier ${root.receiptDetail.outpoint}`
+          color: Color.muted
+          font.family: "monospace"
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WrapAnywhere
+          Layout.fillWidth: true
+        }
+
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Button {
+            text: "Copy outpoint"
+            onClicked: {
+              copyProc.copyText = root.receiptDetail.outpoint;
+              if (!copyProc.running) copyProc.running = true;
+            }
+          }
+
+          Button {
+            text: "Copy payment txid"
+            onClicked: {
+              copyProc.copyText = root.receiptDetail.paymentTxid;
+              if (!copyProc.running) copyProc.running = true;
+            }
+          }
+
+          Button {
+            text: "Open on-chain"
+            onClicked: {
+              openUrlProc.url = root.receiptDetail.explorer;
+              openUrlProc.running = true;
+            }
+          }
+
+          Button {
+            text: "View in 1Sat Indexer"
+            onClicked: {
+              openUrlProc.url = root.receiptDetail.indexer;
+              openUrlProc.running = true;
+            }
+          }
+        }
+      }
+
+      Text {
+        text: root.receiptText
+        color: root.receiptOk ? Color.muted : Color.urgent
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.receiptText !== ""
+      }
+
     }
 
-    // Receipt NFT detail: the inscribed payload, decoded and verified.
     ColumnLayout {
-      spacing: 4
-      visible: root.receiptDetail !== undefined && root.receiptDetail.outpoint !== undefined
+      visible: root.tab === "Identity"
       Layout.fillWidth: true
+      spacing: 10
+
+      // P4/F3: system sign-in. One tap opens the hosted Twetch page; the
+      // daemon stores the verified session and binds the unlocked wallet key.
+      PanelSectionHeader { text: "Identity" }
 
       Text {
-        text: root.receiptDetail.payload
-          ? `Receipt NFT · ${root.receiptDetail.payload.amount} sats`
-          : "Receipt NFT · payload unreadable"
-        color: Color.foreground
-        font.pixelSize: Style.font.body
-        font.bold: true
-        Layout.fillWidth: true
-      }
-
-      Text {
-        text: root.receiptDetail.payload && root.receiptDetail.payload.memo
-          ? root.receiptDetail.payload.memo
-          : "(no memo)"
-        color: Color.muted
-        font.pixelSize: Style.font.body
-        wrapMode: Text.Wrap
-        Layout.fillWidth: true
-      }
-
-      Text {
-        text: root.receiptDetail.payload
-          ? `${String(root.receiptDetail.payload.from).slice(0, 12)}… → ${String(root.receiptDetail.payload.to).slice(0, 12)}… · ${fmtDate(root.receiptDetail.payload.at)}`
-          : ""
+        visible: root.identity === null
+        text: "Not signed in. First run needs a client created at id.entangleit.com/console — then `bsv login --client-id=…` in a terminal."
         color: Color.muted
         font.pixelSize: Style.font.caption
         wrapMode: Text.Wrap
         Layout.fillWidth: true
       }
 
+      Button {
+        visible: root.identity === null
+        text: root.identityBusy ? "Waiting for Twetch…" : "Sign in with Twetch"
+        enabled: !root.identityBusy && root.daemonUp
+        onClicked: {
+          root.identityBusy = true;
+          loginProc.running = true;
+        }
+      }
+
+      RowLayout {
+        visible: root.identity !== null
+        spacing: 8
+        Layout.fillWidth: true
+
+        Image {
+          visible: root.identityAvatar() !== ""
+          source: root.identityAvatar()
+          sourceSize.width: 36
+          sourceSize.height: 36
+          Layout.preferredWidth: 36
+          Layout.preferredHeight: 36
+        }
+
+        ColumnLayout {
+          spacing: 2
+          Layout.fillWidth: true
+
+          Text {
+            text: `@${root.identity ? (root.identity.handle || root.identity.sub) : "?"}`
+            color: Color.foreground
+            font.pixelSize: Style.font.body
+            font.bold: true
+            elide: Text.ElideRight
+            Layout.fillWidth: true
+          }
+
+          Text {
+            text: root.identity && root.identity.stale === true
+              ? "session expired — sign in again"
+              : root.identity && root.identity.walletIdentityKey
+                ? `bound to ${String(root.identity.walletIdentityKey).slice(0, 10)}…`
+                : "no wallet key bound yet — unlock the wallet and it fills in"
+            color: Color.muted
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+        }
+
+        Button {
+          visible: root.identity !== null
+          text: root.identityBusy ? "Signing in…" : "Sign in again"
+          enabled: !root.identityBusy && root.daemonUp
+          onClicked: {
+            root.identityBusy = true;
+            loginProc.running = true;
+          }
+        }
+
+        Button {
+          text: "Sign out"
+          onClicked: identityLogoutProc.running = true
+        }
+      }
+
+      // F16: one-tap Twetch account import. Derives the posting key from the
+      // enrolled seed inside the daemon and verifies it against Twetch's
+      // key index — the seed and the WIF never leave the machine.
+      RowLayout {
+        visible: root.daemonUp && root.hasWallet && !(root.twetchAccount && root.twetchAccount.imported === true)
+        spacing: 8
+        Layout.fillWidth: true
+
+        Button {
+          text: root.twetchImportBusy ? "Importing…" : "Import to Twetch"
+          enabled: !root.twetchImportBusy && root.daemonUp
+          onClicked: {
+            root.twetchImportNote = "";
+            root.twetchImportBusy = true;
+            twetchImportProc.running = true;
+          }
+        }
+
+        Text {
+          text: "derive the posting key from your wallet seed (m/44'/0'/0'/0/0)"
+          color: Color.muted
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+      }
+
       Text {
-        text: root.receiptDetail.verified ? "✓ signature valid" : "✗ signature INVALID"
-        color: root.receiptDetail.verified ? Color.foreground : Color.urgent
+        visible: root.twetchAccount && root.twetchAccount.imported === true && root.twetchImportNote === ""
+        text: root.twetchAccount && root.twetchAccount.address
+          ? `Twetch posting key: ${String(root.twetchAccount.address).slice(0, 10)}…`
+          : "Twetch posting key imported"
+        color: Color.muted
         font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
         Layout.fillWidth: true
       }
 
       Text {
-        text: `carrier ${root.receiptDetail.outpoint}`
+        visible: root.twetchImportNote !== ""
+        text: root.twetchImportNote
         color: Color.muted
-        font.family: "monospace"
         font.pixelSize: Style.font.caption
-        wrapMode: Text.WrapAnywhere
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      PanelSectionHeader { text: `Identity (${root.certs.length})` }
+
+      Text {
+        text: root.identityKey !== "" ? `id: ${root.identityKey.slice(0, 12)}…${root.identityKey.slice(-6)}` : "identity locked — unlock to present certs"
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      ColumnLayout {
+        spacing: 8
+        visible: root.certs.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.certs
+          ColumnLayout {
+            spacing: 2
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.type ?? "?"} · ${String(modelData.certifier ?? "?").slice(0, 12)}… · ${modelData.valid ? (modelData.verified ? "verified" : "self-asserted") : (modelData.revoked ? "revoked" : "expired")}`
+              color: modelData.valid ? Color.foreground : Color.muted
+              font.pixelSize: Style.font.body
+              font.bold: true
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Text {
+              text: `fields: ${Object.keys(modelData.fields ?? {}).join(", ")}`
+              color: Color.muted
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            RowLayout {
+              spacing: 8
+
+              TextField {
+                id: fieldBox
+                placeholderText: "fields a,b (blank = all)"
+                Layout.fillWidth: true
+              }
+
+              Button {
+                text: "Present"
+                onClicked: {
+                  certProc.certId = modelData.id;
+                  certProc.fields = fieldBox.text.trim();
+                  certProc.running = true;
+                }
+              }
+
+              Button {
+                text: "Revoke"
+                visible: !modelData.revoked
+                onClicked: root.runAppAction(["cert", "revoke", modelData.id])
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        text: root.certText
+        color: root.certOk ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.certText !== ""
+      }
+
+      Text {
+        text: "No certificates — hold one with: bsv cert put --type=<t> --certifier=<key> --field <k>=<v>."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.certs.length === 0
+      }
+
+      PanelSectionHeader { text: `People (${root.contacts.length})` }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: myNameField
+          placeholderText: root.myName !== "" ? `You announce as “${root.myName}” — change` : "Your name on the network"
+          text: ""
+          onAccepted: {
+            if (text.trim() !== "") {
+              profileSetProc.name = text.trim();
+              profileSetProc.running = true;
+            }
+          }
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Save"
+          enabled: myNameField.text.trim() !== "" && !profileSetProc.running
+          onClicked: {
+            profileSetProc.name = myNameField.text.trim();
+            profileSetProc.running = true;
+          }
+        }
+      }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.contacts.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.contacts
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.display ?? modelData.name}${modelData.address ? " · " + String(modelData.address).slice(0, 10) + "…" : " · no address yet"}`
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Message"
+              onClicked: root.msgTo = String(modelData.identityKey)
+            }
+
+            Button {
+              text: "Pay"
+              onClicked: root.payWho = `@${modelData.name}`
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No people yet — add someone by name, or message a nearby peer first and save them."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.contacts.length === 0
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: contactNameField
+          placeholderText: "name"
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: contactKeyField
+          placeholderText: "identity key (66 hex)"
+          font.family: "monospace"
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: contactAddrField
+          placeholderText: "address (optional)"
+          font.family: "monospace"
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Add"
+          enabled: contactNameField.text.trim() !== "" && contactKeyField.text.trim() !== "" && !contactAddProc.running
+          onClicked: {
+            contactAddProc.name = contactNameField.text.trim();
+            contactAddProc.key = contactKeyField.text.trim();
+            contactAddProc.address = contactAddrField.text.trim();
+            contactAddProc.running = true;
+            contactNameField.text = "";
+            contactKeyField.text = "";
+            contactAddrField.text = "";
+          }
+        }
+      }
+
+      PanelSectionHeader { text: `Inbox (${root.messages.length})` }
+
+      Text {
+        text: "ECDH direct messages. Ciphertext at rest — Read decrypts, Ack clears. Sends go direct to nearby peers, otherwise over the encrypted relay."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.messages.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.messages
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.direction === "out" ? "→" : "←"} ${String(modelData.peer ?? "?").slice(0, 12)}… · ${modelData.transport === "p2p" ? "direct" : modelData.transport === "local" ? "note to self" : "relay"}${modelData.acked ? "" : " · new"}`
+              color: modelData.acked ? Color.muted : Color.foreground
+              font.pixelSize: Style.font.body
+              font.bold: !modelData.acked
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Read"
+              onClicked: {
+                msgShowProc.msgId = modelData.id;
+                msgShowProc.running = true;
+              }
+            }
+
+            Button {
+              text: "Reply"
+              visible: /^[0-9a-fA-F]{66}$/.test(String(modelData.peer ?? ""))
+              onClicked: root.msgTo = String(modelData.peer)
+            }
+
+            Button {
+              text: "Ack"
+              visible: !modelData.acked && modelData.direction !== "out"
+              onClicked: root.runAppAction(["msg", "ack", modelData.id])
+            }
+          }
+        }
+      }
+
+      Text {
+        text: root.msgText
+        color: root.msgOk ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.msgText !== ""
+      }
+
+      Text {
+        text: "No messages — message a nearby peer below, or paste any identity key into Compose."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.messages.length === 0
+      }
+
+      PanelSectionHeader { text: `Nearby peers (${root.peers.length})` }
+
+      Text {
+        text: root.p2pEnabled
+          ? "Wallets broadcasting on this network. Direct sends need no relay; both sides must be unlocked."
+          : "Direct channel off — messages use the relay. Enable by starting the daemon without BSV_P2P=0."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      ColumnLayout {
+        spacing: 6
+        visible: root.peers.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.peers
+          RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.online ? "●" : "○"} ${modelData.nameVerified && modelData.name ? modelData.name + " · " : ""}${String(modelData.identityKey ?? "?").slice(0, 12)}… · ${modelData.address ?? "?"}:${modelData.port ?? "?"}`
+              color: modelData.online ? Color.foreground : Color.muted
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Message"
+              enabled: modelData.online
+              onClicked: root.msgTo = String(modelData.identityKey)
+            }
+
+            Button {
+              text: "Pay"
+              enabled: modelData.online && (modelData.payTo ?? "") !== ""
+              onClicked: root.payWho = String(modelData.identityKey)
+            }
+
+            Button {
+              text: "Save"
+              visible: !!modelData.nameVerified && modelData.name !== ""
+              onClicked: {
+                contactAddProc.name = modelData.name;
+                contactAddProc.key = modelData.identityKey;
+                contactAddProc.address = modelData.payTo ?? "";
+                contactAddProc.running = true;
+              }
+            }
+          }
+        }
+      }
+
+      PanelSectionHeader { text: "Compose" }
+
+      ColumnLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: msgToField
+          placeholderText: "Recipient: @name, identity key, or tap a peer"
+          font.family: "monospace"
+          text: root.msgTo
+          onTextEdited: root.msgTo = text
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: msgBodyField
+          placeholderText: "Message"
+          text: root.msgBody
+          onTextEdited: root.msgBody = text
+          onAccepted: {
+            if (root.msgTo.trim() !== "" && root.msgBody.trim() !== "" && !msgSendProc.running) {
+              msgSendProc.to = root.msgTo.trim();
+              msgSendProc.body = root.msgBody;
+              msgSendProc.running = true;
+            }
+          }
+          Layout.fillWidth: true
+        }
+
+        RowLayout {
+          spacing: 8
+          Layout.fillWidth: true
+
+          Button {
+            text: "Send"
+            enabled: root.msgTo.trim() !== "" && root.msgBody.trim() !== "" && !msgSendProc.running
+            onClicked: {
+              msgSendProc.to = root.msgTo.trim();
+              msgSendProc.body = root.msgBody;
+              msgSendProc.running = true;
+            }
+          }
+
+          Text {
+            text: root.msgSendText
+            color: root.msgSendOk ? Color.muted : Color.urgent
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+            visible: root.msgSendText !== ""
+          }
+        }
+      }
+
+    }
+
+    ColumnLayout {
+      visible: root.tab === "Apps"
+      Layout.fillWidth: true
+      spacing: 10
+
+      PanelSectionHeader { text: "Market" }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        Text {
+          text: "Atomic Market — browse listings, buy ordinals and tokens (payment + asset in one tx), list your own. Installed BRC-100 app."
+          color: Color.muted
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Open"
+          onClicked: root.openApp("market.entangleit.com")
+        }
+      }
+
+      PanelSectionHeader { text: `Store (${root.store.length})` }
+
+      ColumnLayout {
+        spacing: 8
+        visible: root.store.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.store
+          ColumnLayout {
+            spacing: 2
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.name ?? modelData.domain ?? "?"} · ${modelData.domain ?? ""}`
+              color: Color.foreground
+              font.pixelSize: Style.font.body
+              font.bold: true
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Text {
+              text: root.storeLine(modelData)
+              color: Color.muted
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            RowLayout {
+              spacing: 8
+
+              Button {
+                text: modelData.holder ? "Switch" : "Install"
+                visible: !modelData.installed && (modelData.status === "not-installed" || modelData.status === "invalid")
+                onClicked: root.runAppAction(["app", "install", modelData.installUrl ?? modelData.domain])
+              }
+
+              Button {
+                text: "Open"
+                visible: !!modelData.installed
+                onClicked: root.openApp(modelData.domain)
+              }
+
+              Button {
+                text: modelData.status === "widened" ? "Approve update" : "Update"
+                visible: !!modelData.installed && (modelData.status === "available" || modelData.status === "widened" || modelData.status === "adopted")
+                onClicked: modelData.status === "widened"
+                  ? root.runAppAction(["app", "update", modelData.domain, "--approve-widening"])
+                  : root.runAppAction(["app", "update", modelData.domain])
+              }
+
+              Button {
+                text: "Remove"
+                visible: !!modelData.installed
+                onClicked: root.runAppAction(["app", "remove", modelData.domain])
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No store entries — the catalog ships with the OS package."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.store.length === 0
+      }
+
+      PanelSectionHeader { text: "Share" }
+
+      Text {
+        text: "Anchor any file's fingerprint on-chain — same policy gate as the terminal."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      RowLayout {
+        spacing: 8
+
+        Button {
+          text: "Anchor a file…"
+          enabled: root.hasWallet && !root.locked
+          // The native dialog lives outside the popout focus grab: close
+          // the panel first so the grab doesn't eat the dialog.
+          onClicked: { root.close(); fileDialog.open(); }
+        }
+
+        Button {
+          text: "Open in explorer"
+          visible: (root.shareResult?.explorer ?? "") !== ""
+          onClicked: {
+            openExplorerProc.url = root.shareResult.explorer;
+            openExplorerProc.running = true;
+          }
+        }
+      }
+
+      Text {
+        text: root.shareText
+        color: root.shareOk ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.shareText !== ""
+      }
+
+      FileDialog {
+        id: fileDialog
+        title: "Anchor a file on BSV"
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+          // fileUrl looks like file:///home/… — strip the scheme for the CLI.
+          const path = String(fileDialog.fileUrl).replace(/^file:\/\//, "");
+          shareProc.path = decodeURIComponent(path);
+          shareProc.running = true;
+        }
+      }
+
+    }
+
+    ColumnLayout {
+      visible: root.tab === "Work"
+      Layout.fillWidth: true
+      spacing: 10
+
+      PanelSectionHeader { text: "Starter sats" }
+
+      Text {
+        text: root.faucetClaimed
+          ? "Claimed — one claim per wallet. This is for trying things: anchors, DMs, a first payment."
+          : root.faucetFunded
+            ? `A one-time faucet claim (${root.faucetAmount || "?"} sats) is available for this wallet.`
+            : "Faucet unavailable right now — keep using the wallet; testnet-style starter sats are optional."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
         Layout.fillWidth: true
       }
 
@@ -2761,462 +2900,403 @@ Panel {
         Layout.fillWidth: true
 
         Button {
-          text: "Copy outpoint"
-          onClicked: {
-            copyProc.copyText = root.receiptDetail.outpoint;
-            if (!copyProc.running) copyProc.running = true;
-          }
+          text: root.faucetClaimed ? "Claimed" : "Claim starter sats"
+          enabled: root.faucetFunded && !root.faucetClaimed && !faucetClaimProc.running
+          onClicked: faucetClaimProc.running = true
         }
 
-        Button {
-          text: "Copy payment txid"
-          onClicked: {
-            copyProc.copyText = root.receiptDetail.paymentTxid;
-            if (!copyProc.running) copyProc.running = true;
-          }
-        }
-
-        Button {
-          text: "Open on-chain"
-          onClicked: {
-            openUrlProc.url = root.receiptDetail.explorer;
-            openUrlProc.running = true;
-          }
-        }
-
-        Button {
-          text: "View in 1Sat Indexer"
-          onClicked: {
-            openUrlProc.url = root.receiptDetail.indexer;
-            openUrlProc.running = true;
-          }
+        Text {
+          text: root.faucetText
+          color: Color.muted
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+          visible: root.faucetText !== ""
         }
       }
-    }
 
-    Text {
-      text: root.receiptText
-      color: root.receiptOk ? Color.muted : Color.urgent
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.receiptText !== ""
-    }
-
-    PanelSectionHeader { text: "Starter sats" }
-
-    Text {
-      text: root.faucetClaimed
-        ? "Claimed — one claim per wallet. This is for trying things: anchors, DMs, a first payment."
-        : root.faucetFunded
-          ? `A one-time faucet claim (${root.faucetAmount || "?"} sats) is available for this wallet.`
-          : "Faucet unavailable right now — keep using the wallet; testnet-style starter sats are optional."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      Button {
-        text: root.faucetClaimed ? "Claimed" : "Claim starter sats"
-        enabled: root.faucetFunded && !root.faucetClaimed && !faucetClaimProc.running
-        onClicked: faucetClaimProc.running = true
-      }
+      PanelSectionHeader { text: `Files (${root.torrents.length})` }
 
       Text {
-        text: root.faucetText
+        text: root.torrentEnabled
+          ? `BitTorrent shares, discovered through bsvOS — no tracker. ${root.torrentPort ? "Serving on port " + root.torrentPort + ". " : ""}Fetched files land in ~/.local/share/bsv-os/torrents.`
+          : "File sharing disabled (port busy or BSV_TORRENT=0)."
         color: Color.muted
         font.pixelSize: Style.font.caption
         wrapMode: Text.Wrap
         Layout.fillWidth: true
-        visible: root.faucetText !== ""
       }
-    }
 
-    PanelSectionHeader { text: `Files (${root.torrents.length})` }
-
-    Text {
-      text: root.torrentEnabled
-        ? `BitTorrent shares, discovered through bsvOS — no tracker. ${root.torrentPort ? "Serving on port " + root.torrentPort + ". " : ""}Fetched files land in ~/.local/share/bsv-os/torrents.`
-        : "File sharing disabled (port busy or BSV_TORRENT=0)."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 6
-      visible: root.torrents.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.torrents
-        RowLayout {
-          spacing: 8
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.direction === "seed" ? "↗" : "↘"} ${modelData.name} · ${modelData.length >= 1048576 ? (modelData.length / 1048576).toFixed(1) + " MiB" : Math.max(1, Math.round(modelData.length / 1024)) + " KiB"} · ${modelData.status}${modelData.detail ? " · " + modelData.detail : ""}`
-            color: modelData.status === "error" ? Color.urgent : Color.foreground
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          Button {
-            text: "Copy"
-            onClicked: {
-              copyProc.copyText = modelData.infoHash;
-              if (!copyProc.running) copyProc.running = true;
-            }
-          }
-
-          Button {
-            text: "Stop"
-            onClicked: root.runAppAction(["torrent", "remove", modelData.infoHash])
-          }
-        }
-      }
-    }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: torrentPathField
-        placeholderText: "File to share (path under your home)"
-        text: root.torrentPath
-        onTextEdited: root.torrentPath = text
+      ColumnLayout {
+        spacing: 6
+        visible: root.torrents.length > 0
         Layout.fillWidth: true
-      }
 
-      Button {
-        text: "Share"
-        enabled: root.torrentPath.trim() !== "" && root.torrentEnabled && !torrentSeedProc.running
-        onClicked: {
-          torrentSeedProc.path = root.torrentPath.trim();
-          torrentSeedProc.running = true;
-        }
-      }
-    }
-
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
-
-      TextField {
-        id: torrentFetchField
-        placeholderText: "infohash to fetch"
-        font.family: "monospace"
-        Layout.fillWidth: true
-      }
-
-      TextField {
-        id: torrentPeerField
-        placeholderText: "peer host:port (optional)"
-        text: root.torrentPeer
-        onTextEdited: root.torrentPeer = text
-        Layout.fillWidth: true
-      }
-
-      Button {
-        text: "Fetch"
-        enabled: torrentFetchField.text.trim() !== "" && root.torrentEnabled && !torrentFetchProc.running
-        onClicked: {
-          torrentFetchProc.source = torrentFetchField.text.trim();
-          torrentFetchProc.peer = root.torrentPeer;
-          torrentFetchProc.running = true;
-        }
-      }
-    }
-
-    Text {
-      text: root.torrentText
-      color: root.torrentOk ? Color.muted : Color.urgent
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.torrentText !== ""
-    }
-
-    PanelSectionHeader { text: "Recovery" }
-
-    Text {
-      text: root.recoveryProtected
-        ? "Guarded — see `bsv recovery status` for the set. Setup/rotate/restore are terminal ceremonies (shares never touch the UI)."
-        : "Unprotected — one lost phrase loses everything. Run: bsv recovery setup --need <M> --guardian <name> …"
-      color: root.recoveryProtected ? Color.foreground : Color.urgent
-      font.pixelSize: Style.font.body
-      font.bold: !root.recoveryProtected
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 4
-      visible: root.recoverySets.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.recoverySets
-        Text {
-          text: `${String(modelData.setId ?? "?").slice(0, 8)}… · ${modelData.need ?? "?"}-of-${modelData.total ?? "?"} · ${(modelData.guardians ?? []).map((g) => g.name ?? "?").join(", ")}${modelData.superseded ? " · superseded" : ""}`
-          color: Color.muted
-          font.pixelSize: Style.font.body
-          wrapMode: Text.Wrap
-          Layout.fillWidth: true
-        }
-      }
-    }
-
-    PanelSectionHeader { text: `Gigs (${root.gigBoard.length})` }
-
-    Text {
-      text: "Paid micro-work. Track to watch, claim through agentpay, earnings land in the earnings basket."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 8
-      visible: root.gigBoard.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.gigBoard
-        ColumnLayout {
-          spacing: 2
-          Layout.fillWidth: true
-
-          Text {
-            text: `${modelData.title ?? "?"} · ${modelData.amountSats ?? 0} sats · ${modelData.status ?? "?"}`
-            color: Color.foreground
-            font.pixelSize: Style.font.body
-            font.bold: true
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-          }
-
-          RowLayout {
-            spacing: 8
-
-            Button {
-              text: gigTracked(modelData.id) ? (gigLifecycle(modelData.id) === "tracked" ? "Tracked" : gigLifecycle(modelData.id)) : "Track"
-              enabled: !gigTracked(modelData.id)
-              onClicked: root.runAppAction(["gig", "track", modelData.id])
-            }
-
-            Button {
-              text: "Claim"
-              visible: gigTracked(modelData.id)
-              onClicked: {
-                gigClaimProc.gigId = modelData.id;
-                gigClaimProc.running = true;
-              }
-            }
-
-            Button {
-              text: "Untrack"
-              visible: gigTracked(modelData.id)
-              onClicked: root.runAppAction(["gig", "untrack", modelData.id])
-            }
-          }
-        }
-      }
-    }
-
-    Text {
-      text: root.gigText
-      color: root.gigOk ? Color.foreground : Color.urgent
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.gigText !== ""
-    }
-
-    Text {
-      text: "No open gigs on the board right now."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      visible: root.gigBoard.length === 0
-    }
-
-    PanelSectionHeader { text: `NightShift (${root.shiftOrders.length})` }
-
-    Text {
-      text: "Standing orders: recurring agent work with per-cycle budgets. The daemon opens runs; agents claim, submit, you approve."
-      color: Color.muted
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-    }
-
-    ColumnLayout {
-      spacing: 8
-      visible: root.shiftOrders.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.shiftOrders
-        ColumnLayout {
-          spacing: 2
-          Layout.fillWidth: true
-
+        Repeater {
+          model: root.torrents
           RowLayout {
             spacing: 8
             Layout.fillWidth: true
 
             Text {
-              text: `${modelData.name ?? "?"} · ${modelData.agent ?? "?"} · ${modelData.cycleSats ?? 0} sats/cycle · ${modelData.status ?? "?"}`
-              color: modelData.status === "paused" ? Color.muted : Color.foreground
+              text: `${modelData.direction === "seed" ? "↗" : "↘"} ${modelData.name} · ${modelData.length >= 1048576 ? (modelData.length / 1048576).toFixed(1) + " MiB" : Math.max(1, Math.round(modelData.length / 1024)) + " KiB"} · ${modelData.status}${modelData.detail ? " · " + modelData.detail : ""}`
+              color: modelData.status === "error" ? Color.urgent : Color.foreground
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+            }
+
+            Button {
+              text: "Copy"
+              onClicked: {
+                copyProc.copyText = modelData.infoHash;
+                if (!copyProc.running) copyProc.running = true;
+              }
+            }
+
+            Button {
+              text: "Stop"
+              onClicked: root.runAppAction(["torrent", "remove", modelData.infoHash])
+            }
+          }
+        }
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: torrentPathField
+          placeholderText: "File to share (path under your home)"
+          text: root.torrentPath
+          onTextEdited: root.torrentPath = text
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Share"
+          enabled: root.torrentPath.trim() !== "" && root.torrentEnabled && !torrentSeedProc.running
+          onClicked: {
+            torrentSeedProc.path = root.torrentPath.trim();
+            torrentSeedProc.running = true;
+          }
+        }
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: torrentFetchField
+          placeholderText: "infohash to fetch"
+          font.family: "monospace"
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: torrentPeerField
+          placeholderText: "peer host:port (optional)"
+          text: root.torrentPeer
+          onTextEdited: root.torrentPeer = text
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Fetch"
+          enabled: torrentFetchField.text.trim() !== "" && root.torrentEnabled && !torrentFetchProc.running
+          onClicked: {
+            torrentFetchProc.source = torrentFetchField.text.trim();
+            torrentFetchProc.peer = root.torrentPeer;
+            torrentFetchProc.running = true;
+          }
+        }
+      }
+
+      Text {
+        text: root.torrentText
+        color: root.torrentOk ? Color.muted : Color.urgent
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.torrentText !== ""
+      }
+
+      PanelSectionHeader { text: "Recovery" }
+
+      Text {
+        text: root.recoveryProtected
+          ? "Guarded — see `bsv recovery status` for the set. Setup/rotate/restore are terminal ceremonies (shares never touch the UI)."
+          : "Unprotected — one lost phrase loses everything. Run: bsv recovery setup --need <M> --guardian <name> …"
+        color: root.recoveryProtected ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.body
+        font.bold: !root.recoveryProtected
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      ColumnLayout {
+        spacing: 4
+        visible: root.recoverySets.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.recoverySets
+          Text {
+            text: `${String(modelData.setId ?? "?").slice(0, 8)}… · ${modelData.need ?? "?"}-of-${modelData.total ?? "?"} · ${(modelData.guardians ?? []).map((g) => g.name ?? "?").join(", ")}${modelData.superseded ? " · superseded" : ""}`
+            color: Color.muted
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+        }
+      }
+
+      PanelSectionHeader { text: `Gigs (${root.gigBoard.length})` }
+
+      Text {
+        text: "Paid micro-work. Track to watch, claim through agentpay, earnings land in the earnings basket."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+      }
+
+      ColumnLayout {
+        spacing: 8
+        visible: root.gigBoard.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.gigBoard
+          ColumnLayout {
+            spacing: 2
+            Layout.fillWidth: true
+
+            Text {
+              text: `${modelData.title ?? "?"} · ${modelData.amountSats ?? 0} sats · ${modelData.status ?? "?"}`
+              color: Color.foreground
               font.pixelSize: Style.font.body
               font.bold: true
               wrapMode: Text.Wrap
               Layout.fillWidth: true
             }
 
-            Button {
-              text: modelData.status === "paused" ? "Resume" : "Pause"
-              onClicked: modelData.status === "paused"
-                ? root.runAppAction(["nightshift", "resume", modelData.id])
-                : root.runAppAction(["nightshift", "pause", modelData.id])
+            RowLayout {
+              spacing: 8
+
+              Button {
+                text: gigTracked(modelData.id) ? (gigLifecycle(modelData.id) === "tracked" ? "Tracked" : gigLifecycle(modelData.id)) : "Track"
+                enabled: !gigTracked(modelData.id)
+                onClicked: root.runAppAction(["gig", "track", modelData.id])
+              }
+
+              Button {
+                text: "Claim"
+                visible: gigTracked(modelData.id)
+                onClicked: {
+                  gigClaimProc.gigId = modelData.id;
+                  gigClaimProc.running = true;
+                }
+              }
+
+              Button {
+                text: "Untrack"
+                visible: gigTracked(modelData.id)
+                onClicked: root.runAppAction(["gig", "untrack", modelData.id])
+              }
             }
           }
         }
       }
-    }
 
-    ColumnLayout {
-      spacing: 6
-      visible: root.shiftRuns.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.shiftRuns
-        ColumnLayout {
-          spacing: 0
-          Layout.fillWidth: true
-
-          RowLayout {
-            spacing: 8
-            Layout.fillWidth: true
-
-            Text {
-              text: `#${modelData.id ?? "?"} ${modelData.agent ?? "?"} · ${modelData.cycleSats ?? 0} sats · ${modelData.status ?? "?"}`
-              color: modelData.status === "approved" ? Color.muted : Color.foreground
-              font.pixelSize: Style.font.body
-              wrapMode: Text.Wrap
-              Layout.fillWidth: true
-            }
-
-            Button {
-              text: "Claim"
-              visible: modelData.status === "due"
-              onClicked: root.runAppAction(["nightshift", "claim", String(modelData.id)])
-            }
-
-            Button {
-              text: "Approve"
-              visible: modelData.status === "submitted"
-              onClicked: root.runAppAction(["nightshift", "approve", String(modelData.id)])
-            }
-
-            Button {
-              text: "Fail"
-              visible: modelData.status === "due" || modelData.status === "claimed" || modelData.status === "submitted"
-              onClicked: root.runAppAction(["nightshift", "fail", String(modelData.id)])
-            }
-          }
-
-          RowLayout {
-            spacing: 8
-            visible: modelData.status === "claimed"
-            Layout.fillWidth: true
-
-            TextField {
-              id: proofBox
-              placeholderText: "proof text, then Submit"
-              Layout.fillWidth: true
-            }
-
-            Button {
-              text: "Submit"
-              onClicked: root.runAppAction(["nightshift", "submit", String(modelData.id), "--proof", proofBox.text.trim()])
-            }
-          }
-        }
+      Text {
+        text: root.gigText
+        color: root.gigOk ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.gigText !== ""
       }
-    }
 
-    Text {
-      text: "No standing orders — create one with: bsv nightshift create --name <n> --agent <a> --every <1h> --budget <sats>."
-      color: Color.muted
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.shiftOrders.length === 0
-    }
-
-    PanelSectionHeader { text: `Overlays (${root.overlays.length})` }
-
-    ColumnLayout {
-      spacing: 4
-      visible: root.overlays.length > 0
-      Layout.fillWidth: true
-
-      Repeater {
-        model: root.overlays
-        Text {
-          text: `${modelData.name ?? "?"} · ${modelData.live ? `live ${modelData.latencyMs ?? "?"}ms` : "down"}`
-          color: modelData.live ? Color.foreground : Color.muted
-          font.pixelSize: Style.font.body
-          wrapMode: Text.Wrap
-          Layout.fillWidth: true
-        }
+      Text {
+        text: "No open gigs on the board right now."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        visible: root.gigBoard.length === 0
       }
-    }
 
-    RowLayout {
-      spacing: 8
-      Layout.fillWidth: true
+      PanelSectionHeader { text: `NightShift (${root.shiftOrders.length})` }
 
-      TextField {
-        id: topicBox
-        placeholderText: "tm_<tokenId>"
+      Text {
+        text: "Standing orders: recurring agent work with per-cycle budgets. The daemon opens runs; agents claim, submit, you approve."
+        color: Color.muted
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
         Layout.fillWidth: true
       }
 
-      TextField {
-        id: topicAddrBox
-        placeholderText: "address"
+      ColumnLayout {
+        spacing: 8
+        visible: root.shiftOrders.length > 0
         Layout.fillWidth: true
-      }
 
-      Button {
-        text: "Lookup"
-        onClicked: {
-          overlayLookupProc.topic = topicBox.text.trim();
-          overlayLookupProc.address = topicAddrBox.text.trim();
-          overlayLookupProc.running = true;
+        Repeater {
+          model: root.shiftOrders
+          ColumnLayout {
+            spacing: 2
+            Layout.fillWidth: true
+
+            RowLayout {
+              spacing: 8
+              Layout.fillWidth: true
+
+              Text {
+                text: `${modelData.name ?? "?"} · ${modelData.agent ?? "?"} · ${modelData.cycleSats ?? 0} sats/cycle · ${modelData.status ?? "?"}`
+                color: modelData.status === "paused" ? Color.muted : Color.foreground
+                font.pixelSize: Style.font.body
+                font.bold: true
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+              }
+
+              Button {
+                text: modelData.status === "paused" ? "Resume" : "Pause"
+                onClicked: modelData.status === "paused"
+                  ? root.runAppAction(["nightshift", "resume", modelData.id])
+                  : root.runAppAction(["nightshift", "pause", modelData.id])
+              }
+            }
+          }
         }
       }
-    }
 
-    Text {
-      text: root.overlayText
-      color: root.overlayOk ? Color.foreground : Color.urgent
-      font.pixelSize: Style.font.body
-      wrapMode: Text.Wrap
-      Layout.fillWidth: true
-      visible: root.overlayText !== ""
+      ColumnLayout {
+        spacing: 6
+        visible: root.shiftRuns.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.shiftRuns
+          ColumnLayout {
+            spacing: 0
+            Layout.fillWidth: true
+
+            RowLayout {
+              spacing: 8
+              Layout.fillWidth: true
+
+              Text {
+                text: `#${modelData.id ?? "?"} ${modelData.agent ?? "?"} · ${modelData.cycleSats ?? 0} sats · ${modelData.status ?? "?"}`
+                color: modelData.status === "approved" ? Color.muted : Color.foreground
+                font.pixelSize: Style.font.body
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+              }
+
+              Button {
+                text: "Claim"
+                visible: modelData.status === "due"
+                onClicked: root.runAppAction(["nightshift", "claim", String(modelData.id)])
+              }
+
+              Button {
+                text: "Approve"
+                visible: modelData.status === "submitted"
+                onClicked: root.runAppAction(["nightshift", "approve", String(modelData.id)])
+              }
+
+              Button {
+                text: "Fail"
+                visible: modelData.status === "due" || modelData.status === "claimed" || modelData.status === "submitted"
+                onClicked: root.runAppAction(["nightshift", "fail", String(modelData.id)])
+              }
+            }
+
+            RowLayout {
+              spacing: 8
+              visible: modelData.status === "claimed"
+              Layout.fillWidth: true
+
+              TextField {
+                id: proofBox
+                placeholderText: "proof text, then Submit"
+                Layout.fillWidth: true
+              }
+
+              Button {
+                text: "Submit"
+                onClicked: root.runAppAction(["nightshift", "submit", String(modelData.id), "--proof", proofBox.text.trim()])
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        text: "No standing orders — create one with: bsv nightshift create --name <n> --agent <a> --every <1h> --budget <sats>."
+        color: Color.muted
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.shiftOrders.length === 0
+      }
+
+      PanelSectionHeader { text: `Overlays (${root.overlays.length})` }
+
+      ColumnLayout {
+        spacing: 4
+        visible: root.overlays.length > 0
+        Layout.fillWidth: true
+
+        Repeater {
+          model: root.overlays
+          Text {
+            text: `${modelData.name ?? "?"} · ${modelData.live ? `live ${modelData.latencyMs ?? "?"}ms` : "down"}`
+            color: modelData.live ? Color.foreground : Color.muted
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+          }
+        }
+      }
+
+      RowLayout {
+        spacing: 8
+        Layout.fillWidth: true
+
+        TextField {
+          id: topicBox
+          placeholderText: "tm_<tokenId>"
+          Layout.fillWidth: true
+        }
+
+        TextField {
+          id: topicAddrBox
+          placeholderText: "address"
+          Layout.fillWidth: true
+        }
+
+        Button {
+          text: "Lookup"
+          onClicked: {
+            overlayLookupProc.topic = topicBox.text.trim();
+            overlayLookupProc.address = topicAddrBox.text.trim();
+            overlayLookupProc.running = true;
+          }
+        }
+      }
+
+      Text {
+        text: root.overlayText
+        color: root.overlayOk ? Color.foreground : Color.urgent
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+        visible: root.overlayText !== ""
+      }
+
     }
 
     Item { Layout.fillHeight: true }

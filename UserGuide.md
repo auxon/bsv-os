@@ -96,6 +96,14 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 
 ## 4. Everyday use
 
+The bar panel is **tabbed**, so nothing needs scrolling to find:
+**Wallet** (approvals, transactions, policy, agents) · **Money** (baskets,
+receive/send, pay, requests, receipts, collectibles, tokens) · **Identity**
+(Twetch sign-in, certificates, people, inbox, peers, compose) · **Apps**
+(atomic market, app store, share-a-file) · **Work** (starter sats, files,
+recovery, gigs, NightShift, overlays). The Wallet tab carries the pending
+approval count.
+
 | I want to… | Do this |
 | --- | --- |
 | Check the wallet | `bsv status`, `bsv balance` |
