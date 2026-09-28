@@ -461,8 +461,54 @@ bsv allow researcher 50000          # plain allow: no Jev call, cap only
 
 Auto mode is fail-closed: a low-confidence or ask/deny answer (or no
 answer at all) becomes a normal pending request you see in Approvals.
-`bsv jev decide --state '<json|text>' --questions '<json>'` lets you (and
-agents, via the `jev_decide` MCP tool) ask Jev directly.
+
+#### Ask Jev yourself: `bsv jev decide`
+
+The same engine answers your own questions — a judgement call with numbers,
+not prose. It never touches the wallet, and the API key stays in the daemon.
+
+```bash
+bsv jev decide --state '<json|text|@file>' --questions '<json|@file>' [--model=m]
+```
+
+`--state` is the situation to judge (plain text or JSON; `@file` reads a
+file). `--questions` is a JSON map of `id → question`; ask several in one
+call. Three question types:
+
+| type | criteria | answer |
+| --- | --- | --- |
+| `noul` | — | `noul`: probability the answer is yes (0–1) |
+| `choice` | `{ option: description }` | the chosen `choice`, `probabilities` per option, `confidence` |
+| `score` | `[level, level, …]` (at least 2) | `score` on your scale |
+
+Example — screening a stranger's loan offer:
+
+```bash
+bsv jev decide \
+  --state 'A stranger on Twetch with 12 followers, account 3 days old, asks me to co-sign a 2 BSV loan, promises 20% in a week.' \
+  --questions '{"scam":{"type":"noul","instructions":"Is this request likely a scam?"},
+                "action":{"type":"choice","instructions":"What should I do?",
+                  "criteria":{"ignore":"Do not engage","verify":"Ask for proof and check the account","proceed":"Co-sign the loan"}}}'
+```
+
+```json
+{
+  "answers": {
+    "scam":   { "type": "noul", "noul": 0.97 },
+    "action": { "type": "choice", "choice": "ignore",
+                "probabilities": { "verify": 0.01, "proceed": 0, "ignore": 0.99 },
+                "confidence": 0.99 }
+  },
+  "usage": { "cost": 0.000016044 },
+  "elapsedMs": 3517
+}
+```
+
+97% likely a scam; "ignore" wins at 99% confidence. You still decide — Jev
+advises. Agents get the same call through the `jev_decide` MCP tool, and
+the daemon can sell answers over x402 (50 sats each). Put the facts in the
+state, keep each question narrow, and never put secrets (seed words, WIFs)
+in the state — it goes to the model provider.
 
 ## 6. Safety rules (read once, remember forever)
 
