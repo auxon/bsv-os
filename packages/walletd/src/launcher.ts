@@ -86,6 +86,22 @@ export function findExtensionDir(): string | null {
   return null;
 }
 
+/**
+ * Path to the bridge child spawned for each app window. One entry for both
+ * callers — CLI (`bsv app open`) and daemon (`appLaunch`) — so a window can
+ * never end up with a different bridge than the other path. Prefers the built
+ * `bridge-main.js` next to the running module, falling back to the TypeScript
+ * source so `npm run dev` (tsx) works without a build step.
+ */
+export function bridgeEntryPath(): string {
+  const here = path.dirname(new URL(import.meta.url).pathname); // .../dist or .../src
+  for (const candidate of ["bridge-main.js", "bridge-main.ts"]) {
+    const full = path.join(here, candidate);
+    if (fs.existsSync(full)) return full;
+  }
+  throw new Error("bridge entry not found next to the daemon");
+}
+
 export function appDataDir(domain: string): string {
   const base = process.env.BSV_WALLETD_DATA ?? path.join(os.homedir(), ".local/share/bsv-os");
   return path.join(base, "apps", appIdFor(domain));

@@ -9,7 +9,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { call, HTTPS_URL, SOCK } from "./rpcclient.ts";
-import { openExternalCommand } from "./launcher.ts";
+import { bridgeEntryPath, openExternalCommand } from "./launcher.ts";
 
 /** Media mime by extension for `bsv twetch post --media`. */
 function mediaMimeFor(file: string): string {
@@ -183,11 +183,14 @@ function parseExpiry(raw: string | undefined): number {
  */
 async function openInRunner(startUrl: string, domain: string): Promise<boolean> {
   const { openInRunner: launch } = await import("./runner.ts");
-  const self = process.argv[1] ?? "";
+  // The dedicated bridge entry, not this CLI script: the shared runner spawns
+  // `node <entry> <domain> --port=…`, and only bridge-main parses that argv —
+  // spawning `node cli.js <domain> …` exits 2 and silently degrades every
+  // app window to the fallback browser.
   const res = await launch({
     startUrl,
     domain,
-    bridgeEntry: self,
+    bridgeEntry: bridgeEntryPath(),
     wait: true,
   });
   if (!res.launched && res.reason) console.error(`runner: ${res.reason}`);
@@ -1812,24 +1815,6 @@ async function main(): Promise<void> {
         console.error("usage: bsv app <install <domain|https://host/path/> [--manifest-file <path>]|list|remove <domain>|update [<domain>|--all] [--approve-widening]|open <domain>>");
         process.exitCode = 2;
       }
-      break;
-    }
-    case "_bridge": {
-      // F2 runner internals: loopback relay for ONE app window. Spawned by
-      // `app open`, never by hand. Dies with the window (or its parent).
-      // The server itself lives in bridge-server.ts so the daemon can spawn
-      // the exact same bridge from bridge-main.ts.
-      const [bridgeDomain] = rest;
-      const bridgePort = Number(flag(rest, "port") ?? 0);
-      const bridgeToken = flag(rest, "token") ?? "";
-      const bridgeDataDir = flag(rest, "data-dir");
-      if (!bridgeDomain || !bridgePort || !bridgeToken) {
-        console.error("usage: bsv _bridge <domain> --port=N --token=T");
-        process.exitCode = 2;
-        break;
-      }
-      const { runBridge } = await import("./bridge-server.ts");
-      await runBridge(bridgeDomain, bridgePort, bridgeToken, bridgeDataDir);
       break;
     }
     case "mcp": {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bridgeEntryPath } from "../src/launcher.ts";
 
 const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const read = (f) => fs.readFileSync(path.join(srcDir, f), "utf8");
@@ -31,14 +32,14 @@ test("appLaunch starts a runner window without blocking the RPC", () => {
   assert.ok(/RUNNER_UNAVAILABLE/.test(body[1]), "runner failure is a typed error");
 });
 
-test("the bridge entry the daemon spawns exists as its own module", () => {
-  // bridge-main.ts is spawned as a child process; bridge-server.ts holds the
-  // import-safe implementation shared with `bsv _bridge`. If these ever
-  // merge, the CLI's _bridge import would re-run the entry's argv parsing.
+test("the bridge entry both callers spawn exists as its own module", () => {
+  // bridge-main.ts is spawned as a child process by the CLI and the daemon;
+  // bridge-server.ts holds the import-safe implementation. If these ever
+  // merge, importing the server would re-run the entry's argv parsing.
   assert.ok(fs.existsSync(path.join(srcDir, "bridge-main.ts")), "bridge-main.ts exists");
   assert.ok(fs.existsSync(path.join(srcDir, "bridge-server.ts")), "bridge-server.ts exists");
   // The entry parses argv and delegates; the server (and its argv parsing)
-  // must not be duplicated, or the CLI's `_bridge` import would re-run it.
+  // must not be duplicated, or importing the server would re-run it.
   const main = read("bridge-main.ts");
   assert.ok(/await runBridge\(/.test(main), "entry delegates to runBridge");
   assert.ok(!/createBridgeHandler|createServer/.test(main), "entry does not implement the server");
@@ -46,6 +47,25 @@ test("the bridge entry the daemon spawns exists as its own module", () => {
   assert.ok(/export async function runBridge/.test(server), "server exports runBridge");
   assert.ok(/createBridgeHandler/.test(server), "server builds the handler");
   assert.ok(!/process\.argv/.test(server), "server never reads argv");
+});
+
+test("the CLI spawns the same bridge entry as the daemon, not itself", () => {
+  // The regression this guards: a launcher refactor passed `bridgeEntry:
+  // self` (process.argv[1]), but the shared runner spawns `node <entry>
+  // <domain> --port=…` with no `_bridge` subcommand. The CLI script read the
+  // domain as its command, printed usage, exited 2 — and every `bsv app open`
+  // silently fell back to the full browser.
+  const cli = read("cli.ts");
+  assert.ok(/bridgeEntry: bridgeEntryPath\(\)/.test(cli), "the CLI uses the shared bridge entry");
+  assert.ok(!/bridgeEntry: self/.test(cli), "not the CLI script itself");
+  assert.ok(!/case "_bridge"/.test(cli), "the old CLI subcommand is gone");
+  const launcher = read("launcher.ts");
+  assert.ok(/export function bridgeEntryPath/.test(launcher), "the entry path is shared");
+  const entry = bridgeEntryPath();
+  assert.ok(fs.existsSync(entry), `the entry exists: ${entry}`);
+  assert.ok(/bridge-main\.(js|ts)$/.test(entry), "and is the dedicated entry, not the CLI");
+  // The dedicated entry parses the argv shape the runner spawns.
+  assert.ok(/process\.argv/.test(read("bridge-main.ts")), "the dedicated entry parses its own argv");
 });
 
 test("the shared runner is the single implementation for both callers", () => {

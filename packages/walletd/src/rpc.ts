@@ -1,6 +1,3 @@
-import { fileURLToPath } from "node:url";
-import fsSync from "node:fs";
-import path from "node:path";
 import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import {
   twetchAccountImport,
@@ -27,6 +24,7 @@ import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv2
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
+import { bridgeEntryPath } from "./launcher.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
 import { bsv21For, galleryFor, normalizeTokenId, splitOutpoint, tokenHoldings } from "./tokens.ts";
@@ -196,20 +194,6 @@ function needBackend(): MonitorBackend {
     throw err;
   }
   return backend;
-}
-
-/**
- * Path to the bridge child the daemon spawns for each app window. Prefers the
- * built `bridge-main.js` next to the running module, falling back to the
- * TypeScript source so `npm run dev` (tsx) works without a build step.
- */
-function bridgeEntryPath(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  for (const candidate of ["bridge-main.js", "bridge-main.ts"]) {
-    const full = path.join(here, candidate);
-    if (fsSync.existsSync(full)) return full;
-  }
-  throw new Error("bridge entry not found next to the daemon");
 }
 
 /** Signed-in Twetch account key (OIDC claim), used as the import scan target. */
