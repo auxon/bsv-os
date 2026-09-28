@@ -619,6 +619,12 @@ export interface CatalogApp {
   name: string;
   blurb: string;
   devOnly?: boolean;
+  /**
+   * Explicit install URL when the app lives at a path rather than the host
+   * root — how the bundled apps share `localhost:2121` at `/cast/`,
+   * `/twetch/`, `/explorer/` and `/colosseum/`. Null means the domain root.
+   */
+  url: string | null;
 }
 
 export interface StoreEntry {
@@ -627,34 +633,92 @@ export interface StoreEntry {
   blurb: string;
   devOnly: boolean;
   inCatalog: boolean;
+  /** True only when THIS entry is the variant installed on its host. */
   installed: boolean;
   installedCapSats: number;
   status: UpdateStatus | "not-installed";
   live: AppAsked | null;
   changes: string[];
+  /** The URL `app install` takes for this entry (explicit catalog URL, else the domain root). */
+  installUrl: string;
+  /** Name of the installed app holding this host, when it is not this entry. */
+  holder: string | null;
+}
+
+/**
+ * An app identity is its host (`apps.domain`, unique) — but the bundled apps
+ * share `localhost` at different paths. Two records are the same variant only
+ * when host and directory both match; anything else is a slot-mate to
+ * replace, not an update.
+ */
+export function sameAppVariant(installedStartUrl: string, entryUrl: string): boolean {
+  try {
+    const a = new URL(installedStartUrl);
+    const b = new URL(entryUrl);
+    const dir = (p: string) => (p.endsWith("/") ? p : `${p}/`);
+    return a.host.toLowerCase() === b.host.toLowerCase() && dir(a.pathname) === dir(b.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Directory key for dedupe: paths are directories, "" and "/" are the root. */
+function dirOf(url: string | null, domain: string): string {
+  try {
+    const p = new URL(url ?? `https://${domain}/`).pathname;
+    return p.replace(/\/+$/, "") || "/";
+  } catch {
+    return "/";
+  }
+}
+
+/**
+ * Normalize a catalog URL: https only, must stay on the entry's own host, and
+ * must be a directory (trailing slash) so `<url>manifest.json` resolves.
+ */
+function catalogUrl(raw: unknown, domain: string): { url: string | null; invalid: boolean } {
+  if (raw === undefined || raw === null || raw === "") return { url: null, invalid: false };
+  try {
+    const u = new URL(String(raw));
+    if (u.protocol !== "https:" || u.hostname.toLowerCase() !== domain.toLowerCase() || u.search || u.hash) {
+      return { url: null, invalid: true };
+    }
+    if (!u.pathname.endsWith("/")) u.pathname = `${u.pathname}/`;
+    return { url: u.toString(), invalid: false };
+  } catch {
+    return { url: null, invalid: true };
+  }
 }
 
 /** Curated catalog: packaged file first, repo checkout second, empty offline. */
-export function readCatalog(): { version: number; apps: CatalogApp[] } {
+export function readCatalog(file?: string): { version: number; apps: CatalogApp[] } {
   const here = path.dirname(new URL(import.meta.url).pathname);
-  const candidates = [
-    "/usr/share/bsv-os/runner/store.json",
-    path.resolve(here, "..", "..", "runner", "store.json"),
-    path.resolve(here, "..", "runner", "store.json"),
-  ];
-  for (const file of candidates) {
+  const candidates = file
+    ? [file]
+    : [
+        "/usr/share/bsv-os/runner/store.json",
+        path.resolve(here, "..", "..", "runner", "store.json"),
+        path.resolve(here, "..", "runner", "store.json"),
+      ];
+  for (const candidate of candidates) {
     try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      const raw = JSON.parse(fs.readFileSync(candidate, "utf8")) as {
         version?: unknown; apps?: Array<Record<string, unknown>>;
       };
-      const apps = (Array.isArray(raw.apps) ? raw.apps : [])
-        .filter((a) => typeof a?.domain === "string" && typeof a?.name === "string")
-        .map((a) => ({
-          domain: String(a.domain).toLowerCase(),
+      const apps: CatalogApp[] = [];
+      for (const a of Array.isArray(raw.apps) ? raw.apps : []) {
+        if (typeof a?.domain !== "string" || typeof a?.name !== "string") continue;
+        const domain = a.domain.toLowerCase();
+        const { url, invalid } = catalogUrl(a.url, domain);
+        if (invalid) continue;
+        apps.push({
+          domain,
           name: String(a.name).slice(0, 80),
           blurb: typeof a.blurb === "string" ? String(a.blurb).slice(0, 280) : "",
           devOnly: a.devOnly === true,
-        }));
+          url,
+        });
+      }
       return { version: typeof raw.version === "number" ? raw.version : 1, apps };
     } catch {
       /* next candidate */
@@ -668,51 +732,71 @@ export function readCatalog(): { version: number; apps: CatalogApp[] } {
  * live permission data. Requested caps are shown pre-install; installed
  * apps carry their re-pin status so the shell can offer one-tap
  * install/remove/update.
+ *
+ * Variant-aware: bundled apps share the `localhost` host at different paths,
+ * so each gets its own entry with its own install URL. The entry whose path
+ * matches the installed start_url is the installed one; its slot-mates are
+ * offered as a switch, with `holder` naming what the switch would replace.
  */
 export async function storeList(
   db: Knex,
-  opts: { fetchManifest?: ManifestFetch } = {},
+  opts: { fetchManifest?: ManifestFetch; catalog?: { version: number; apps: CatalogApp[] } } = {},
 ): Promise<StoreEntry[]> {
   const fetchFn = opts.fetchManifest ?? defaultFetch;
-  const catalog = readCatalog();
-  const installed = new Map((await listApps(db)).map((a) => [a.domain, a]));
+  const catalog = opts.catalog ?? readCatalog();
+  const installedRows = await listApps(db);
+  const installed = new Map(installedRows.map((a) => [a.domain, a]));
   const seen = new Set<string>();
   const out: StoreEntry[] = [];
-  const entries: Array<CatalogApp & { inCatalog: boolean }> = [
-    ...catalog.apps.map((a) => ({ ...a, inCatalog: true })),
-    ...[...installed.values()]
-      .filter((a) => !catalog.apps.some((c) => c.domain === a.domain))
-      .map((a) => ({ domain: a.domain, name: a.name, blurb: "", devOnly: false, inCatalog: false })),
+  const entries: Array<{ domain: string; name: string; blurb: string; devOnly: boolean; url: string | null; inCatalog: boolean }> = [
+    ...catalog.apps.map((a) => ({ ...a, devOnly: a.devOnly === true, inCatalog: true })),
+    ...installedRows
+      .filter((a) => !catalog.apps.some((c) => c.domain === a.domain && (!c.url || sameAppVariant(a.startUrl, c.url))))
+      .map((a) => ({ domain: a.domain, name: a.name, blurb: "", devOnly: false, url: a.startUrl, inCatalog: false })),
   ];
   for (const e of entries) {
-    if (seen.has(e.domain)) continue;
-    seen.add(e.domain);
+    const key = `${e.domain}|${dirOf(e.url, e.domain)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const rec = installed.get(e.domain);
-    const url = rec ? manifestUrlFor(rec) : `https://${e.domain}/manifest.json`;
-    const live = await fetchValidated(fetchFn, e.domain, url);
-    if (!rec) {
+    const isVariant = rec ? (e.url ? sameAppVariant(rec.startUrl, e.url) : true) : false;
+    const installUrl = e.url ?? `https://${e.domain}/`;
+    // Probe the entry's own manifest for catalog variants; for installed apps
+    // (and extras) the start_url decides where the manifest lives.
+    const manifestUrl = e.inCatalog && e.url
+      ? `${e.url}manifest.json`
+      : rec
+        ? manifestUrlFor(rec)
+        : `https://${e.domain}/manifest.json`;
+    const live = await fetchValidated(fetchFn, e.domain, manifestUrl);
+    const base = {
+      domain: e.domain, name: e.name, blurb: e.blurb, devOnly: e.devOnly === true,
+      inCatalog: e.inCatalog, installUrl,
+    };
+    if (!rec || !isVariant) {
       out.push({
-        domain: e.domain, name: e.name, blurb: e.blurb, devOnly: e.devOnly === true,
-        inCatalog: e.inCatalog, installed: false, installedCapSats: 0,
+        ...base,
+        installed: false, installedCapSats: 0,
         status: live.ok ? "not-installed" : live.status,
         live: live.ok ? live.asked : null, changes: [],
+        holder: rec ? rec.name : null,
       });
       continue;
     }
     const row = (await db("apps").where({ domain: e.domain }).first()) as AppRow | undefined;
     if (!live.ok) {
       out.push({
-        domain: e.domain, name: rec.name, blurb: e.blurb, devOnly: e.devOnly === true,
-        inCatalog: e.inCatalog, installed: true, installedCapSats: rec.spendCapSats,
-        status: live.status, live: null, changes: [],
+        ...base,
+        installed: true, installedCapSats: rec.spendCapSats,
+        status: live.status, live: null, changes: [], holder: null,
       });
       continue;
     }
     const cmp = comparePin(rec, row, live.asked);
     out.push({
-      domain: e.domain, name: rec.name, blurb: e.blurb, devOnly: e.devOnly === true,
-      inCatalog: e.inCatalog, installed: true, installedCapSats: rec.spendCapSats,
-      status: cmp.status, live: live.asked, changes: cmp.changes,
+      ...base,
+      installed: true, installedCapSats: rec.spendCapSats,
+      status: cmp.status, live: live.asked, changes: cmp.changes, holder: null,
     });
   }
   return out;

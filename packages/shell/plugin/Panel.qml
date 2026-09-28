@@ -1254,6 +1254,7 @@ Panel {
     if (caps && (caps.spendCapSats ?? 0) > 0) bits.push(`asks ${caps.spendCapSats} sats`);
     else if (caps) bits.push("asks no spend");
     if (e.installed) bits.push(`installed · ${e.status ?? "?"}`);
+    else if (e.holder) bits.push(`not installed · switching replaces ${e.holder}`);
     else bits.push(e.status === "not-installed" ? "not installed" : (e.status ?? "?"));
     for (const c of (e.changes ?? [])) bits.push(c);
     if (e.devOnly) bits.push("dev-only");
@@ -1924,9 +1925,9 @@ Panel {
             spacing: 8
 
             Button {
-              text: "Install"
+              text: modelData.holder ? "Switch" : "Install"
               visible: !modelData.installed && (modelData.status === "not-installed" || modelData.status === "invalid")
-              onClicked: root.runAppAction(["app", "install", modelData.domain])
+              onClicked: root.runAppAction(["app", "install", modelData.installUrl ?? modelData.domain])
             }
 
             Button {

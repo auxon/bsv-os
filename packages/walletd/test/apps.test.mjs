@@ -304,6 +304,121 @@ test("storeList merges catalog, installed extras, and live caps", async () => {
   }
 });
 
+test("storeList lists every bundled app on a shared host and names the slot holder", async () => {
+  const db = await memdb();
+  try {
+    const hooks = { seedPolicyRequest: async () => {} };
+    const manifest = (startUrl, name) => ({
+      name,
+      start_url: startUrl,
+      metanet: { groupPermissions: { spendingAuthorization: { amount: 0 } } },
+    });
+    const cast = manifest("https://localhost:2121/cast/", "Cast");
+    const colosseum = manifest("https://localhost:2121/colosseum/", "Ordinal Colosseum");
+    const catalog = {
+      version: 1,
+      apps: [
+        { domain: "localhost", name: "Cast", blurb: "player", devOnly: false, url: "https://localhost:2121/cast/" },
+        { domain: "localhost", name: "Ordinal Colosseum", blurb: "battles", devOnly: false, url: "https://localhost:2121/colosseum/" },
+      ],
+    };
+    const fetch = async (domain, url) => (url.includes("colosseum") ? colosseum : cast);
+    // Cast holds the shared localhost slot.
+    await installApp(db, "https://localhost:2121/cast/", hooks, { fetchUrl: async () => cast });
+    const store = await storeList(db, { fetchManifest: fetch, catalog });
+    const castEntry = store.find((e) => e.name === "Cast");
+    const colEntry = store.find((e) => e.name === "Ordinal Colosseum");
+    assert.equal(castEntry.installed, true);
+    assert.equal(castEntry.status, "current");
+    assert.equal(castEntry.holder, null);
+    assert.equal(castEntry.installUrl, "https://localhost:2121/cast/");
+    assert.equal(colEntry.installed, false, "the slot-mate is not the installed variant");
+    assert.equal(colEntry.status, "not-installed");
+    assert.equal(colEntry.holder, "Cast", "names what a switch would replace");
+    assert.equal(colEntry.installUrl, "https://localhost:2121/colosseum/");
+    assert.equal(store.filter((e) => e.domain === "localhost" && e.inCatalog).length, 2, "both apps are listed, not deduped by domain");
+
+    // Switching the slot replaces the holder — identity stays one app per host.
+    await installApp(db, "https://localhost:2121/colosseum/", hooks, { fetchUrl: async () => colosseum });
+    const after = await storeList(db, { fetchManifest: fetch, catalog });
+    assert.equal(after.find((e) => e.name === "Ordinal Colosseum").installed, true);
+    assert.equal(after.find((e) => e.name === "Cast").holder, "Ordinal Colosseum");
+    assert.equal((await listApps(db)).filter((a) => a.domain === "localhost").length, 1);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("an installed app that is not a catalog variant stays visible as an extra", async () => {
+  const db = await memdb();
+  try {
+    const hooks = { seedPolicyRequest: async () => {} };
+    const demo = { name: "BSV OS Runner Demo", start_url: "https://127.0.0.1:8443/" };
+    const shell = { name: "bsvOS", start_url: "https://127.0.0.1:2121/bsvos/", metanet: { groupPermissions: { spendingAuthorization: { amount: 0 } } } };
+    const catalog = {
+      version: 1,
+      apps: [{ domain: "127.0.0.1", name: "bsvOS", blurb: "shell", devOnly: false, url: "https://127.0.0.1:2121/bsvos/" }],
+    };
+    await installApp(db, "https://127.0.0.1:8443/", hooks, { fetchUrl: async () => demo });
+    const store = await storeList(db, {
+      fetchManifest: async (domain, url) => (url.includes("bsvos") ? shell : demo),
+      catalog,
+    });
+    const shellEntry = store.find((e) => e.name === "bsvOS");
+    assert.equal(shellEntry.installed, false);
+    assert.equal(shellEntry.holder, "BSV OS Runner Demo");
+    assert.equal(shellEntry.installUrl, "https://127.0.0.1:2121/bsvos/");
+    const extra = store.find((e) => e.name === "BSV OS Runner Demo");
+    assert.ok(extra, "the app actually installed on the host is still listed");
+    assert.equal(extra.inCatalog, false);
+    assert.equal(extra.installed, true);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("the shipped catalog gives every bundled app its own URL", () => {
+  const catalog = readCatalog();
+  for (const [domain, name] of [
+    ["127.0.0.1", "bsvOS"],
+    ["localhost", "Cast"],
+    ["localhost", "Twetch"],
+    ["localhost", "bsvOS Explorer"],
+    ["localhost", "Ordinal Colosseum"],
+  ]) {
+    const entry = catalog.apps.find((a) => a.domain === domain && a.name === name);
+    assert.ok(entry, `catalog lists ${name}`);
+    assert.ok(entry.url, `${name} has its own install URL`);
+    const u = new URL(entry.url);
+    assert.equal(u.protocol, "https:");
+    assert.equal(u.hostname, domain, `${name} stays on its own host`);
+    assert.ok(u.pathname.endsWith("/"), `${name} URL is a directory`);
+  }
+  const localhost = catalog.apps.filter((a) => a.domain === "localhost");
+  assert.equal(localhost.length, 4, "all four localhost apps are listed");
+  assert.equal(new Set(localhost.map((a) => a.url)).size, localhost.length, "each has its own entry");
+});
+
+test("readCatalog drops a URL that escapes its own domain", () => {
+  const file = path.join(os.tmpdir(), `bsv-store-${process.pid}.json`);
+  fs.writeFileSync(file, JSON.stringify({
+    version: 1,
+    apps: [
+      { domain: "localhost", name: "Good", url: "https://localhost:2121/cast" },
+      { domain: "localhost", name: "Escapes", url: "https://evil.example/cast/" },
+      { domain: "example.com", name: "Domain root" },
+    ],
+  }));
+  try {
+    const catalog = readCatalog(file);
+    assert.deepEqual(catalog.apps.map((a) => a.name), ["Good", "Domain root"]);
+    assert.equal(catalog.apps[0].url, "https://localhost:2121/cast/", "directories get a trailing slash");
+    assert.equal(catalog.apps[1].url, null, "no URL means the domain root");
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
 test("validateManifest parses declared spend intents", () => {
   const v = validateManifest("game.example", {
     name: "Game",

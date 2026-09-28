@@ -103,9 +103,9 @@ function fixtures() {
         { domain: "localhost", name: "Ordinal Colosseum", startUrl: "https://localhost:2121/colosseum/", icon: null, spendCapSats: 20000, intents: [] },
       ],
       store: [
-        { domain: "127.0.0.1", name: "bsvOS", blurb: "shell", devOnly: false, status: "current", installed: true, live: null, changes: [] },
-        { domain: "market.entangleit.com", name: "Atomic Market", blurb: "market", devOnly: false, status: "not-installed", live: { spendCapSats: 5000000 }, changes: [] },
-        { domain: "twetch.example", name: "Twetch", blurb: "widened", devOnly: false, status: "widened", live: { spendCapSats: 9000 }, changes: [] },
+        { domain: "127.0.0.1", name: "bsvOS", blurb: "shell", devOnly: false, status: "current", installed: true, live: null, changes: [], installUrl: "https://127.0.0.1:2121/bsvos/", holder: null },
+        { domain: "market.entangleit.com", name: "Atomic Market", blurb: "market", devOnly: false, status: "not-installed", live: { spendCapSats: 5000000 }, changes: [], installUrl: "https://market.entangleit.com/", holder: null },
+        { domain: "twetch.example", name: "Twetch", blurb: "widened", devOnly: false, status: "widened", live: { spendCapSats: 9000 }, changes: [], installUrl: "https://twetch.example/", holder: null },
       ],
     },
     market: { market: { domain: "market.entangleit.com" } },
@@ -506,6 +506,41 @@ test("the inscribe view never sends a file path, only hex", async () => {
   // Too-big is still refused on size regardless of balance.
   const huge = view.render({ ...base, data: { balance: 10_000_000, picked: { name: "d.mp4", size: 300000, contentType: "video/mp4", sha256: "ab", hex: null, tooBig: true } } });
   assert.ok(/Too large/i.test(huge), "size ceiling is enforced");
+});
+
+test("a bundled app that does not hold the host slot offers a switch, not a blind install", async () => {
+  // Cast, Twetch, Explorer and Colosseum share the one localhost identity, so
+  // a catalog entry that is not the installed variant must offer to replace
+  // the holder — and install its own URL, never the bare host.
+  const views = await loadViews();
+  const appsView = views.find((v) => v.id === "apps");
+  const base = { params: {}, go() {}, toast() {}, fail() {}, run: (f) => f(), reload: async () => {}, openExternal() {}, openExplorer() {} };
+  const data = {
+    installed: [{ domain: "localhost", name: "Cast", startUrl: "https://localhost:2121/cast/", icon: null, spendCapSats: 1000000, intents: [] }],
+    store: [
+      { domain: "localhost", name: "Cast", blurb: "player", devOnly: false, status: "current", installed: true, live: null, changes: [], installUrl: "https://localhost:2121/cast/", holder: null },
+      { domain: "localhost", name: "bsvOS Explorer", blurb: "read-only", devOnly: false, status: "not-installed", installed: false, live: null, changes: [], installUrl: "https://localhost:2121/explorer/", holder: "Cast" },
+    ],
+  };
+  const html = appsView.render({ ...base, data });
+  assert.ok(/Switch to this app/.test(html), "the slot-mate offers a switch");
+  assert.ok(html.includes('data-install="https://localhost:2121/explorer/"'), "the switch installs the entry's own URL");
+  assert.ok(/replaces Cast/.test(html), "and says what the switch replaces");
+  // The handler must pass whatever data-install carries straight through.
+  const src = readApp("views/apps.js");
+  assert.ok(/const domain = i\.dataset\.install;/.test(src), "the handler reads the install URL");
+  assert.ok(/rpc\("appInstall", \{ domain \}\)/.test(src), "appInstall receives it unchanged");
+  // An installed app still opens when its manifest probe fails (unreachable);
+  // only the pinned copy matters until an update is actually wanted.
+  const stale = appsView.render({
+    ...base,
+    data: {
+      installed: [],
+      store: [{ domain: "old.example", name: "Old App", blurb: "", devOnly: false, status: "unreachable", installed: true, live: null, changes: [], installUrl: "https://old.example/", holder: null }],
+    },
+  });
+  assert.ok(/data-launch="old\.example"/.test(stale), "an installed app still offers Open when unreachable");
+  assert.ok(!/data-install="https:\/\/old\.example\//.test(stale), "and is not offered as a re-install");
 });
 
 test("views with no data degrade to empty states, not crashes", async () => {

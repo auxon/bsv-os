@@ -260,13 +260,24 @@ test("bsvos app: OIDC setup is possible in-app, and never exposes a secret", () 
   assert.ok(/SETUP_REQUIRED/.test(rpc), "SETUP_REQUIRED is explained, not dumped raw");
 });
 
-test("store catalog: bsvOS owns 127.0.0.1 and localhost stays shared", () => {
+test("store catalog: every bundled app gets its own entry, localhost stays shared", () => {
   const catalog = readCatalog();
-  const domains = catalog.apps.map((a) => a.domain);
-  assert.equal(new Set(domains).size, domains.length, "catalog domains are unique");
+  // Identities are host + directory (variants): the bundled apps share the
+  // localhost host at different paths, so domains repeat but paths must not.
+  const keys = catalog.apps.map((a) => `${a.domain}${a.url ? new URL(a.url).pathname : "/"}`);
+  assert.equal(new Set(keys).size, keys.length, "catalog identities are unique");
   const shell = catalog.apps.find((a) => a.domain === "127.0.0.1");
   assert.ok(shell, "bsvOS is catalogued");
   assert.equal(shell.name, "bsvOS");
-  const shared = catalog.apps.find((a) => a.domain === "localhost");
-  assert.ok(shared && /share this one localhost slot/.test(shared.blurb), "localhost slot documented as shared");
+  assert.equal(shell.url, "https://127.0.0.1:2121/bsvos/", "and installs from its own URL");
+  const shared = catalog.apps.filter((a) => a.domain === "localhost");
+  assert.deepEqual(
+    shared.map((a) => a.name).sort(),
+    ["Cast", "Ordinal Colosseum", "Twetch", "bsvOS Explorer"],
+    "all four shared-slot apps are catalogued",
+  );
+  for (const app of shared) {
+    assert.ok(/shares the localhost identity/i.test(app.blurb), `${app.name} documents the shared slot`);
+    assert.ok(app.url && /^https:\/\/localhost:2121\/\w+\/$/.test(app.url), `${app.name} has its own path URL`);
+  }
 });

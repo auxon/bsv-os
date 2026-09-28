@@ -40,7 +40,6 @@ export const apps = {
     if (ctx.data.loadError) return errorBox(explain(ctx.data.loadError));
     const installed = ctx.data.installed ?? [];
     const store = ctx.data.store ?? [];
-    const inStore = new Set(store.map((s) => s.domain));
 
     const installedCard = (a) => {
       const isSelf = a.domain === SELF_DOMAIN;
@@ -59,29 +58,40 @@ export const apps = {
       );
     };
 
+    // The store is variant-aware: bundled apps share the `localhost` host at
+    // different paths, so an entry that is not the installed variant is a
+    // switch (installing it replaces whatever holds the host), never an update.
+    const installUrlOf = (s) => s.installUrl ?? `https://${s.domain}/`;
     const storeCard = (s) => {
       const [tone, label] = STATUS[s.status] ?? ["", s.status ?? "unknown"];
       const isSelf = s.domain === SELF_DOMAIN;
+      const installUrl = installUrlOf(s);
       let action;
       if (s.status === "current" && isSelf) action = `<button class="btn primary" disabled>This app</button>`;
       else if (s.status === "current") action = `<button class="btn primary" data-launch="${esc(s.domain)}">Open</button>`;
+      else if (s.holder) action = `<button class="btn primary" data-install="${esc(installUrl)}">Switch to this app</button>`;
       else if (s.status === "available" || s.status === "widened" || s.status === "adopted")
         action =
           `<button class="btn" data-update="${esc(s.domain)}">Update</button>` +
           (s.status === "widened" ? `<button class="btn primary" data-widen="${esc(s.domain)}">Approve wider cap</button>` : "");
-      else action = `<button class="btn primary" data-install="${esc(s.domain)}">Install</button>`;
+      else if (s.installed) action = `<button class="btn primary" data-launch="${esc(s.domain)}">Open</button>`;
+      else action = `<button class="btn primary" data-install="${esc(installUrl)}">Install</button>`;
       return (
         `<div class="card">` +
           `<div class="card-top"><div class="icon">${esc(glyph(s.domain))}</div>` +
           `<div class="grow"><h3>${esc(s.name)}</h3><div class="card-sub">${esc(s.domain)}</div></div></div>` +
           `<p class="card-blurb">${esc(s.blurb ?? "")}</p>` +
-          `<div class="card-meta">${chip(label, tone)}${s.devOnly ? chip("dev only", "warn") : ""}</div>` +
+          `<div class="card-meta">${chip(label, tone)}${s.holder ? chip(`replaces ${s.holder}`, "warn") : ""}${s.devOnly ? chip("dev only", "warn") : ""}</div>` +
           `<div class="card-actions">${action}</div>` +
         `</div>`
       );
     };
 
-    const extra = installed.filter((a) => !inStore.has(a.domain));
+    // storeList is variant-aware: a bundled app that does not hold its host
+    // slot is still shown (as a switch), so an app counts as cataloged when
+    // its variant is listed as installed, not merely when its domain appears.
+    const covered = new Set(store.filter((s) => s.installed).map((s) => s.domain));
+    const extra = installed.filter((a) => !covered.has(a.domain));
     return (
       `<h2 class="sec">Installed (${installed.length})</h2>` +
       (installed.length ? `<div class="grid">${installed.map(installedCard).join("")}</div>` : empty("No apps installed.")) +
@@ -98,11 +108,18 @@ export const apps = {
       if (l) return openApp(ctx, l.dataset.launch);
       const i = e.target.closest("[data-install]");
       if (i) {
+        // The value is the entry's install URL (explicit for bundled apps on a
+        // shared host, the domain root otherwise) — appInstall takes both.
         const domain = i.dataset.install;
-        if (!(await confirmDialog("Install app", `${domain} will be able to ask to spend up to the cap in its manifest. You approve each request.`, "Install"))) return;
+        const entry = (ctx.data.store ?? []).find((s) => installUrlOf(s) === domain);
+        const holder = entry?.holder;
+        const why = `${entry?.name ?? domain} will be able to ask to spend up to the cap in its manifest.` +
+          (holder ? ` This replaces ${holder} on ${entry.domain}.` : "") +
+          " You approve each request.";
+        if (!(await confirmDialog(holder ? `Switch to ${entry?.name ?? domain}` : "Install app", why, holder ? "Switch" : "Install"))) return;
         return ctx.run(async () => {
           const res = await rpc("appInstall", { domain });
-          ctx.toast(`${res?.app?.name ?? domain} installed`);
+          ctx.toast(`${res?.app?.name ?? domain} ${holder ? "switched in" : "installed"}`);
           await ctx.reload();
         });
       }

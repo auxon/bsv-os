@@ -203,11 +203,12 @@ bsv pending                 # monitor queue
 bsv watch [filter] [--follow] [--since 2h|300] [--limit N] [--json]  # one filtered tail: payments, streams, x402, boards, cast, approvals
 bsv history                 # unified ledger: txs + requests + policies (F8 dashboard)
 bsv app install <domain>  # install a Metanet app (manifest + launcher)
+bsv app install https://localhost:2121/explorer/  # bundled apps: switch the shared localhost slot (cast|twetch|explorer|colosseum)
 bsv app install <domain> --manifest-file <path>  # dev install: same validation, no fetch
 bsv app open <domain>     # sandboxed runner window with window.bsv (browser fallback)
 bsv app list | bsv app remove <domain>
 bsv app update [<domain>|--all] [--approve-widening]  # re-pin; widening needs approval
-bsv store                   # curated catalog with live caps + update status
+bsv store                   # every bundled + catalog app, live caps + update status; slot-mates offer Switch
 bsv cert put --type=<t> --certifier=<key> --field <k>=<v>  # hold a signed cert
 bsv cert list | bsv cert show <id> [--fields a,b] | bsv cert revoke <id>
 bsv basket list | bsv basket balance [name]  # per-basket ledger

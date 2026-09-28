@@ -111,7 +111,7 @@ hundreds of actions — most cost a few hundred sats in miner fees.
 | Revoke | `bsv deny <name>` |
 | See who's approved | `bsv policies` / `bsv requests` |
 | Open an installed app | `bsv app open <domain>` (sandboxed window, not the browser) |
-| Browse the app store | `bsv store` (curated apps, requested caps, update status) |
+| Browse the app store | `bsv store` (every bundled + catalog app; slot-mates offer Switch) |
 | Update apps | `bsv app update --all` (permission widening asks first) |
 | Hold a certificate | `bsv cert put --type=<t> --certifier=<key> --field <k>=<v>` |
 | Disclose attributes | `bsv cert show <id> --fields a,b` (only those fields, logged) |

@@ -58,8 +58,12 @@ fetch skipped. Production installs stay https-manifest-only.
   Quickshell panel on macOS), `twetch/` (companion), `explorer/` (local chain
   explorer), `cast/` (camera/mic record and value-for-value playback), and
   `colosseum/` (Ordinal Colosseum: your ordinals fight).
-- `store.json`: curated catalog for `bsv store` (v1: the bundled shell, the
-   bundled feature apps' shared localhost slot, and the remote Metanet apps).
+- `store.json`: curated catalog for `bsv store` — every bundled app as its
+   own entry with its own install URL (the shell on `127.0.0.1`, and Cast,
+   Twetch, Explorer and Colosseum on the shared `localhost` slot), plus the
+   remote Metanet apps. Two entries may share a host when their paths differ;
+   the store shows which variant is installed and offers a **Switch** for its
+   slot-mates.
 
 ## The shell app (`apps/bsvos/`)
 
@@ -113,8 +117,10 @@ available for bundled apps:
 - `127.0.0.1` — owned by the **shell**, permanently.
 - `localhost` — shared by the bundled feature apps. Cast, Twetch, Explorer
   and Colosseum all resolve to `https://localhost:2121/<name>/`, so
-  installing one replaces whichever was there. Install the one you want and
-  open it from the shell; switching is one install away.
+  installing one replaces whichever was there. The store lists every one of
+  them separately: the entry whose path matches the installed `start_url` is
+  the installed variant, and the other three are offered as a **Switch**
+  (installing their URL replaces the holder). One click, no removal first.
 
 The `Origin` header a browser sends has no path, so the bridge can only pin
 a host — giving each bundled app its own policy identity needs per-app
