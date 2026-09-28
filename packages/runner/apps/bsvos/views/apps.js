@@ -30,8 +30,9 @@ const STATUS = {
  * different paths, so an entry that is not the installed variant is a switch
  * (installing it replaces whatever holds the host), never an update.
  *
- * Module scope on purpose: bind()'s click handler needs it too, and a copy
- * living inside render() made every Install/Switch click a ReferenceError.
+ * The URL appInstall takes for an entry: the catalog's explicit URL, else the
+ * domain root. Module scope on purpose — a render-scoped copy once made every
+ * Install/Switch click throw.
  */
 const installUrlOf = (s) => s.installUrl ?? `https://${s.domain}/`;
 
@@ -73,15 +74,20 @@ export const apps = {
       const isSelf = s.domain === SELF_DOMAIN;
       const installUrl = installUrlOf(s);
       let action;
+      // The install action carries its own entry data: the view silently
+      // reloads every 15s and clears ctx.data briefly, so a click landing in
+      // that window must not have to look the entry up again.
+      const installBtn = (label) =>
+        `<button class="btn primary" data-install="${esc(installUrl)}" data-name="${esc(s.name)}"${s.holder ? ` data-holder="${esc(s.holder)}"` : ""}>${label}</button>`;
       if (s.status === "current" && isSelf) action = `<button class="btn primary" disabled>This app</button>`;
       else if (s.status === "current") action = `<button class="btn primary" data-launch="${esc(s.domain)}">Open</button>`;
-      else if (s.holder) action = `<button class="btn primary" data-install="${esc(installUrl)}">Switch to this app</button>`;
+      else if (s.holder) action = installBtn("Switch to this app");
       else if (s.status === "available" || s.status === "widened" || s.status === "adopted")
         action =
           `<button class="btn" data-update="${esc(s.domain)}">Update</button>` +
           (s.status === "widened" ? `<button class="btn primary" data-widen="${esc(s.domain)}">Approve wider cap</button>` : "");
       else if (s.installed) action = `<button class="btn primary" data-launch="${esc(s.domain)}">Open</button>`;
-      else action = `<button class="btn primary" data-install="${esc(installUrl)}">Install</button>`;
+      else action = installBtn("Install");
       return (
         `<div class="card">` +
           `<div class="card-top"><div class="icon">${esc(glyph(s.domain))}</div>` +
@@ -116,16 +122,20 @@ export const apps = {
       if (i) {
         // The value is the entry's install URL (explicit for bundled apps on a
         // shared host, the domain root otherwise) — appInstall takes both.
+        // Name/holder ride on the button so the dialog never depends on
+        // ctx.data, which a background reload clears for a beat.
         const domain = i.dataset.install;
-        const entry = (ctx.data.store ?? []).find((s) => installUrlOf(s) === domain);
-        const holder = entry?.holder;
-        const why = `${entry?.name ?? domain} will be able to ask to spend up to the cap in its manifest.` +
-          (holder ? ` This replaces ${holder} on ${entry.domain}.` : "") +
+        const name = i.dataset.name || domain;
+        const holder = i.dataset.holder || null;
+        let host = domain;
+        try { host = new URL(domain).hostname; } catch { /* keep the URL */ }
+        const why = `${name} will be able to ask to spend up to the cap in its manifest.` +
+          (holder ? ` This replaces ${holder} on ${host}.` : "") +
           " You approve each request.";
-        if (!(await confirmDialog(holder ? `Switch to ${entry?.name ?? domain}` : "Install app", why, holder ? "Switch" : "Install"))) return;
+        if (!(await confirmDialog(holder ? `Switch to ${name}` : "Install app", why, holder ? "Switch" : "Install"))) return;
         return ctx.run(async () => {
           const res = await rpc("appInstall", { domain });
-          ctx.toast(`${res?.app?.name ?? domain} ${holder ? "switched in" : "installed"}`);
+          ctx.toast(`${res?.app?.name ?? name} ${holder ? "switched in" : "installed"}`);
           await ctx.reload();
         });
       }
