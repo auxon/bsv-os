@@ -3,11 +3,45 @@
 Omarchy remix with a system BRC-100 wallet. Every app, agent, and shell
 interaction can transact; keys never leave the daemon.
 
-Two front ends for the same daemon:
+Two front ends for the same daemon, and the capability always lives in the
+daemon first — both UIs drive the same JSON-RPC surface, so something built
+for one is usable from the other without new plumbing.
 
 - **Linux (Omarchy):** a Quickshell bar pill + panel — `packages/shell/plugin/`.
-- **macOS:** the **bsvOS shell app** — a bundled runner app that is the
-  replacement for that panel, plus the `bsv` CLI for everything.
+- **macOS:** the **bsvOS shell app** — a bundled runner app, plus the `bsv`
+  CLI for everything else.
+
+### The front-end split (decided, not drifted)
+
+The two UIs are **deliberately not at parity**, and neither is expected to
+catch up with the other:
+
+| | Quickshell panel (Linux) | bsvOS shell app (macOS) |
+| --- | --- | --- |
+| Scope | wallet-critical only | everything the daemon exposes |
+| Frozen at | 27 sections, ~3,200 lines | grows with each feature |
+| Examples | approvals, policy, agents, send/receive, requests, receipts, identity | the above plus inscribing, Twetch (feed/alerts/profile/memes/market), the app store, work boards, watch/commitments/funds, first-run setup |
+| Clipboard, links, file pickers | Wayland-only (`wl-copy`, `xdg-open`) | browser APIs |
+
+**Where a new feature goes.** Build the capability in `packages/walletd`
+always. Then:
+
+- **UI it in the shell app** (`packages/runner/apps/bsvos/`) — that is the
+  default home for anything user-facing.
+- **Add it to the panel only if it is wallet-critical** and you accept
+  maintaining it twice, because the panel cannot reuse the shell app's code
+  (QML vs a web page).
+- **CLI-only is a valid answer** for key-material paths and operator tooling.
+
+Precedent for the split: the panel's four platform problems — `wl-copy`,
+`xdg-open`, native file dialogs, and `systemd-run` for app launching — do not
+exist in a browser, so porting the panel to macOS would have meant rewriting
+it anyway. The shell app was that rewrite; the panel stays as the Linux bar
+integration it already was.
+
+If you are an agent picking this up: **do not mirror a new feature across
+both UIs.** Put it in the daemon, put it in the shell app, and leave the
+panel unless it is wallet-critical.
 
 ## Install
 
@@ -89,6 +123,17 @@ policy, agents, send/receive/pay, payment requests, receipts, identity and
 messaging, Twetch, the app store, and work boards. From then on the **Apps**
 view can open everything else. `bsv app open` blocks for the window's
 lifetime by design — background it (`&`) or use **Apps → Open** instead.
+
+**Sweeping.** `bsv sweep out <address>` empties this wallet into one address,
+computing the amount as balance-minus-fee so there is no number to work out;
+the shell's Send view offers the same as "Send everything". `bsv sweep in`
+moves everything at an external private key (an old single-key or paper
+wallet) into this wallet. That direction takes a WIF, so it is terminal-only
+with hidden input — a key must never pass through a page — and the sweep
+always pays *this* wallet: the daemon has no way to express any other
+destination, so a pasted key cannot be redirected. Inscriptions at the old
+address are held back rather than swept, because a sweep would put them into
+fees. Sweep-in is not policy-gated: nothing leaves this wallet.
 
 **A machine with no wallet lands on the Setup wizard**, which walks the
 remaining steps: unlock, name yourself, claim starter sats, pick a first
@@ -195,6 +240,9 @@ bsv unlock | bsv lock
 bsv balance                 # live chain lookup
 bsv anchor <sha256>         # policy-gated OP_RETURN timestamp
 bsv share <file>            # hash + anchor a file (label + explorer link)
+bsv send <address> <sats>   # exact-amount send (policy-gated)
+bsv sweep out <address>     # empty this wallet to an address: balance minus fee
+bsv sweep in                # move a WIF's funds INTO this wallet (hidden prompt)
 bsv allow <origin> [cap] [--auto] | bsv deny <origin> | bsv requests | bsv policies
 bsv jev status              # advisor on/off, model, auto-approval thresholds
 bsv jev decide --state <json|text|@file> --questions <json|@file>  # one calibrated decision
@@ -283,15 +331,49 @@ Setup, boundaries and the full panel-parity table:
 bsv mcp --agent=research-agent   # stdio server: Claude Code, OpenCode, etc.
 ```
 
-Core tools: `get_version`, `wallet_status`, `wallet_balance`, `anchor_tip`,
-`list_pending`, `x402_pay` (metered fetch, spends the agent's own budget
-through policy), `jev_decide` (calibrated decision calls, ~$0.00002 each),
-`jev_status`, and `trust_terms` (this wallet's verified Trust profile; see
-below). The full agent surface is tabulated in [SKILLS.md](SKILLS.md). Every
-call is stamped with the agent name, so daemon policy and the custody lock
-apply per-agent. A first-run denial surfaces as
-`ask your human to run: bsv allow research-agent` — the agent loop closes
-without ever touching keys.
+**45 tools** across the whole surface — wallet (`wallet_status`,
+`wallet_balance`, `list_pending`, `get_version`), memory (`memory_remember`,
+`memory_recall`, `memory_forget`), boards, streams, capsules, cast, markets,
+gigs, commitments, funds proofs, `watch_poll`, `x402_pay` (metered fetch,
+spending the agent's own budget through policy), Jev (`jev_decide`,
+`jev_status`), and Trust (`trust_terms`: this wallet's verified Trust
+profile; see below). Every call is stamped with the agent name, so daemon
+policy and the custody lock apply per-agent. A first-run denial surfaces as
+`ask your human to run: bsv allow <agent>` — the agent loop closes without
+ever touching keys.
+
+### Wiring it into a client
+
+The server is stdio, so a client just spawns it. Two things bite:
+
+- **`bsv` must be on the spawned PATH**, and its `#!/usr/bin/env node` shebang
+  needs `node` too. MCP clients often spawn with a minimal environment; under
+  `PATH=/usr/bin:/bin` the server dies with `env: node: No such file or
+  directory` (exit 127) and the client just shows the server as unavailable.
+  Spawning through a login shell fixes it, because that reads your profile:
+
+  ```jsonc
+  // ~/.config/opencode/opencode.jsonc
+  "mcp": {
+    "bsv": {
+      "type": "local",
+      "command": ["/bin/zsh", "-lc", "exec bsv mcp --agent=opencode"],
+      "enabled": true
+    }
+  }
+  ```
+
+  Use `-lc` (login, non-interactive), not `-lic`: an interactive shell can
+  print a banner to stdout, which corrupts the JSON-RPC stream.
+- **Memory tool arguments are snake_case**: `include_public`, not
+  `includePublic`. Unknown arguments are silently dropped rather than
+  rejected, so a wrong name returns a plausible empty result instead of an
+  error — worth knowing before concluding the memory is empty.
+
+Restart the client after editing its config; MCP servers are spawned at
+startup. The agent then needs a policy before it can spend, including the
+~20 sats a public memory post costs: `bsv allow <agent> <cap>`.
+>>>>>>> origin/main
 
 Agent instructions live in [SKILLS.md](SKILLS.md) — point any MCP-capable
 agent at it.

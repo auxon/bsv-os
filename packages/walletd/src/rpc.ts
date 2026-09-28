@@ -20,7 +20,7 @@ import {
 import { parseDurationMs } from "./watch.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
-import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo } from "./engine.ts";
+import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
@@ -425,6 +425,49 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       ...(typeof label === "string" && label ? { label } : {}),
     });
     return { txid: r.txid, fee: r.fee };
+  },
+  /**
+   * Sweep OUT: empty this wallet into one address, amount = balance - fee.
+   * Policy-gated like `send`, because these are the wallet's own sats leaving.
+   */
+  sweepOut: async (params) => {
+    const b = needBackend();
+    const { to, memo, label, origin } = p(params) as {
+      to?: unknown; memo?: unknown; label?: unknown; origin?: unknown;
+    };
+    if (typeof to !== "string" || !to) {
+      throw Object.assign(new Error("destination address required"), { code: "BAD_PARAM" });
+    }
+    const r = await sweepOut({
+      db: b.db, chain: b.chain,
+      origin: typeof origin === "string" && origin ? origin : "cli",
+      to,
+      ...(Array.isArray(memo) ? { memo: memo as string[] } : {}),
+      ...(typeof label === "string" && label ? { label } : {}),
+    });
+    return { txid: r.txid, fee: r.fee, sats: r.sats };
+  },
+  /**
+   * Sweep IN: move everything at a foreign key (WIF) into this wallet.
+   *
+   * The WIF arrives over the local socket exactly as `importWallet`'s phrase
+   * does; the CLI reads it from a hidden prompt so it never reaches argv or a
+   * shell history, and the shell app has no field for it. The destination is
+   * fixed to this wallet inside custody — see sweepSigner.
+   *
+   * Not policy-gated on purpose: nothing leaves this wallet. There is no
+   * approval to give, and gating an inflow would be theatre.
+   */
+  sweepIn: async (params) => {
+    const b = needBackend();
+    const { wif, label } = p(params) as { wif?: unknown; label?: unknown };
+    if (typeof wif !== "string" || !wif.trim()) {
+      throw Object.assign(new Error("private key (WIF) required"), { code: "BAD_PARAM" });
+    }
+    return sweepIn({
+      db: b.db, chain: b.chain, wif,
+      ...(typeof label === "string" && label ? { label } : {}),
+    });
   },
   anchor: async (params) => {
     const b = needBackend();
