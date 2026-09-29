@@ -46,6 +46,20 @@ const resultEl = $("result");
 const pickedEl = $("picked");
 const animNoteEl = $("anim-note");
 
+// AdFeed sponsored memes: the campaign pays viewers per click from a
+// funder-provided budget. Public endpoints, no keys in the page.
+const ADFEED_BASE = "https://adfeed.entangleit.com";
+async function adfeed(path, body) {
+  const res = await fetch(`${ADFEED_BASE}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error ?? `adfeed ${res.status}`);
+  return data;
+}
+
 const state = {
   items: [],
   cursor: null,
@@ -62,6 +76,10 @@ const state = {
   feeEstimate: null,
   confirm: createPostConfirm(),
   confirmTimer: null,
+  lastTxid: null,
+  campaign: null, // { id, depositAddress, depositAmount }
+  fundConfirm: createPostConfirm(),
+  fundTimer: null,
 };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -345,6 +363,8 @@ async function post() {
       (res?.submitted === false ? `<br>on-chain only: ${esc(res?.submitDetail ?? "")}` : "") +
       `</div>`;
     setStatus("posted — nice.");
+    state.lastTxid = txid || null;
+    showSponsor();
     refreshStatus();
   } catch (err) {
     resultEl.innerHTML = `<div class="notice bad">post failed [${esc(err.code ?? "")}]: ${esc(err.message)}</div>`;
@@ -391,6 +411,115 @@ $("back-btn").addEventListener("click", () => {
 });
 $("download-btn").addEventListener("click", () => void download());
 postBtn.addEventListener("click", () => void post());
+
+function showSponsor() {
+  if (!state.lastTxid || !state.selected) return;
+  $("sponsor").classList.remove("hidden");
+  if (!$("s-url").value) $("s-url").value = `https://twetch.com/t/${state.lastTxid}`;
+  $("sponsor-out").innerHTML = "";
+  state.campaign = null;
+  document.querySelector("#sponsor button").textContent = "Create campaign";
+  $("sponsor").scrollIntoView();
+}
+
+async function createCampaign() {
+  const box = $("sponsor-out");
+  if (!state.lastTxid) return;
+  const payout = Math.floor(Number($("s-payout").value) || 0);
+  const budget = Math.floor(Number($("s-budget").value) || 0);
+  const fee = Math.floor(Number($("s-fee").value) || 0);
+  const url = $("s-url").value.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    box.innerHTML = `<div class="notice bad">destination link must be an http(s) URL.</div>`;
+    return;
+  }
+  box.innerHTML = `<p class="hint">creating campaign…</p>`;
+  try {
+    const title = `Meme: ${(state.selected.title || "untitled").slice(0, 70)}`;
+    const r = await adfeed("/api/ads", {
+      title,
+      body: postTextEl.value.trim().slice(0, 300) || title,
+      url,
+      type: "click",
+      minSeconds: 5,
+      payoutSats: payout,
+      feeSats: fee,
+      budgetSats: budget,
+      memeTxid: state.lastTxid,
+    });
+    if (!r.deposit) throw new Error("no deposit address returned");
+    // manageToken lives in page memory only: it authorizes pause + status.
+    state.campaign = { id: r.id, manageToken: r.manageToken, depositAddress: r.deposit.address, depositAmount: r.deposit.amount };
+    box.innerHTML = `<div class="notice ok">campaign <b>${esc(r.id)}</b> pending — fund it to go live (${esc(r.actions ?? "?")} actions).` +
+      `<div class="card-sub mono" style="margin-top:6px">${esc(r.deposit.address)}</div>` +
+      `<div class="card-actions"><button class="btn tiny" data-copy="${esc(r.deposit.address)}">Copy address</button> ` +
+      `<button class="btn tiny primary" data-fund="${esc(String(r.deposit.amount))}">Fund ${esc(fmtSats(r.deposit.amount))} from wallet</button> ` +
+      `<button class="btn tiny" data-status="${esc(r.id)}">Check status</button></div></div>` +
+      `<p class="hint">Keep the manage token the API returned in-terminal if you need pause later; funding is a plain wallet send.</p>`;
+  } catch (err) {
+    box.innerHTML = `<div class="notice bad">campaign failed: ${esc(err.message)}</div>`;
+  }
+}
+
+async function fundCampaign(amount) {
+  const c = state.campaign;
+  if (!c) return;
+  // Two-step, naming amount + destination like the Post button.
+  if (state.fundConfirm.press() === "arm") {
+    const btn = document.querySelector("[data-fund]");
+    if (btn) btn.textContent = `Confirm fund ${fmtSats(amount)}`;
+    clearTimeout(state.fundTimer);
+    state.fundTimer = setTimeout(() => {
+      state.fundConfirm.reset();
+      const b = document.querySelector("[data-fund]");
+      if (b) b.textContent = `Fund ${fmtSats(amount)} from wallet`;
+    }, 10000);
+    return;
+  }
+  clearTimeout(state.fundTimer);
+  state.fundConfirm.reset();
+  setStatus(`funding campaign ${c.id}…`);
+  try {
+    const res = await rpc("pay", { to: c.depositAddress, sats: amount, note: `adfeed ${c.id}` });
+    setStatus(`funded — polling for activation. ${res?.txid ?? ""}`);
+    await checkCampaign();
+  } catch (err) {
+    setStatus(`fund failed [${err.code ?? ""}]: ${err.message}`);
+  }
+}
+
+async function checkCampaign() {
+  const box = $("sponsor-out");
+  const c = state.campaign;
+  if (!c?.id) return;
+  try {
+    if (!c.manageToken) throw new Error("no manage token for this campaign");
+    const r = await adfeed("/api/ads/status", { id: c.id, manageToken: c.manageToken });
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent = `campaign ${r.state ?? "?"} — received ${r.depositSats ?? 0} of ${r.budgetSats ?? "?"} sats (${r.actions ?? "?"} actions).`;
+    box.appendChild(note);
+    if (r.state === "active") setStatus("campaign live — viewers earn per click.");
+  } catch (err) {
+    setStatus(`status check failed: ${err.message}`);
+  }
+}
+
+$("sponsor-btn").addEventListener("click", () => void createCampaign());
+$("sponsor-out").addEventListener("click", (e) => {
+  const cp = e.target.closest("[data-copy]");
+  if (cp && navigator.clipboard) {
+    navigator.clipboard.writeText(cp.dataset.copy).catch(() => {});
+    return;
+  }
+  const f = e.target.closest("[data-fund]");
+  if (f) {
+    void fundCampaign(Number(f.dataset.fund));
+    return;
+  }
+  const s = e.target.closest("[data-status]");
+  if (s) void checkCampaign();
+});
 
 (async function boot() {
   $("q").value = state.q;

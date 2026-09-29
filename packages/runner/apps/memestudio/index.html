@@ -72,6 +72,21 @@
       </div>
       <div id="result"></div>
     </section>
+
+    <section id="sponsor" class="hidden">
+      <h2>3 · Sponsor it <span class="tag">optional — pays viewers per click</span></h2>
+      <p class="hint">Creates an AdFeed campaign for this meme: viewers click through and earn sats from your budget, instantly on-chain. You fund a deposit address; unspent budgets are refundable.</p>
+      <div class="fields">
+        <label>Destination link <input id="s-url" type="text" placeholder="https://…" autocomplete="off" /></label>
+        <label>Payout per click (sats) <input id="s-payout" type="number" min="100" step="50" value="500" /></label>
+        <label>Budget (sats, min 1000) <input id="s-budget" type="number" min="1000" step="500" value="10000" /></label>
+        <label>Platform fee (sats) <input id="s-fee" type="number" min="0" step="50" value="250" /></label>
+      </div>
+      <div class="actions">
+        <button id="sponsor-btn" type="button" class="primary">Create campaign</button>
+      </div>
+      <div id="sponsor-out"></div>
+    </section>
   </main>
 
   <script type="module" src="app.js"></script>
