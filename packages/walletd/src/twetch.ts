@@ -309,10 +309,14 @@ export async function postText(
     mediaRef = `b://${Utils.toHex(Hash.sha256(media.bytes))}`;
   }
 
-  // Twetch's composer adds attached media to the post as an on-chain ref
-  // ("added to your post as a link"): the ref is part of the signed text
-  // and drives image rendering on twetch.com.
-  const text = mediaRef ? `${base}\n\n${mediaRef}` : base;
+  // The signed text stays clean: the media ref travels ONLY in mediaRefs
+  // on submit (below). An earlier version appended `b://<sha256>` to the
+  // text like Twetch's composer does — but that hash resolves solely for
+  // Twetch-hosted media, so every post rendered TWO images on twetch.com:
+  // the working outpoint ref plus a blank box (verified against live post
+  // records: files=[b://<txid>@1, b://<sha256>]). The indexer adds the
+  // outpoint ref from the submitted txHex on its own, which renders alone.
+  const text = base;
   if (Utils.toArray(text, "utf8").length > 2000) fail("BAD_PARAM", "post content too large");
   const address = await twetchAddress();
   if (!address) fail("NO_TWETCH_ACCOUNT", "no Twetch key imported — run: bsv twetch account import");

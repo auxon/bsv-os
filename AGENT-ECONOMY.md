@@ -321,11 +321,16 @@ refs**, resolved through the indexer:
 
 What the daemon does to make images render:
 
-1. Appends the media's `b://<sha256>` ref to the **signed post text**
-   (Twetch's composer behavior: "added to your post as a link").
-2. Sends `mediaRefs` on submit, so the indexer links the media output.
+1. Keeps the **signed post text clean** — no `b://` ref appended. (An
+   earlier version copied Twetch's composer behavior, "added to your post
+   as a link" — but that hash resolves solely for Twetch-hosted media, so
+   every post rendered a second, blank image next to the real one. Live
+   post records showed `files=[b://<txid>@1, b://<sha256>]`.)
+2. Sends the media's `b://<sha256>` in `mediaRefs` on submit, so the
+   indexer links the media output.
 3. The indexer parses the submitted `txHex` and adds the outpoint ref
-   (`b://<txid>@1`) to `files` — the web app renders the first ref.
+   (`b://<txid>@1`) to `files` — with clean text that is the only entry,
+   so the post renders exactly one image.
 
 Verified end to end: a listing photo (11,806-byte JPEG) published as
 `OP_0 OP_RETURN B_PREFIX <bytes> image/jpeg`, ref `b://<txid>@1`, resolver
@@ -334,7 +339,7 @@ returned `200 image/jpeg` with byte-identical content.
 **Practical rules:** downscale photos client-side before embedding
 (≤ ~180 KB JPEG is plenty; four quality steps down from 1024px), keep the
 1 MB hard cap in mind, and never print raw sha256 prose in the post text —
-the ref is the image.
+it renders as a second, blank image next to the real one.
 
 ### 5.5 Identity and the custody boundary
 

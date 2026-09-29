@@ -722,8 +722,14 @@ test("twetch: posting with media embeds a second OP_RETURN and pays for it", asy
     );
     assert.equal(res.mediaBytes, media.length);
     assert.equal(res.submitted, true);
-    const expectedText = `vintage chair for sale\n\n${mediaRef}`;
+    // Regression guard for the double-image bug: the signed text must NOT
+    // carry the b:// hash ref (it renders as a blank second image, because
+    // the hash only resolves for Twetch-hosted media). The ref travels in
+    // mediaRefs instead, and the indexer adds the outpoint ref from txHex —
+    // so the post renders exactly one image.
+    const expectedText = "vintage chair for sale";
     assert.equal(res.content, expectedText);
+    assert.ok(!/b:\/\//.test(res.content), "no on-chain ref leaked into the post text");
 
     const hex = broadcasted.get(res.txid);
     const tx = Transaction.fromHex(hex);
@@ -731,13 +737,13 @@ test("twetch: posting with media embeds a second OP_RETURN and pays for it", asy
     assert.equal(opReturns.length, 2, "text post + media output");
     assert.equal(opReturns[1].lockingScript.toHex(), buildMediaScript(media, "image/jpeg"));
     const aip = aipFromScript(opReturns[0].lockingScript.toHex());
-    assert.equal(aip.fields[1], expectedText, "b:// ref is part of the signed post text");
+    assert.equal(aip.fields[1], expectedText, "AIP signs the clean text");
     assert.equal(verifyAip(expectedText, { address: aip.address, signature: aip.signature }), true);
 
     assert.equal(apiCalls.length, 1, "post submitted to the Twetch API");
     const body = JSON.parse(apiCalls[0].init.body);
     assert.equal(body.content, expectedText);
-    assert.deepEqual(body.mediaRefs, [mediaRef], "mediaRefs drives twetch.com rendering");
+    assert.deepEqual(body.mediaRefs, [mediaRef], "mediaRefs still drives twetch.com rendering");
 
     // Recovery path: re-submitting an already-broadcast post parses the tx
     // back (content + media sha) instead of needing the original text.
