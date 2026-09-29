@@ -6,6 +6,7 @@ import {
   EXPORT_TARGET_BYTES,
   MEDIA_MAX_BYTES,
   POST_TEXT_BUDGET,
+  createPostConfirm,
   estimateFeeSats,
   layoutCaption,
 } from "./caption.js";
@@ -58,6 +59,9 @@ const state = {
   account: null,
   identity: null,
   posting: false,
+  feeEstimate: null,
+  confirm: createPostConfirm(),
+  confirmTimer: null,
 };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -249,22 +253,42 @@ async function exportMeme() {
   }
 }
 
+/** The Post button's disabled state and label live here, nowhere else. */
+function paintPostBtn() {
+  const blocker = postBlocker();
+  const bal = state.balance?.confirmed;
+  const fee = state.feeEstimate;
+  postBtn.disabled = Boolean(blocker || state.posting || !state.img) ||
+    (typeof bal === "number" && typeof fee === "number" && bal < fee);
+  postBtn.textContent = state.confirm.armed() && typeof fee === "number"
+    ? `Confirm post (~${fmtSats(fee)})`
+    : "Post to Twetch";
+}
+
 function updateFeeLine() {
   if (!state.img) {
+    state.feeEstimate = null;
     feeEl.textContent = "";
-    postBtn.disabled = true;
+    paintPostBtn();
     return;
   }
   const blocker = postBlocker();
   // Rough size cue: current canvas pixels ≈ JPEG bytes within a factor of two.
   const guess = Math.floor((canvas.width * canvas.height) / 6);
   const fee = estimateFeeSats(Math.min(guess, EXPORT_TARGET_BYTES));
+  state.feeEstimate = fee;
   const bal = state.balance?.confirmed;
   const balText = typeof bal === "number" ? ` · balance ${fmtSats(bal)}` : "";
   feeEl.textContent = `posting writes the image on-chain: roughly ${fmtSats(fee)} in fees${balText}.` +
     (blocker ? ` ${blocker}` : "");
-  postBtn.disabled = Boolean(blocker || state.posting) ||
-    (typeof bal === "number" && bal < fee);
+  paintPostBtn();
+}
+
+/** Any edit re-arms: the confirm names the fee, so stale confirms die. */
+function disarm() {
+  state.confirm.reset();
+  clearTimeout(state.confirmTimer);
+  paintPostBtn();
 }
 
 async function download() {
@@ -284,6 +308,16 @@ async function download() {
 async function post() {
   const blocker = postBlocker();
   if (blocker || state.posting || !state.selected) return;
+  // Two-step spend: the first click arms and names the fee, the second
+  // click within 10s fires. Matches the shell's "spending is confirmed".
+  if (state.confirm.press() === "arm") {
+    paintPostBtn();
+    clearTimeout(state.confirmTimer);
+    state.confirmTimer = setTimeout(disarm, 10000);
+    return;
+  }
+  clearTimeout(state.confirmTimer);
+  state.confirm.reset();
   const text = postTextEl.value.trim();
   if (text.length > POST_TEXT_BUDGET) {
     resultEl.innerHTML = `<div class="notice bad">post text is over the ${POST_TEXT_BUDGET}-char budget.</div>`;
@@ -318,6 +352,7 @@ async function post() {
   } finally {
     state.posting = false;
     updateFeeLine();
+    paintPostBtn();
   }
 }
 
@@ -336,8 +371,18 @@ gridEl.addEventListener("click", (e) => {
   const t = e.target.closest("[data-pick]");
   if (t) void select(Number(t.dataset.pick));
 });
-for (const el of [topEl, bottomEl]) el.addEventListener("input", drawPreview);
-for (const el of [fmtEl, qualityEl]) el.addEventListener("change", updateFeeLine);
+for (const el of [topEl, bottomEl, postTextEl]) {
+  el.addEventListener("input", () => {
+    disarm();
+    drawPreview();
+  });
+}
+for (const el of [fmtEl, qualityEl]) {
+  el.addEventListener("change", () => {
+    disarm();
+    updateFeeLine();
+  });
+}
 $("back-btn").addEventListener("click", () => {
   editorEl.classList.add("hidden");
   state.selected = null;

@@ -20,6 +20,33 @@ export function estimateFeeSats(bytes) {
 }
 
 /**
+ * Two-step spend confirmation: the first press arms ("are you sure, naming
+ * the amount"), the second press within the window fires. Pure state, no
+ * DOM — the app wires it to the Post button so a ~75k-sat post can never
+ * go out on a single stray click. now() is injectable for tests.
+ */
+export function createPostConfirm({ windowMs = 10000, now = () => Date.now() } = {}) {
+  let armedUntil = 0;
+  return {
+    press() {
+      const t = now();
+      if (t < armedUntil) {
+        armedUntil = 0;
+        return "fire";
+      }
+      armedUntil = t + Math.max(1, windowMs);
+      return "arm";
+    },
+    armed() {
+      return now() < armedUntil;
+    },
+    reset() {
+      armedUntil = 0;
+    },
+  };
+}
+
+/**
  * Word-wrap one paragraph to lines of at most maxChars. Over-long words are
  * split hard (URLs, hashes). Returns [] for blank input.
  */

@@ -7,6 +7,7 @@ import {
   EXPORT_TARGET_BYTES,
   MEDIA_MAX_BYTES,
   POST_TEXT_BUDGET,
+  createPostConfirm,
   estimateFeeSats,
   fitText,
   layoutCaption,
@@ -79,6 +80,29 @@ test("budgets leave room for the media ref and the media cap", () => {
   assert.ok(EXPORT_TARGET_BYTES < MEDIA_MAX_BYTES, "export target stays under the daemon cap");
   assert.ok(estimateFeeSats(80_000) >= 80_000, "fee estimate never under-promises the bytes");
   assert.equal(estimateFeeSats(0), 1000, "empty export still prices overhead");
+});
+
+test("post confirm arms on first press and fires on the second within the window", () => {
+  let t = 1000;
+  const c = createPostConfirm({ windowMs: 10000, now: () => t });
+  assert.equal(c.armed(), false);
+  assert.equal(c.press(), "arm");
+  assert.equal(c.armed(), true);
+  t += 9999;
+  assert.equal(c.press(), "fire");
+  assert.equal(c.armed(), false, "firing disarms");
+});
+
+test("an expired arm needs a fresh arm, and reset disarms", () => {
+  let t = 0;
+  const c = createPostConfirm({ windowMs: 10000, now: () => t });
+  assert.equal(c.press(), "arm");
+  t += 10001;
+  assert.equal(c.armed(), false);
+  assert.equal(c.press(), "arm", "expired arm presses as a new arm, never a fire");
+  c.reset();
+  assert.equal(c.armed(), false);
+  assert.equal(c.press(), "arm");
 });
 
 test("memestudio manifest validates on the localhost slot", () => {
