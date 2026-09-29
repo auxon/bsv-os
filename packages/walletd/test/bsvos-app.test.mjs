@@ -280,8 +280,8 @@ test("store catalog: every bundled app gets its own entry, localhost stays share
   const shared = catalog.apps.filter((a) => a.domain === "localhost");
   assert.deepEqual(
     shared.map((a) => a.name).sort(),
-    ["Cast", "Ordinal Colosseum", "Twetch", "bsvOS Explorer"],
-    "all four shared-slot apps are catalogued",
+    ["Cast", "Meme Studio", "Ordinal Colosseum", "Twetch", "bsvOS Explorer"],
+    "all five shared-slot apps are catalogued",
   );
   for (const app of shared) {
     assert.ok(/shares the localhost identity/i.test(app.blurb), `${app.name} documents the shared slot`);

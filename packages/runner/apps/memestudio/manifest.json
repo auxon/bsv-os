@@ -1,0 +1,13 @@
+{
+  "name": "Meme Studio",
+  "short_name": "Memes",
+  "start_url": "https://localhost:2121/memestudio/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Meme Studio: search the Twetch Meme Library, caption templates on a canvas, and post finished memes on-chain through the OS wallet (network fee only).",
+      "spendingAuthorization": { "amount": 1000000, "description": "network fees for meme posts (each post still gates on policy)" }
+    }
+  }
+}

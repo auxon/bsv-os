@@ -40,6 +40,12 @@
       "url": "https://localhost:2121/colosseum/",
       "name": "Ordinal Colosseum",
       "blurb": "Ordinal Colosseum: reads your 1Sat ordinals through the local wallet, runs deterministic battles on this machine, and can inscribe an optional 1-sat champion medal. Shares the localhost identity with Cast, Twetch and Explorer — switching replaces whichever is installed."
+    },
+    {
+      "domain": "localhost",
+      "url": "https://localhost:2121/memestudio/",
+      "name": "Meme Studio",
+      "blurb": "Search the Twetch Meme Library, caption templates, and post finished memes on-chain through the OS wallet. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
     }
   ]
 }

@@ -56,11 +56,13 @@ fetch skipped. Production installs stay https-manifest-only.
   `bsvos/` (**the system shell**: wallet, approvals, policy, agents, money,
   identity, messaging, apps/store, and work boards — the replacement for the
   Quickshell panel on macOS), `twetch/` (companion), `explorer/` (local chain
-  explorer), `cast/` (camera/mic record and value-for-value playback), and
-  `colosseum/` (Ordinal Colosseum: your ordinals fight).
+  explorer), `cast/` (camera/mic record and value-for-value playback),
+  `colosseum/` (Ordinal Colosseum: your ordinals fight), and `memestudio/`
+  (Meme Studio: caption Meme Library templates, post them on-chain).
 - `store.json`: curated catalog for `bsv store` — every bundled app as its
    own entry with its own install URL (the shell on `127.0.0.1`, and Cast,
-   Twetch, Explorer and Colosseum on the shared `localhost` slot), plus the
+   Twetch, Explorer, Colosseum and Meme Studio on the shared `localhost`
+   slot), plus the
    remote Metanet apps. Two entries may share a host when their paths differ;
    the store shows which variant is installed and offers a **Switch** for its
    slot-mates.
@@ -115,11 +117,11 @@ URL. The daemon only ever binds `127.0.0.1:2121`, and only `localhost` /
 available for bundled apps:
 
 - `127.0.0.1` — owned by the **shell**, permanently.
-- `localhost` — shared by the bundled feature apps. Cast, Twetch, Explorer
-  and Colosseum all resolve to `https://localhost:2121/<name>/`, so
-  installing one replaces whichever was there. The store lists every one of
-  them separately: the entry whose path matches the installed `start_url` is
-  the installed variant, and the other three are offered as a **Switch**
+- `localhost` — shared by the bundled feature apps. Cast, Twetch, Explorer,
+  Colosseum and Meme Studio all resolve to `https://localhost:2121/<name>/`,
+  so installing one replaces whichever was there. The store lists every one
+  of them separately: the entry whose path matches the installed `start_url`
+  is the installed variant, and the others are offered as a **Switch**
   (installing their URL replaces the holder). One click, no removal first.
 
 The `Origin` header a browser sends has no path, so the bridge can only pin

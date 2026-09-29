@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meme Studio — caption and post Twetch memes</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Meme Studio</h1>
+    <p id="status" class="status">connecting…</p>
+  </header>
+
+  <main>
+    <section id="browse">
+      <h2>1 · Pick a template</h2>
+      <form id="search-form">
+        <label>Search <input id="q" type="search" placeholder="meme template" autocomplete="off" /></label>
+        <label>Format
+          <select id="format">
+            <option value="">any still</option>
+            <option value="jpg">jpg</option>
+            <option value="png">png</option>
+            <option value="webp">webp</option>
+            <option value="gif">gif</option>
+          </select>
+        </label>
+        <label>Sort
+          <select id="sort">
+            <option value="">default</option>
+            <option value="recent">recent</option>
+            <option value="oldest">oldest</option>
+            <option value="popular">popular</option>
+          </select>
+        </label>
+        <button type="submit">Search</button>
+      </form>
+      <p class="hint">Blank templates live in the Twetch Meme Library — try “meme template”. Folders and tags do not filter server-side, so search is the way in.</p>
+      <div id="grid" class="grid"></div>
+      <button id="more-btn" type="button" class="hidden">Load more</button>
+    </section>
+
+    <section id="editor" class="hidden">
+      <h2>2 · Caption it</h2>
+      <p id="picked" class="hint"></p>
+      <p id="anim-note" class="hint hidden">Animated template: the post is a still (first frame).</p>
+      <canvas id="canvas"></canvas>
+      <div class="fields">
+        <label>Top text <input id="top" type="text" maxlength="160" placeholder="TOP TEXT" autocomplete="off" /></label>
+        <label>Bottom text <input id="bottom" type="text" maxlength="160" placeholder="BOTTOM TEXT" autocomplete="off" /></label>
+        <label>Post text <input id="post-text" type="text" maxlength="1900" placeholder="say something about it (optional)" autocomplete="off" /></label>
+        <label>Export
+          <select id="export-fmt">
+            <option value="jpeg">JPEG (small, cheap on-chain)</option>
+            <option value="png">PNG (crisp, bigger)</option>
+          </select>
+        </label>
+        <label>JPEG quality
+          <select id="quality">
+            <option value="0.92">high</option>
+            <option value="0.85" selected>medium</option>
+            <option value="0.75">low</option>
+          </select>
+        </label>
+      </div>
+      <p id="fee-line" class="hint"></p>
+      <div class="actions">
+        <button id="back-btn" type="button">← Templates</button>
+        <button id="download-btn" type="button">Download PNG</button>
+        <button id="post-btn" type="button" class="primary">Post to Twetch</button>
+      </div>
+      <div id="result"></div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
