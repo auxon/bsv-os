@@ -142,6 +142,7 @@ approval count.
 | Receipt a purchase | `bsv receipt issue --request <id>` (a paid ask) or `--txid <txid> --to <@name> --amount <sats> [--memo ".."]` — inscribes a signed receipt as a 1Sat ordinal and delivers it in the same transaction; `bsv receipt list` |
 | Pay per API call | `bsv x402 pay <url>` (quotes, pays, returns resource + receipt) |
 | Work a paid gig | `bsv gig board` → `bsv gig track <id>` → claim/submit (agentpay key for rails) → earnings land in the earnings basket |
+| Ask a funded question | `bsv ask post --title <t> --details <text> --amount <sats≥5000>` (free, off-chain; pays only when you accept an answer) → answers arrive in-thread → `bsv ask accept <answerId>` previews, `bsv pay` settles. Or use the AskAnything app, which adds Jev triage/grading. |
 | Schedule recurring work | `bsv nightshift create --name <n> --agent <a> --every 1h --budget <sats>` — cycles claim/submit/approve against the agent's budget |
 | Explore overlays | `bsv overlay topics` → `bsv overlay lookup <tm_token> --address <addr>` (token UTXOs; tagging via `overlay submit`) |
 | Survive losing the phrase | `bsv recovery setup --need 2 --guardian Ana --guardian Bo` — any 2 of 3 cards re-enroll. Cards print once; rotate to revoke. |

@@ -57,12 +57,13 @@ fetch skipped. Production installs stay https-manifest-only.
   identity, messaging, apps/store, and work boards — the replacement for the
   Quickshell panel on macOS), `twetch/` (companion), `explorer/` (local chain
   explorer), `cast/` (camera/mic record and value-for-value playback),
-  `colosseum/` (Ordinal Colosseum: your ordinals fight), and `memestudio/`
-  (Meme Studio: caption Meme Library templates, post them on-chain).
+  `colosseum/` (Ordinal Colosseum: your ordinals fight), `memestudio/`
+  (Meme Studio: caption Meme Library templates, post them on-chain), and
+  `askanything/` (AskAnything: funded questions, paid answers).
 - `store.json`: curated catalog for `bsv store` — every bundled app as its
    own entry with its own install URL (the shell on `127.0.0.1`, and Cast,
-   Twetch, Explorer, Colosseum and Meme Studio on the shared `localhost`
-   slot), plus the
+   Twetch, Explorer, Colosseum, Meme Studio and AskAnything on the shared
+   `localhost` slot), plus the
    remote Metanet apps. Two entries may share a host when their paths differ;
    the store shows which variant is installed and offers a **Switch** for its
    slot-mates.
@@ -118,7 +119,8 @@ available for bundled apps:
 
 - `127.0.0.1` — owned by the **shell**, permanently.
 - `localhost` — shared by the bundled feature apps. Cast, Twetch, Explorer,
-  Colosseum and Meme Studio all resolve to `https://localhost:2121/<name>/`,
+  Colosseum, Meme Studio and AskAnything all resolve to
+  `https://localhost:2121/<name>/`,
   so installing one replaces whichever was there. The store lists every one
   of them separately: the entry whose path matches the installed `start_url`
   is the installed variant, and the others are offered as a **Switch**

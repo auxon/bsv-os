@@ -1292,6 +1292,62 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "ask": {
+      // AskAnything: funded questions on the askanything board. Asking and
+      // answering are free and off-chain; only the accept payment moves
+      // sats (human-confirmed through the pay path, never here).
+      const [aSub, ...aRest] = rest;
+      const aBoard = flag(aRest, "board") ?? "askanything";
+      if (aSub === "post") {
+        const title = flag(aRest, "title");
+        const details = flag(aRest, "details");
+        const amount = flag(aRest, "amount");
+        if (!title || !details || !amount) {
+          console.error("usage: bsv ask post --title <t> --details <text|@file> --amount <sats≥5000> [--board <name>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("askPost", { board: aBoard, title, details: argText(details), amountSats: Number(amount) }));
+      } else if (aSub === "list" || aSub === undefined) {
+        print(await call("askList", { board: aBoard }));
+      } else if (aSub === "answer" && aRest.find((a) => !a.startsWith("--"))) {
+        const replyTo = aRest.find((a) => !a.startsWith("--"));
+        const text = flag(aRest, "text");
+        const payTo = flag(aRest, "pay-to") ?? flag(aRest, "payto");
+        if (!text || !payTo) {
+          console.error("usage: bsv ask answer <questionId> --text <text|@file> --pay-to <address> [--board <name>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("askAnswer", { board: aBoard, replyTo, text: argText(text), payTo }));
+      } else if (aSub === "accept" && aRest.find((a) => !a.startsWith("--"))) {
+        // Preview only: the spend itself goes through `bsv pay` (printed).
+        print(await call("askAccept", { board: aBoard, answerId: aRest.find((a) => !a.startsWith("--")) }));
+      } else if (aSub === "triage") {
+        const title = flag(aRest, "title");
+        const details = flag(aRest, "details");
+        const amount = flag(aRest, "amount");
+        if (!title || !details || !amount) {
+          console.error("usage: bsv ask triage --title <t> --details <text|@file> --amount <sats≥5000> [--board <name>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("askTriage", { board: aBoard, title, details: argText(details), amountSats: Number(amount) }));
+      } else if (aSub === "grade") {
+        const question = flag(aRest, "question");
+        const submission = flag(aRest, "submission");
+        if (!question || !submission) {
+          console.error("usage: bsv ask grade --question <text|@file> --submission <text|@file>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("askGrade", { question: argText(question), submission: argText(submission) }));
+      } else {
+        console.error("usage: bsv ask <post --title <t> --details <text|@file> --amount <sats≥5000>|list|answer <questionId> --text <text|@file> --pay-to <address>|accept <answerId>|triage --title <t> --details <text|@file> --amount <sats≥5000>|grade --question <text|@file> --submission <text|@file>> [--board <name>]");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "memory": {
       const [mSub, ...mRest] = rest;
       const mText = flag(mRest, "text") ?? flag(mRest, "message");
@@ -1874,7 +1930,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|ask|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

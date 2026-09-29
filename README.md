@@ -288,6 +288,7 @@ bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
 bsv gig board [--category=C] | bsv gig track|claim|submit|paid|untrack|list
+bsv ask post --title <t> --details <text|@file> --amount <sats≥5000> | bsv ask list | bsv ask answer <qid> --text <text|@file> --pay-to <addr> | bsv ask accept <aid> | bsv ask triage --title <t> --details <text|@file> --amount <sats> | bsv ask grade --question <text|@file> --submission <text|@file>  # funded questions, paid answers (AskAnything app: https://localhost:2121/askanything/)
 bsv nightshift create --name <n> --agent <a> --every <1h> --budget <sats> | bsv nightshift list|runs|claim|submit|approve|fail
 bsv overlay health|topics | bsv overlay lookup <tm_topic> --address <addr> | bsv overlay submit <txid> --topic <t> | bsv overlay tags <txid>
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore

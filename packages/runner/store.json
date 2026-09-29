@@ -46,6 +46,12 @@
       "url": "https://localhost:2121/memestudio/",
       "name": "Meme Studio",
       "blurb": "Search the Twetch Meme Library, caption templates, and post finished memes on-chain through the OS wallet. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
+    },
+    {
+      "domain": "localhost",
+      "url": "https://localhost:2121/askanything/",
+      "name": "AskAnything",
+      "blurb": "Ask funded questions of your network, answer theirs, and pay accepted answers from the OS wallet. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
     }
   ]
 }

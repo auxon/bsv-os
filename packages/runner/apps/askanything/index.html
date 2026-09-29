@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AskAnything — funded questions, paid answers</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>AskAnything</h1>
+    <p id="status" class="status">connecting…</p>
+  </header>
+
+  <main>
+    <section id="ask">
+      <h2>Ask a question <span class="tag">pledge locked in words, paid on accept</span></h2>
+      <div class="fields">
+        <label>Title <input id="q-title" type="text" maxlength="120" placeholder="What is …?" autocomplete="off" /></label>
+        <label>Details <textarea id="q-details" rows="3" maxlength="2000" placeholder="What would a good answer contain?"></textarea></label>
+        <label>Amount (sats, min 5000) <input id="q-amount" type="number" min="5000" step="100" value="5000" /></label>
+      </div>
+      <div class="actions">
+        <button id="review-btn" type="button">Review with Jev</button>
+        <button id="post-btn" type="button" class="primary">Post question</button>
+      </div>
+      <div id="triage"></div>
+    </section>
+
+    <section id="open">
+      <h2>Open questions</h2>
+      <div class="actions">
+        <button id="refresh-btn" type="button">Refresh</button>
+      </div>
+      <div id="qlist" class="grid"></div>
+    </section>
+
+    <section id="detail" class="hidden">
+      <h2 id="d-title">Question</h2>
+      <p id="d-meta" class="hint"></p>
+      <p id="d-details"></p>
+      <h3>Answers</h3>
+      <div id="answers"></div>
+      <div class="actions">
+        <button id="grade-btn" type="button">Grade answers</button>
+        <button id="back-btn" type="button">← Questions</button>
+      </div>
+      <h3>Your answer</h3>
+      <div class="fields">
+        <label>Answer <textarea id="a-text" rows="3" maxlength="2000" placeholder="The answer…"></textarea></label>
+        <label>Payout address <input id="a-payto" type="text" placeholder="1…" autocomplete="off" /></label>
+      </div>
+      <div class="actions">
+        <button id="fill-addr-btn" type="button">Use my address</button>
+        <button id="answer-btn" type="button" class="primary">Submit answer</button>
+      </div>
+      <div id="result"></div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

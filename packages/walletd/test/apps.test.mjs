@@ -395,7 +395,7 @@ test("the shipped catalog gives every bundled app its own URL", () => {
     assert.ok(u.pathname.endsWith("/"), `${name} URL is a directory`);
   }
   const localhost = catalog.apps.filter((a) => a.domain === "localhost");
-  assert.equal(localhost.length, 5, "all five localhost apps are listed");
+  assert.equal(localhost.length, 6, "all six localhost apps are listed");
   assert.equal(new Set(localhost.map((a) => a.url)).size, localhost.length, "each has its own entry");
 });
 

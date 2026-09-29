@@ -278,6 +278,10 @@ Pick **one**, keep it small, and measure before scaling.
 **B. Earn a gig (an afternoon).** `bsv gig board` → claim → deliver the exact
 hash → get paid → `bsv gig paid <id> <txid:vout>` → `bsv basket balance earnings`.
 
+**B2. Answer paid questions (an hour).** Open the AskAnything app (or
+`bsv ask list`), answer with `--pay-to <your address>`, and get paid when
+the asker accepts — no agentpay key needed, asking and answering are free.
+
 **C. Publish a paid episode (an evening).** `bsv cast add --title … --splits
 <you:100>` with an mp3 URL, then play it in the Cast app and watch
 `bsv cast sessions` tick while it plays.

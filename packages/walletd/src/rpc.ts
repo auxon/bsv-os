@@ -62,6 +62,11 @@ import {
   normalizeMemoryText, recallMemories, refHash, usenetPayload,
 } from "./memory.ts";
 import {
+  ASK_BOARD, amountFromRefs, amountRef, decodeQuestion,
+  ensureAskBoard, gradeAnswer, openQuestions, payToFromRefs, payToRef, titleRef, triageQuestion,
+  validateAnswer, validateQuestion,
+} from "./ask.ts";
+import {
   EVOLVE_BOARD, SCORE_LEVELS, contestRef, createContest, getContest,
   judgeRound, listContests, recordEntry, roundEntries, splitEntry,
 } from "./evolve.ts";
@@ -1469,6 +1474,92 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     await ingestPost(b.db, env).catch(() => null);
     const posts = await getPosts(b.db, row.name, { limit: 500, markRead: false });
     return { timeout: false, post: posts.posts.find((x) => x.id === env.id) ?? null };
+  },
+  /**
+   * AskAnything (wallet-only Q&A): funded questions as board posts, sats
+   * pledged in refs, paid on accept through the existing spend/pay paths.
+   * Asking and answering are free and off-chain; only the accept payment
+   * moves sats (human-confirmed, policy-gated).
+   */
+  askPost: async (params) => {
+    const b = needBackend();
+    const { board, title, details, amountSats, agent, origin } = p(params) as {
+      board?: unknown; title?: unknown; details?: unknown; amountSats?: unknown; agent?: unknown; origin?: unknown;
+    };
+    const q = validateQuestion({ title, details, amountSats });
+    const row = await getBoard(b.db, String(board ?? ASK_BOARD));
+    const target = row ?? await ensureAskBoard(b.db, String(board ?? ASK_BOARD));
+    return boardPublish(b, target, {
+      text: q.details, kind: "request", refs: [amountRef(q.amountSats), titleRef(q.title)], agent, origin,
+    });
+  },
+  askList: async (params) => {
+    const b = needBackend();
+    const { board } = p(params) as { board?: unknown };
+    const name = String(board ?? ASK_BOARD);
+    const row = await getBoard(b.db, name);
+    if (!row) return { board: null, questions: [] };
+    return { board: row.name, questions: await openQuestions(b.db, row.name) };
+  },
+  askAnswer: async (params) => {
+    const b = needBackend();
+    const { board, replyTo, text, payTo, agent, origin } = p(params) as {
+      board?: unknown; replyTo?: unknown; text?: unknown; payTo?: unknown; agent?: unknown; origin?: unknown;
+    };
+    const a = validateAnswer({ text, payTo });
+    if (typeof replyTo !== "string" || !replyTo) throw Object.assign(new Error("replyTo question id required"), { code: "BAD_PARAM" });
+    const row = await getBoard(b.db, String(board ?? ASK_BOARD));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? ASK_BOARD)}`), { code: "NOT_FOUND" });
+    return boardPublish(b, row, {
+      text: a.text, kind: "result", refs: [payToRef(a.payTo)], replyTo, agent, origin,
+    });
+  },
+  /**
+   * Resolve an accept into a payment preview. Never spends: the caller pays
+   * through the spend/pay paths (app two-step confirm, `bsv pay`).
+   */
+  askAccept: async (params) => {
+    const b = needBackend();
+    const { board, answerId } = p(params) as { board?: unknown; answerId?: unknown };
+    if (typeof answerId !== "string" || !answerId) throw Object.assign(new Error("answerId required"), { code: "BAD_PARAM" });
+    const row = await getBoard(b.db, String(board ?? ASK_BOARD));
+    if (!row) throw Object.assign(new Error(`no board ${String(board ?? ASK_BOARD)}`), { code: "NOT_FOUND" });
+    const { posts } = await getPosts(b.db, row.name, { limit: 500, markRead: false });
+    const answer = posts.find((x) => x.id === answerId);
+    if (!answer || answer.locked) throw Object.assign(new Error("answer not found"), { code: "NOT_FOUND" });
+    if (answer.kind !== "result" || !answer.replyTo) {
+      throw Object.assign(new Error("not an answer (needs kind=result with a question replyTo)"), { code: "BAD_PARAM" });
+    }
+    const payTo = payToFromRefs(answer.refs);
+    if (!payTo) throw Object.assign(new Error("answer carries no valid payto: ref"), { code: "BAD_PARAM" });
+    const question = posts.find((x) => x.id === answer.replyTo);
+    if (!question || question.locked) throw Object.assign(new Error("question not found"), { code: "NOT_FOUND" });
+    const amountSats = amountFromRefs(question.refs) ?? 0;
+    const { title, details } = decodeQuestion({ text: question.text, refs: question.refs });
+    return {
+      board: row.name,
+      questionId: question.id, title, details, amountSats,
+      answerId: answer.id, answerText: answer.text, answerFrom: answer.from, payTo,
+      payCommand: `bsv pay ${payTo} ${amountSats} --note "ask ${question.id.slice(0, 8)}"`,
+    };
+  },
+  /** Jev review of a draft question: clarity + duplicates. Advisory, fail-open. */
+  askTriage: async (params) => {
+    const { board, title, details, amountSats } = p(params) as {
+      board?: unknown; title?: unknown; details?: unknown; amountSats?: unknown;
+    };
+    const q = validateQuestion({ title, details, amountSats });
+    const b = needBackend();
+    const open = await openQuestions(b.db, String(board ?? ASK_BOARD));
+    return triageQuestion(jevDecideCall, {
+      title: q.title, details: q.details, amountSats: q.amountSats,
+      open: open.map((o) => ({ id: o.id, title: o.title })),
+    });
+  },
+  /** Jev blind grade of one answer against its question. Advisory, fail-open. */
+  askGrade: async (params) => {
+    const { question, submission } = p(params) as { question?: unknown; submission?: unknown };
+    return gradeAnswer(jevDecideCall, { question: String(question ?? ""), submission: String(submission ?? "") });
   },
   /** Post a request and block for its first reply: the agent ask primitive. */
   boardAsk: async (params) => {

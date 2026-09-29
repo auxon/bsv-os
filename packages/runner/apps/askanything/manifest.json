@@ -1,0 +1,13 @@
+{
+  "name": "AskAnything",
+  "short_name": "Ask",
+  "start_url": "https://localhost:2121/askanything/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "AskAnything: ask funded questions of your network, answer theirs, and pay accepted answers from the OS wallet. Asking and answering are free and off-chain; payouts are confirmed per payment.",
+      "spendingAuthorization": { "amount": 1000000, "description": "payouts for accepted answers (each payment confirmed separately)" }
+    }
+  }
+}
