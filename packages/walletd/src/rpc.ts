@@ -78,7 +78,7 @@ import {
   CAST_BOARD, addEpisode, endLive, getLive, listEpisodes, listLive, listSessions,
   parseSplits, startLive, startSession, stopSession,
 } from "./cast.ts";
-import { serveMenu, serveSales, serveSetPrice } from "./serve.ts";
+import { checkSellerSurface, serveMenu, serveSales, serveSetPrice, serveStatus, setServeMeta } from "./serve.ts";
 import {
   createStream, getStream, listStreams, listTicks, parseTick, setStreamStatus, streamBeatRef, tickStreams,
 } from "./streams.ts";
@@ -383,7 +383,21 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     }
     return importWallet(phrase, force === true);
   },
-  unlock: async () => unlock(),
+  unlock: async () => {
+    const r = await unlock();
+    // Cache the pay-to address while the key is available: the x402 seller
+    // surface (manifest, quotes) keeps working after auto-lock. Best effort —
+    // a cache failure must never fail the unlock itself.
+    try {
+      if (backend) {
+        const { selfAddress } = await import("./custody.ts");
+        await setServeMeta(backend.db, "payto", selfAddress());
+      }
+    } catch {
+      /* locked-down setups stay fail-closed */
+    }
+    return r;
+  },
   lock: () => {
     lock();
     return { locked: true };
@@ -2128,10 +2142,18 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     await b.db("cast_episodes").where({ id: episode }).update({ media_url: url });
     return { episode, mediaUrl: url };
   },
-  /** x402 seller surface: price list, repricing, sales ledger. */
+  /** x402 seller surface: price list, repricing, sales ledger, self-heal status. */
   serveMenu: async () => {
     const b = needBackend();
     return { menu: await serveMenu(b.db) };
+  },
+  serveStatus: async () => {
+    const b = needBackend();
+    return serveStatus(b.db);
+  },
+  serveCheck: async () => {
+    const b = needBackend();
+    return checkSellerSurface(b.db);
   },
   servePrice: async (params) => {
     const b = needBackend();

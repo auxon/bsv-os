@@ -16,6 +16,9 @@
  * methods are owner-safe reads/compute — never spends, never keys.
  */
 import type { Knex } from "knex";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Transaction } from "@bsv/sdk";
 import type { ChainProvider } from "./chain.ts";
 import { selfAddress } from "./custody.ts";
@@ -67,12 +70,50 @@ export async function migrateServe(db: Knex): Promise<void> {
       t.integer("created_at").notNullable();
     });
   }
+  if (!(await db.schema.hasTable("x402_server_meta"))) {
+    await db.schema.createTable("x402_server_meta", (t) => {
+      t.string("key", 64).primary();
+      t.text("value").notNullable().defaultTo("");
+      t.integer("updated_at").notNullable().defaultTo(0);
+    });
+  }
+}
+
+export async function getServeMeta(db: Knex, key: string): Promise<string | null> {
+  const row = (await db("x402_server_meta").where({ key }).first()) as { value?: unknown } | undefined;
+  return typeof row?.value === "string" && row.value ? row.value : null;
+}
+
+export async function setServeMeta(db: Knex, key: string, value: string): Promise<void> {
+  const now = Date.now();
+  await db("x402_server_meta")
+    .insert({ key, value, updated_at: now })
+    .onConflict("key")
+    .merge({ value, updated_at: now });
+}
+
+/**
+ * The address buyers pay. selfAddress() needs an unlocked wallet, but the
+ * address never changes for a wallet — so unlock caches it and the seller
+ * surface (manifest, quotes) keeps working while locked. Throws the lock
+ * error when never cached, preserving the old fail-closed behavior.
+ */
+export async function payToAddress(db: Knex): Promise<string> {
+  try {
+    const addr = selfAddress();
+    await setServeMeta(db, "payto", addr).catch(() => {});
+    return addr;
+  } catch (e) {
+    const cached = await getServeMeta(db, "payto").catch(() => null);
+    if (cached) return cached;
+    throw e;
+  }
 }
 
 export async function serveMenu(db: Knex): Promise<Array<{ method: string; description: string; priceSats: number; payTo: string }>> {
   const rows = (await db("x402_server_prices").select()) as Array<{ method: string; price: number }>;
   const prices = new Map(rows.map((r) => [r.method, r.price]));
-  const payTo = selfAddress();
+  const payTo = await payToAddress(db);
   return SERVE_MENU.map((m) => ({
     method: m.method,
     description: m.description,
@@ -85,7 +126,7 @@ export async function servePrice(db: Knex, method: string): Promise<{ method: st
   const def = SERVE_MENU.find((m) => m.method === method);
   if (!def) fail("NOT_FOUND", `not for sale: ${method}`);
   const row = (await db("x402_server_prices").where({ method }).first()) as { price: number } | undefined;
-  return { method, priceSats: row?.price ?? def.defaultPrice, payTo: selfAddress() };
+  return { method, priceSats: row?.price ?? def.defaultPrice, payTo: await payToAddress(db) };
 }
 
 export async function serveSetPrice(db: Knex, method: string, priceSats: number): Promise<{ method: string; priceSats: number }> {
@@ -102,6 +143,122 @@ export async function serveSales(db: Knex, limit = 50): Promise<Array<{ txid: st
     txid: string; method: string; amount: number; created_at: number;
   }>;
   return rows.map((r) => ({ txid: r.txid, method: r.method, amount: r.amount, createdAt: r.created_at }));
+}
+
+/**
+ * Self-healing seller surface. The public tunnel URL rotates on restart,
+ * which rots the market listing — so a minutely tick reads the tunnel log,
+ * and when the URL moves it re-registers (the market refreshes the row with
+ * the same payTo instead of duplicating). Nothing throws: the tick must
+ * never take the daemon down, and every outcome lands in serveStatus.
+ *
+ * The tunnel unit writes `--logfile <data>/cf-tunnel.log` (override with
+ * BSV_TUNNEL_LOG). No log file means no tunnel configured: quiet no-op.
+ */
+export const MARKET_API_URL = "https://entangleit.com/api/x402market";
+
+export function marketSubmitUrl(): string {
+  return `${(process.env.X402_MARKET_URL ?? MARKET_API_URL).replace(/\/+$/, "")}/services`;
+}
+
+export function tunnelLogPath(): string {
+  const direct = (process.env.BSV_TUNNEL_LOG ?? "").trim();
+  if (direct) return direct;
+  const data = (process.env.BSV_WALLETD_DATA ?? "").trim() || path.join(os.homedir(), ".local/share/bsv-os");
+  return path.join(data, "cf-tunnel.log");
+}
+
+/** Latest tunnel URL in the log (restarts append, so the last match wins). */
+export function parseTunnelUrl(logText: string): string | null {
+  const m = String(logText ?? "").match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi);
+  return m ? m[m.length - 1]!.toLowerCase() : null;
+}
+
+export interface SellerSurfaceState {
+  configured: boolean;
+  publicUrl: string | null;
+  listedUrl: string | null;
+  listingId: string | null;
+  lastCheckAt: number;
+  lastError: string | null;
+}
+
+export async function serveStatus(db: Knex): Promise<SellerSurfaceState> {
+  const [listedUrl, listingId, lastCheck, lastError] = await Promise.all([
+    getServeMeta(db, "seller_url"),
+    getServeMeta(db, "seller_id"),
+    getServeMeta(db, "seller_checked_at"),
+    getServeMeta(db, "seller_error"),
+  ]);
+  let publicUrl: string | null = null;
+  let configured = false;
+  try {
+    const raw = fs.readFileSync(tunnelLogPath(), "utf8");
+    configured = true;
+    publicUrl = parseTunnelUrl(raw);
+  } catch {
+    /* no tunnel log here */
+  }
+  return {
+    configured,
+    publicUrl,
+    listedUrl,
+    listingId,
+    lastCheckAt: Math.floor(Number(lastCheck) || 0),
+    lastError,
+  };
+}
+
+export async function checkSellerSurface(
+  db: Knex,
+  opts: { fetchFn?: typeof fetch } = {},
+): Promise<SellerSurfaceState & { relisted: boolean }> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const now = Date.now();
+  const status = await serveStatus(db);
+  if (!status.configured || !status.publicUrl) {
+    await setServeMeta(db, "seller_checked_at", String(now)).catch(() => {});
+    return { ...status, lastCheckAt: now, relisted: false };
+  }
+  if (status.publicUrl === status.listedUrl) {
+    await setServeMeta(db, "seller_checked_at", String(now)).catch(() => {});
+    return { ...status, lastCheckAt: now, relisted: false };
+  }
+  let relisted = false;
+  let listingId = status.listingId;
+  let lastError: string | null = null;
+  try {
+    // marketSubmitUrl() is the full submit endpoint (no doubled path).
+    const res = await fetchFn(marketSubmitUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ manifestUrl: `${status.publicUrl}/v1/serve/manifest` }),
+    });
+    const body = (await res.json().catch(() => null)) as { service?: { id?: unknown }; error?: unknown } | null;
+    if (!res.ok || !body || typeof body.service?.id !== "string") {
+      throw new Error(typeof body?.error === "string" ? body.error : `market ${res.status}`);
+    }
+    listingId = body.service.id;
+    relisted = true;
+  } catch (e) {
+    lastError = e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200);
+  }
+  const next = {
+    ...status,
+    listedUrl: relisted ? status.publicUrl : status.listedUrl,
+    listingId,
+    lastCheckAt: now,
+    lastError,
+  };
+  await Promise.all([
+    setServeMeta(db, "seller_checked_at", String(now)),
+    ...(relisted
+      ? [setServeMeta(db, "seller_url", status.publicUrl!), setServeMeta(db, "seller_id", listingId!), setServeMeta(db, "seller_error", "")]
+      : lastError
+        ? [setServeMeta(db, "seller_error", lastError)]
+        : []),
+  ]).catch(() => {});
+  return { ...next, relisted };
 }
 
 /** Standard x402 v2 requirement envelope (what 402 responses carry). */

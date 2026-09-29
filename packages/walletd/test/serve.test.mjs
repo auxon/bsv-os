@@ -1,4 +1,7 @@
 import { test } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import assert from "node:assert/strict";
 
 process.env.BSV_WALLETD_KEYCHAIN_SUFFIX = "-test-serve";
@@ -8,8 +11,9 @@ import { MockChainProvider } from "../src/chain.ts";
 import { migrate } from "../src/storage.ts";
 import { __resetCache, createWallet, destroyWallet, selfAddress } from "../src/custody.ts";
 import {
-  b64json, parseProof, serveCall, serveMenu, servePrice, serveRequirement,
-  serveSales, serveSetPrice,
+  b64json, checkSellerSurface, getServeMeta, parseProof, parseTunnelUrl, payToAddress,
+  serveCall, serveMenu, servePrice, serveRequirement, serveSales, serveSetPrice,
+  serveStatus,
 } from "../src/serve.ts";
 
 async function memdb() {
@@ -133,4 +137,115 @@ test("parseProof accepts the standard envelope", () => {
   const env = b64json({ x402Version: 2, scheme: "exact", network: "bsv:mainnet", txHex: hex, encoding: "raw-hex" });
   assert.equal(parseProof(env), hex);
   assert.throws(() => parseProof("!!!"), /base64/);
+});
+
+test("payToAddress caches on unlock and serves the manifest while locked", async () => {
+  const db = await memdb();
+  await destroyWallet();
+  try {
+    await createWallet();
+    const live = selfAddress();
+    // Unlocked: live address, and cached as a side effect.
+    assert.equal(await payToAddress(db), live);
+    assert.equal(await getServeMeta(db, "payto"), live);
+    // Locked with cache: serves from cache (the manifest path).
+    await destroyWallet();
+    assert.equal(await payToAddress(db), live);
+    // Locked without cache: the old fail-closed behavior.
+    await db("x402_server_meta").where({ key: "payto" }).delete();
+    await assert.rejects(payToAddress(db), /locked/i);
+  } finally {
+    await db.destroy();
+    await destroyWallet().catch(() => {});
+    __resetCache();
+  }
+});
+
+test("serveMenu works locked once the payTo address is cached", async () => {
+  const db = await memdb();
+  await destroyWallet();
+  try {
+    await createWallet();
+    const live = selfAddress();
+    await payToAddress(db); // cache
+    await destroyWallet();
+    const menu = await serveMenu(db);
+    assert.ok(menu.length > 0);
+    for (const m of menu) assert.equal(m.payTo, live);
+  } finally {
+    await db.destroy();
+    await destroyWallet().catch(() => {});
+    __resetCache();
+  }
+});
+
+test("parseTunnelUrl takes the last URL (restarts append)", () => {
+  assert.equal(
+    parseTunnelUrl("2026-09-28T18:40:40Z INF | https://old-one.trycloudflare.com\n2026-09-28T19:00:00Z INF | https://new-two.trycloudflare.com\n"),
+    "https://new-two.trycloudflare.com",
+  );
+  assert.equal(parseTunnelUrl("no url here"), null);
+  assert.equal(parseTunnelUrl(""), null);
+});
+
+test("checkSellerSurface re-registers on URL change, silent otherwise", async () => {
+  const db = await memdb();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-"));
+  const log = path.join(dir, "cf-tunnel.log");
+  const savedLog = process.env.BSV_TUNNEL_LOG;
+  const savedMarket = process.env.X402_MARKET_URL;
+  process.env.BSV_TUNNEL_LOG = log;
+  process.env.X402_MARKET_URL = "https://market.test";
+  const posts = [];
+  const fetchFn = async (url, init) => {
+    posts.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+    return new Response(JSON.stringify({ service: { id: "s_new" } }), { status: 200 });
+  };
+  try {
+    // No log file: unconfigured, no network.
+    let r = await checkSellerSurface(db, { fetchFn });
+    assert.equal(r.configured, false);
+    assert.equal(r.relisted, false);
+    assert.equal(posts.length, 0);
+    // New URL appears: one re-register.
+    fs.writeFileSync(log, "2026-09-28T19:00:00Z INF | https://aaa.trycloudflare.com\n");
+    r = await checkSellerSurface(db, { fetchFn });
+    assert.equal(r.relisted, true);
+    assert.equal(r.publicUrl, "https://aaa.trycloudflare.com");
+    assert.equal(r.listingId, "s_new");
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].url, "https://market.test/services", "posts to the submit endpoint, no doubled path");
+    assert.equal(
+      posts[0].body.manifestUrl,
+      "https://aaa.trycloudflare.com/v1/serve/manifest",
+    );
+    // Same URL again: quiet.
+    r = await checkSellerSurface(db, { fetchFn });
+    assert.equal(r.relisted, false);
+    assert.equal(posts.length, 1);
+    // Rotation: re-registers once more.
+    fs.appendFileSync(log, "2026-09-28T20:00:00Z INF | https://bbb.trycloudflare.com\n");
+    r = await checkSellerSurface(db, { fetchFn });
+    assert.equal(r.relisted, true);
+    assert.equal(posts.length, 2);
+    // Market down: recorded, never thrown.
+    const down = async () => {
+      throw new Error("network down");
+    };
+    fs.appendFileSync(log, "2026-09-28T21:00:00Z INF | https://ccc.trycloudflare.com\n");
+    r = await checkSellerSurface(db, { fetchFn: down });
+    assert.equal(r.relisted, false);
+    assert.match(r.lastError, /network down/);
+    const status = await serveStatus(db);
+    assert.equal(status.publicUrl, "https://ccc.trycloudflare.com");
+    assert.equal(status.listedUrl, "https://bbb.trycloudflare.com", "failed re-list keeps the old URL");
+    assert.match(status.lastError, /network down/);
+  } finally {
+    if (savedLog === undefined) delete process.env.BSV_TUNNEL_LOG;
+    else process.env.BSV_TUNNEL_LOG = savedLog;
+    if (savedMarket === undefined) delete process.env.X402_MARKET_URL;
+    else process.env.X402_MARKET_URL = savedMarket;
+    fs.rmSync(dir, { recursive: true, force: true });
+    await db.destroy();
+  }
 });

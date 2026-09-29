@@ -271,9 +271,15 @@ Pick **one**, keep it small, and measure before scaling.
 1. `printf 'OPENROUTER_API_KEY=sk-or-…\n' > ~/.config/bsv-os/walletd.env && chmod 600 …`
 2. `systemctl --user restart bsv-walletd && bsv jev status`
 3. `bsv x402 serve` → `bsv x402 price jevDecide --price 50`
-4. Expose it (bind + named tunnel), check `GET /v1/serve/manifest`.
-5. Get listed on x402market; have a second wallet pay one call end to end.
-6. Watch `bsv x402 sales`.
+4. Expose it: the quick tunnel (`cf-x402-tunnel` unit) works, and the
+   daemon now heals rotations itself — the minutely tick reads the tunnel
+   log and re-registers the x402market listing when the URL moves (same
+   payTo, so the market refreshes the row instead of duplicating). A named
+   tunnel is still better (stable URL, no re-list lag); the quick tunnel
+   is no longer fatal. Check `bsv x402 status` for tunnel URL + listing.
+5. The manifest and quotes now serve while the wallet is locked (the
+   pay-to address is cached at unlock), so idle hours still sell.
+6. Have a second wallet pay one call end to end, then watch `bsv x402 sales`.
 
 **B. Earn a gig (an afternoon).** `bsv gig board` → claim → deliver the exact
 hash → get paid → `bsv gig paid <id> <txid:vout>` → `bsv basket balance earnings`.

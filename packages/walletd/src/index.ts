@@ -996,6 +996,27 @@ export async function main(): Promise<void> {
     void shiftLoop();
     setInterval(() => void shiftLoop(), 60_000).unref?.();
 
+    // Seller surface: re-register the market listing when the tunnel URL
+    // moves, minutely. Quiet unless something changed or broke.
+    const sellerLoop = async (): Promise<void> => {
+      try {
+        const { checkSellerSurface } = await import("./serve.ts");
+        const res = await checkSellerSurface(db);
+        if (res.relisted) {
+          // eslint-disable-next-line no-console
+          console.log(`seller: re-listed ${res.publicUrl} (listing ${res.listingId})`);
+        } else if (res.lastError && res.publicUrl !== res.listedUrl) {
+          // eslint-disable-next-line no-console
+          console.error(`seller: re-list failed: ${res.lastError}`);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("seller tick failed:", err instanceof Error ? err.message : err);
+      }
+    };
+    void sellerLoop();
+    setInterval(() => void sellerLoop(), 60_000).unref?.();
+
     // Streams: pay fresh heartbeats, auto-pause stale ones, minutely.
     const streamLoop = async (): Promise<void> => {
       try {

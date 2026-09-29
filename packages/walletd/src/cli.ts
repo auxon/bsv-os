@@ -987,8 +987,12 @@ async function main(): Promise<void> {
         print(await call("serveSales", {
           ...(flag(rest, "limit") ? { limit: Number(flag(rest, "limit")) } : {}),
         }));
+      } else if (xSub === "status") {
+        print(await call("serveStatus"));
+      } else if (xSub === "relist") {
+        print(await call("serveCheck"));
       } else {
-        console.error("usage: bsv x402 <pay <url> [--method=M] [--data=JSON] [--origin=name]|receipts|attest [--days=N] [--to=<key>]|serve|price <method> [--price N]|sales>");
+        console.error("usage: bsv x402 <pay <url> [--method=M] [--data=JSON] [--origin=name]|receipts|attest [--days=N] [--to=<key>]|serve|price <method> [--price N]|sales|status|relist>");
         process.exitCode = 2;
       }
       break;
