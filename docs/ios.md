@@ -374,21 +374,97 @@ threading an origin through the handlers that still hardcode `cli` (the
 person-resolution path in `pay`, `requestCreate` and `requestPay` are the known
 ones). That is real work, and it is the same work the deferred writes need.
 
-The options, for whoever picks this up:
+### The options, sized
 
-- **Widen the allowlist to an explicit operator tier** (the bundled apps' reads
-  and writes, minus key material) and thread the origin through. Most faithful
-  to "parity with the panel", and the largest change.
-- **Reads only.** Extend `DEVICE_READS` with the long-tail reads, which need no
-  origin, and leave writes as the reviewed set. The phone gets the Twetch feed
-  and market listings but cannot post or buy.
-- **Skip it.** The phone is a wallet, approvals and app host; the long tail
-  stays on the desktop. Cheapest, and defensible given apps already run through
-  `window.bsv` — Market in particular is a remote app, so Phase 2 already
-  reaches it.
+Measured rather than guessed. Of the methods the bundled apps and the desktop
+shell call:
 
-I have not picked one, because each trades capability against the blast radius
-of a stolen token, and that is the operator's call rather than mine.
+| | |
+| --- | --- |
+| methods called by apps | 105 |
+| device-callable today | 27 |
+| **missing** | **86** |
+| forbidden (key material) | 1 — `twetchAccountImportFromSeed` |
+
+The 85 that are not key material fall into three kinds, and the split matters
+because only one kind costs anything:
+
+- **~39 pure reads** — `twetchFeed`, `twetchMarket`, `twetchStatus`,
+  `castEpisodes`, `certList`, `contactList`, `profileGet`, `requestList`,
+  `storeList`, `overlayLookup`, … No origin is involved: reads are not
+  policy-gated.
+- **state-changing but not value-moving** — `msgSend`, `boardCreate`,
+  `profileSet`, `contactAdd`, `requestCreate`, `msgAck`, `identityLoginStart`,
+  `appUpdate`, `agentRevoke`, …
+- **value-moving** — `twetchPost`, `twetchBuy`, `castPlay`, `streamPause`,
+  `pay`, `requestPay`, `receiptIssue`, `ordInscribe`, …
+
+Exactly **five handlers hardcode `origin: "cli"`**: `send`, `pay`,
+`requestPay`, `receiptIssue`, `marketCancel`. Those five are the whole
+origin-threading cost. Everything else either takes an origin already or is a
+read.
+
+One finding that changes the arithmetic: **the Twetch writes do not use the
+caller's origin at all.** `twetchPost` defaults to `"twetch"`, `twetchIndex` and
+`twetchBuy` hardcode it. So adding them costs no threading, and their policy
+identity on the phone is the same one they have on the desktop — a cap or a
+block set for `twetch` applies in both places, which is the behaviour you want.
+
+### A. Operator tier — everything but key material
+
+All 85. Requires the five-handler threading plus 85 names carried in three
+places (`device.ts`, this document, `DeviceAllowlist.swift`).
+
+- **Buys** full panel parity on the phone: every bundled app fully working.
+- **Costs** the largest blast radius: a stolen token can post, publish, message,
+  start streams, revoke agents and change policy. Spends are still policy-gated
+  and key material still refused, but "everything else" is a lot of surface.
+- **Effort** a day, mostly list bookkeeping and tests.
+
+### B. Reads only
+
+The ~39 reads. No threading at all.
+
+- **Buys** the phone can browse: the Twetch feed, market listings, collectibles,
+  contacts, receipts, the message list.
+- **Costs** less than A, but not nothing: `msgShow` **decrypts messages**, so a
+  stolen token reads your private correspondence. That is disclosure, not merely
+  metadata.
+- **Effort** half a day, mostly the three-way list sync.
+
+### C. Skip
+
+- **Buys** what already exists, which is more than it sounds: **Market is a
+  remote app and already works** through `window.bsv` (Phase 2), as do Pocket
+  Pets and any third-party app. The five wallet screens work. The gap is
+  specifically the *bundled* same-origin apps.
+- **Costs** nothing.
+- **Loses** Twetch, Cast, Explorer and Colosseum on the phone.
+
+### D. Twetch only — recommended
+
+The 11 methods Twetch needs, none of which need threading because Twetch
+already owns its origin.
+
+- **Buys** the one bundled app with real value away from the desk: the feed,
+  alerts, memes, the market and posting, with the existing `twetch` policy
+  applying unchanged.
+- **Costs** a policy surface that already exists on the desktop, so the
+  incremental exposure is small. Posting spends a network fee and is gated by
+  the `twetch` origin exactly as it is today.
+- **Effort** an hour: 11 names in three places, plus tests.
+- **Leaves out** Cast, Explorer and Colosseum, which are read-mostly and add
+  little on a phone.
+
+**Recommendation: D, then B if browsing the rest is wanted.** D is the option
+where the capability is high, the new exposure is nearly zero because the origin
+already exists, and the work is an hour rather than a day. A is the only one
+that is genuinely risky, and it is worth doing only if the phone is meant to
+replace the desktop shell entirely.
+
+Whichever is chosen, the bundled-app *assets* still have to be served to paired
+devices — they sit behind `isLoopbackPeer` today. They are public source, like
+`/health`, so that part is a small, safe change either way.
 
 ## Open questions
 
