@@ -49,6 +49,8 @@ public enum DeviceAllowlist {
         "sweepOut",
         "inscribe",
         "appInvoke",
+        "appInstall",
+        "appRemove",
     ]
 
     /// Methods that must never be reachable from a device, however convenient

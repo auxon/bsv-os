@@ -109,7 +109,7 @@ read      isAuthenticated getVersion getNetwork getHeight getHeader balance
           addressQr history policyList policyPending listPending utxos
           ordList bsv21List appList
 wallet    lock unlock policyApprove policyDeny send anchorFile sweepOut
-          inscribe appInvoke
+          inscribe appInvoke appInstall appRemove
 ```
 
 The two lines above are the authoritative list; `DEVICE_READS` / `DEVICE_WRITES`
@@ -134,6 +134,12 @@ paired and allowed to call it.
 Several wallet entries are provisional and need a deliberate yes each rather
 than inheriting approval from the block: `sweepOut`, `inscribe`, `anchorFile`,
 and `appInvoke`.
+
+`appInstall` and `appRemove` are the app store: installing adds an origin that
+may *ask* to spend — the cap it requests still needs approval, and widening it
+later needs approval again — so the store grants no spending authority by itself.
+The daemon fetches and validates the manifest, so a device cannot install an
+arbitrary page as an app.
 
 **Deferred, and deliberately not on the list above:** `pay`, `requestCreate`
 and `requestPay`. Each resolves a person (a `@name`, an identity key, or a
@@ -252,8 +258,53 @@ Decisions worth knowing:
   described above is a hardening step, not a Phase 1 gate: biometrics are
   enforced at the spend, which is where the exposure is.
 
-Absent and deliberate: policy *editing* from the phone (read-only for now),
-sweep-out, and the hosted-app web view.
+Absent and deliberate: policy *editing* from the phone (read-only for now), and
+sweep-out.
+
+## Phase 2: hosting apps
+
+The milestone is "an installed app runs on the phone and spends through
+policy". Built in `packages/ios/Apps`:
+
+  AppIntent.swift     the 13 intents, mirroring appInvoke
+  AppBridge.swift     the native half: pinning, the allowlist, error mapping
+  AppHostView.swift   WKWebView + the injected window.bsv
+  AppsView.swift      list, install, remove, open
+
+**iOS is a better host than the desktop, and the differences are structural.**
+
+- **No extension and no relay.** The desktop needs a content script plus a
+  per-window loopback HTTP bridge because an unpacked MV3 extension cannot use
+  native messaging, and the token has to ride in a URL fragment. On iOS the page
+  calls `webkit.messageHandlers.bsv` directly: one hop instead of three, no
+  relay to attack, no token to leak. A test asserts the iOS host contains
+  neither a fragment token nor a loopback address.
+- **Origin pinning is structural rather than observed.** The desktop pins the
+  app's domain from the browser's `Origin` header. Native created the web view
+  for one app and holds that identity itself, so the page cannot even attempt to
+  claim another.
+- **The registry stays in the daemon.** `appList` is a read and
+  `appInstall`/`appRemove` are device-callable, so there is one list of installed
+  apps with one set of manifest hashes and caps. A second registry on the phone
+  would be a second thing to keep in step. The daemon fetches and validates the
+  manifest, so a device cannot install an arbitrary page as an app.
+- **The store grants no spending authority.** Installing adds an origin that may
+  *ask*; the cap it requests still needs approval, and widening it needs approval
+  again.
+- **Apps get device powers' limits, not the device's powers.** `unlock`, `send`,
+  `sweepOut`, `policyApprove` and `policyDeny` are device-callable — the phone
+  may do them — but are refused to apps, which ask to spend through their own
+  origin policy instead of moving sats themselves. A test asserts the app intent
+  list contains none of them.
+
+The `window.bsv` surface is identical to the desktop runner's, and an npm-side
+test parses both files and fails if a method is added to one and not the other:
+an app written for the desktop must run here unmodified, and a missing method
+would fail inside a web page, where it is hardest to notice.
+
+Verification: 58 Swift tests; `BUILD SUCCEEDED` against the iOS Simulator SDK;
+519 daemon tests including the parity guards. The app-intent guard was checked
+by deliberately introducing a divergence and confirming it fails.
 
 ## What this deliberately does not do
 

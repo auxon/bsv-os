@@ -71,6 +71,11 @@ export const DEVICE_WRITES: readonly string[] = [
   "sweepOut",
   "inscribe",
   "appInvoke",
+  // The app store. Installing adds an origin that may *ask* to spend; the cap
+  // it requests still needs approval, and widening it later needs approval
+  // again, so this grants no spending authority by itself.
+  "appInstall",
+  "appRemove",
 ];
 
 /**

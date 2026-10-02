@@ -142,6 +142,64 @@ test("the daemon's own allowlist matches the doc and the Swift too", () => {
   }
 });
 
+test("the iOS window.bsv surface matches the desktop runner's exactly", () => {
+  // Apps are written against window.bsv and must run unmodified on both hosts.
+  // The iOS host injects its own shim (messageHandlers instead of the desktop's
+  // content script + loopback relay), so the method list is the part that has
+  // to agree — and a missing one would fail inside a web page, where it is
+  // hardest to notice.
+  const desktop = read("packages/runner/extension/page.js");
+  const iosHost = read("packages/ios/Sources/BSVOSWallet/Apps/AppHostView.swift");
+
+  const methodsOf = (source, opener) => {
+    const start = source.indexOf(opener);
+    assert.ok(start > 0, `found ${opener}`);
+    // Up to the closing of the object literal.
+    const body = source.slice(start, source.indexOf("});", start));
+    return new Set([...body.matchAll(/^\s*([a-zA-Z]+):/gm)].map((m) => m[1]));
+  };
+
+  const desktopApi = methodsOf(desktop, "window.bsv = Object.freeze({");
+  const iosApi = methodsOf(iosHost, "window.bsv = Object.freeze({");
+
+  // The snapshots differ in transport but not in surface.
+  const missingOnIOS = [...desktopApi].filter((m) => !iosApi.has(m));
+  const extraOnIOS = [...iosApi].filter((m) => !desktopApi.has(m));
+  assert.deepEqual(missingOnIOS, [], "every desktop method must exist on iOS");
+  assert.deepEqual(extraOnIOS, [], "iOS must not add surface the desktop lacks");
+
+  // The two markers an app uses to detect the runner.
+  for (const [name, source] of [["desktop", desktop], ["ios", iosHost]]) {
+    assert.match(source, /isBSVOS/, `${name} exposes isBSVOS`);
+    assert.match(source, /version:/, `${name} exposes version`);
+    assert.match(source, /data-bsvos/, `${name} sets the data-bsvos attribute`);
+  }
+
+  // The iOS host must NOT reintroduce the desktop's relay: there is no token in
+  // a URL fragment and no loopback HTTP bridge to leak.
+  assert.doesNotMatch(iosHost, /bsv-token/, "no fragment token on iOS");
+  assert.doesNotMatch(iosHost, /127\.0\.0\.1/, "no loopback relay on iOS");
+});
+
+test("the iOS bridge refuses device-only powers to apps", () => {
+  // unlock/send/policyApprove are device-callable (the phone may do them) but
+  // must never be app-callable: an app asks to spend through its own origin
+  // policy instead of moving sats itself.
+  const appIntent = read("packages/ios/Sources/BSVOSWallet/Apps/AppIntent.swift");
+  const cases = new Set([...appIntent.matchAll(/^\s*case ([a-zA-Z]+)$/gm)].map((m) => m[1]));
+
+  const rpc = read("packages/walletd/src/rpc.ts");
+  const start = rpc.indexOf("  appInvoke: async");
+  const body = rpc.slice(start, rpc.indexOf("\n  },", start));
+  const daemon = new Set([...body.matchAll(/case "([a-zA-Z]+)"/g)].map((m) => m[1]));
+
+  assert.deepEqual([...cases].sort(), [...daemon].sort(), "the app intent list matches appInvoke exactly");
+
+  for (const forbidden of ["unlock", "lock", "send", "sweepOut", "policyApprove", "policyDeny", "createWallet"]) {
+    assert.ok(!cases.has(forbidden), `${forbidden} must not be an app intent`);
+  }
+});
+
 test("key-material methods are excluded by name, in both the doc and the Swift", () => {
   // The doc names them explicitly in prose; the Swift holds them as data.
   // The bullet wraps across lines, so capture the whole paragraph.

@@ -123,12 +123,14 @@ it("device allowlist: the callable set is exactly what the design agreed", async
     "ordList", "policyList", "policyPending", "utxos",
   ], "reads are exactly the agreed set");
   assert.deepEqual(writes, [
-    "anchorFile", "appInvoke", "inscribe", "lock", "policyApprove", "policyDeny",
-    "send", "sweepOut", "unlock",
+    "anchorFile", "appInstall", "appInvoke", "appRemove", "inscribe", "lock",
+    "policyApprove", "policyDeny", "send", "sweepOut", "unlock",
   ], "writes are exactly the agreed set");
 
   // Adding a method must be a deliberate act, in all three places.
   assert.equal(new Set([...reads, ...writes]).size, reads.length + writes.length, "no duplicates");
+  assert.ok(reads.includes("appList"), "appList stays a read: it spends nothing");
+  assert.ok(!writes.includes("appList"), "and is not duplicated into the writes");
 });
 
 // ── 4. key material is never device-callable ─────────────────────────────

@@ -420,6 +420,13 @@ export async function deviceInvoke(
     case "appInvoke":
       return METHODS.appInvoke!(params);
 
+    // The app store. These are registry operations, not spends; the daemon
+    // fetches and validates the manifest itself, so a device cannot install an
+    // arbitrary page as an app.
+    case "appInstall":
+    case "appRemove":
+      return METHODS[method]!(params);
+
     case "send": {
       const raw = p(params) as { to?: unknown; sats?: unknown; label?: unknown };
       if (typeof raw.to !== "string" || !raw.to) {

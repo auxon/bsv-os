@@ -26,6 +26,10 @@ library the app will be built on.
 | `Wallet/WalletSession.swift` | the view model: status, approvals, send, and their failure modes |
 | `Wallet/BiometricGate.swift` | Face ID / Touch ID, and the stubs tests use to assert a denial stops a spend |
 | `UI/` | the five Phase 1 screens, plus the app root and pairing screen |
+| `Apps/AppIntent.swift` | the 13 intents, mirroring the daemon's `appInvoke` |
+| `Apps/AppBridge.swift` | the native half of `window.bsv`: pinning, allowlist, error mapping |
+| `Apps/AppHostView.swift` | the `WKWebView` host and the injected shim |
+| `Apps/AppsView.swift` | the app list, install, remove, open |
 
 ## Running it
 
