@@ -1,0 +1,4 @@
+module BSVOSWallet {
+header "BSVOSWallet-Swift.h"
+export *
+}

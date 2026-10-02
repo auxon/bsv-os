@@ -102,16 +102,23 @@ because loopback needed no auth; a remote client is a different proposition.
 Starting allowlist (reads + wallet-critical writes, to be argued down not up):
 
 ```
-read      isAuthenticated balance addressQr history policyPending policyList
-          listPending utxos ordList bsv21List appList appInvoke? (see below)
-wallet    lock unlock policyApprove policyDeny send pay requestCreate requestPay
-          sweepOut?  inscribe?  anchorFile?     # each needs a deliberate yes
+read      isAuthenticated getVersion getNetwork getHeight getHeader balance
+          addressQr history policyList policyPending listPending utxos
+          ordList bsv21List appList
+wallet    lock unlock policyApprove policyDeny send pay requestCreate
+          requestPay anchorFile sweepOut inscribe appInvoke
 ```
 
-`appInvoke` deserves care: it is how hosted apps reach the wallet. On the
-phone the bridge should call the device surface with the *app's* domain, so an
-app running on iOS gets the same policy origin it would get on the desktop,
-rather than inheriting the phone's blanket access.
+The two lines above are the authoritative list; `DeviceAllowlist` in
+`packages/ios/Sources/BSVOSWallet/Device/DeviceAllowlist.swift` mirrors them and
+a test parses both, so widening either side alone fails the suite.
+
+Several wallet entries are provisional and need a deliberate yes each rather
+than inheriting approval from the block: `sweepOut`, `inscribe`, `anchorFile`,
+and `appInvoke`. `appInvoke` deserves the most care: it is how hosted apps reach
+the wallet, and on the phone the bridge must call the device surface with the
+*app's* domain, so an app gets the same policy origin it would on the desktop
+instead of inheriting the phone's blanket access.
 
 ### Hardening details worth writing down now
 

@@ -1,0 +1,7 @@
+Target dependency graph (3 targets)
+Target 'AllExcludingTests' in project 'Aggregate'
+➜ Explicit dependency on target 'BSVOSWallet-product' in project 'BSVOSWallet'
+➜ Explicit dependency on target 'BSVOSWallet' in project 'BSVOSWallet'
+Target 'BSVOSWallet-product' in project 'BSVOSWallet'
+➜ Explicit dependency on target 'BSVOSWallet' in project 'BSVOSWallet'
+Target 'BSVOSWallet' in project 'BSVOSWallet' (no dependencies)

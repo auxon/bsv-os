@@ -1,0 +1,59 @@
+{
+  "" : {
+    "diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/BSVOSWallet-primary.dia",
+    "emit-module-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/BSVOSWallet-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/BSVOSWallet-primary-emit-module.dia",
+    "pch" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/BSVOSWallet-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/BSVOSWallet-primary.swiftdeps"
+  },
+  "/Users/rah/bsv-os/packages/ios/Sources/BSVOSWallet/BRC100/Call.swift" : {
+    "const-values" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.swiftconstvalues",
+    "dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.d",
+    "diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.dia",
+    "index-unit-output-path" : "/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.o",
+    "llvm-bc" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.bc",
+    "object" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.o",
+    "swift-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call.swiftdeps",
+    "swiftmodule" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Call~partial.swiftmodule"
+  },
+  "/Users/rah/bsv-os/packages/ios/Sources/BSVOSWallet/BRC100/Models.swift" : {
+    "const-values" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.swiftconstvalues",
+    "dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.d",
+    "diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.dia",
+    "index-unit-output-path" : "/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.o",
+    "llvm-bc" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.bc",
+    "object" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.o",
+    "swift-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models.swiftdeps",
+    "swiftmodule" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Models~partial.swiftmodule"
+  },
+  "/Users/rah/bsv-os/packages/ios/Sources/BSVOSWallet/BRC100/Primitives.swift" : {
+    "const-values" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.swiftconstvalues",
+    "dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.d",
+    "diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.dia",
+    "index-unit-output-path" : "/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.o",
+    "llvm-bc" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.bc",
+    "object" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.o",
+    "swift-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives.swiftdeps",
+    "swiftmodule" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/Primitives~partial.swiftmodule"
+  },
+  "/Users/rah/bsv-os/packages/ios/Sources/BSVOSWallet/Device/DeviceAllowlist.swift" : {
+    "const-values" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.swiftconstvalues",
+    "dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.d",
+    "diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.dia",
+    "index-unit-output-path" : "/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.o",
+    "llvm-bc" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.bc",
+    "object" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.o",
+    "swift-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist.swiftdeps",
+    "swiftmodule" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceAllowlist~partial.swiftmodule"
+  },
+  "/Users/rah/bsv-os/packages/ios/Sources/BSVOSWallet/Device/DeviceTransport.swift" : {
+    "const-values" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.swiftconstvalues",
+    "dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.d",
+    "diagnostics" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.dia",
+    "index-unit-output-path" : "/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.o",
+    "llvm-bc" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.bc",
+    "object" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.o",
+    "swift-dependencies" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport.swiftdeps",
+    "swiftmodule" : "/Users/rah/bsv-os/packages/ios/.build/out/Intermediates.noindex/BSVOSWallet.build/Debug/BSVOSWallet-t.build/Objects-normal/arm64/DeviceTransport~partial.swiftmodule"
+  }
+}

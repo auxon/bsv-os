@@ -47,7 +47,8 @@ A third front end is planned: **iOS**. It follows the same rule — a client of
 the existing RPC surface, never a fork of it — and it is gated on work the
 daemon does not have yet, because the wallet RPC is loopback-only by design
 and a phone is never loopback. Design and threat model:
-[docs/ios.md](docs/ios.md).
+[docs/ios.md](docs/ios.md); the Swift client package so far:
+[packages/ios](packages/ios).
 
 ## Install
 
