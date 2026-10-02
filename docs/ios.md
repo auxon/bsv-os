@@ -104,13 +104,27 @@ because loopback needed no auth; a remote client is a different proposition.
 
 Starting allowlist (reads + wallet-critical writes, to be argued down not up):
 
-```
-read      isAuthenticated getVersion getNetwork getHeight getHeader balance
-          addressQr history policyList policyPending listPending utxos
-          ordList bsv21List appList
-wallet    lock unlock policyApprove policyDeny send anchorFile sweepOut
-          inscribe appInvoke appInstall appRemove registerPush
-```
+**The operator tier is 109 methods** — **52** reads and **57** writes — with nine
+key-material methods refused by name. The authoritative list lives in
+`DEVICE_READS` / `DEVICE_WRITES` / `NEVER_DEVICE_CALLABLE` in
+`packages/walletd/src/device.ts`, mirrored in
+`packages/ios/Sources/BSVOSWallet/Device/DeviceAllowlist.swift`. A test compares
+those two directly (a 109-name block duplicated in prose was documentation of
+nothing), and checks the counts above so this paragraph cannot drift.
+
+Roughly: every read the apps use (`twetchFeed`, `twetchMarket`, `castEpisodes`,
+`msgList`, `certList`, `profileGet`, …), every operator action (`send`, `pay`,
+`sweepOut`, `policyApprove`, `agentMint`, `appInstall`, …), and the app-activity
+writes that carry their own origin (`twetchPost`, `castPlay`, `boardCreate`,
+`askPost`, …).
+
+**Note on names: this surface speaks the daemon's RPC table, not BRC-100.**
+`getNetwork`, `getHeight` and `getHeader` are BRC-100 *wire* calls
+(`WIRE_CALL_CODES`, served at `/w/<call>`), not RPC methods, and `listPending`
+is spelled `pending` here. All four sat in this list from Phase 0 and were
+harmless only because nothing called them — a device asking for them would have
+received `NOT_FOUND`. A reachability guard now fails on names with no handler,
+which is how they were found.
 
 The two lines above are the authoritative list; `DEVICE_READS` / `DEVICE_WRITES`
 in `packages/walletd/src/device.ts` implement it, `DeviceAllowlist` in
@@ -456,15 +470,50 @@ already owns its origin.
 - **Leaves out** Cast, Explorer and Colosseum, which are read-mostly and add
   little on a phone.
 
-**Recommendation: D, then B if browsing the rest is wanted.** D is the option
-where the capability is high, the new exposure is nearly zero because the origin
-already exists, and the work is an hour rather than a day. A is the only one
-that is genuinely risky, and it is worth doing only if the phone is meant to
-replace the desktop shell entirely.
+**Chosen: A, the operator tier.** Implemented and verified; what follows is
+what it took and what it means in practice.
 
-Whichever is chosen, the bundled-app *assets* still have to be served to paired
-devices — they sit behind `isLoopbackPeer` today. They are public source, like
-`/health`, so that part is a small, safe change either way.
+### What option A required
+
+- **Four handlers extracted**, not forty: `pay`, `requestPay`, `receiptIssue`
+  and `marketCancel` became `payFor(origin, …)` and friends, with the RPC
+  handlers delegating as `payFor("cli", …)`. `send` already took an origin via
+  `deviceInvoke`. The origin is a *parameter*, never read from the request body:
+  a caller-supplied origin would let the phone spend as `cli` and bypass every
+  cap keyed to it.
+- **Everything else delegates.** `deviceInvoke`'s default now forwards any
+  allowlisted write to the RPC table, keeping one implementation of each method
+  instead of a second copy that could drift. That is also honest about what the
+  tier is: the same methods the desktop has, reachable from the phone.
+
+### Two things this surfaced
+
+**A pre-existing bug, found by the new guard.** `getNetwork`, `getHeight` and
+`getHeader` sat in the device allowlist from Phase 0 and are not RPC methods at
+all — they are BRC-100 *wire* calls — and `listPending` is spelled `pending` on
+this surface. A device asking for them would have received `NOT_FOUND`. They were
+harmless only because nothing called them. The reachability guard — every
+allowlisted method must resolve to a handler — is what found them, and it is what
+makes a 109-name list safe to maintain.
+
+**Per-device origins.** A phone's own spending runs under `device:<name>`, so
+each device needs its own approval and devices do not share a cap. That is the
+useful direction for blast radius, and a deliberate consequence:
+`bsv allow device:<name> <cap>` is per phone.
+
+### Verified live
+
+From a paired device: `twetchStatus`, `twetchFeed`, `agentList`, `doctor`,
+`storeList`, `requestList`, `msgList`, `castEpisodes` and `askList` all answer
+200 where they were refused before; `createWallet` and
+`twetchAccountImportFromSeed` still answer 403 `NOT_ALLOWED`; and a device `pay`
+is refused under `device:origin-spend` with the daemon naming exactly the
+approval command, which is the extracted-origin path proving itself.
+
+Still outstanding for the long tail in the *UI*: the bundled-app assets sit
+behind `isLoopbackPeer`, so serving them to paired devices is the remaining
+change before an app like Twetch can load in the phone's web view. They are
+public source, like `/health`, so that part is small and safe.
 
 ## Open questions
 

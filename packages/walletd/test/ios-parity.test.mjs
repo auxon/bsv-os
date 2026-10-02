@@ -46,100 +46,39 @@ test("the Swift wire codes match the daemon's numbers", () => {
   }
 });
 
-test("the device allowlist in Swift matches the design doc exactly", () => {
-  const block = /```\nread      ([\s\S]*?)```/.exec(iosDoc);
-  assert.ok(block, "the allowlist code block exists in docs/ios.md");
-
-  // Both sections wrap across lines, so accumulate continuation lines into
-  // whichever section keyword came last rather than reading only the first line.
-  const sections = {};
-  // The block regex above consumes the literal "read      " prefix, so the
-  // first line arrives without its keyword.
-  let current = "read";
-  for (const raw of block[1].split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    const starts = /^(read|wallet)\s+(.*)$/.exec(line);
-    if (starts) {
-      current = starts[1];
-      sections[current] = (sections[current] ?? []).concat(starts[2].split(/\s+/));
-    } else if (current) {
-      sections[current] = (sections[current] ?? []).concat(line.split(/\s+/));
-    }
-  }
-  const readLine = sections.read ?? [];
-  const walletLine = sections.wallet ?? [];
-  assert.ok(readLine.length > 0 && walletLine.length > 0, "both sections parsed");
-
-  const swiftSet = (name) => {
-    const m = new RegExp(`static let ${name}: Set<String> = \\[([\\s\\S]*?)\\n    \\]`).exec(swiftAllowlist);
-    assert.ok(m, `DeviceAllowlist.${name} found`);
-    return new Set([...m[1].matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]));
-  };
-
-  const docReads = new Set(readLine);
-  const docWrites = new Set(walletLine);
-  const swiftReads = swiftSet("reads");
-  const swiftWrites = swiftSet("writes");
-
-  assert.deepEqual([...docReads].sort(), [...swiftReads].sort(), "reads agree");
-  assert.deepEqual([...docWrites].sort(), [...swiftWrites].sort(), "writes agree");
-});
-
-test("the daemon's own allowlist matches the doc and the Swift too", () => {
-  // device.ts is the enforcement point, so it is the third copy of this list.
-  // All three must agree or the phone is either over- or under-privileged
-  // relative to what was reviewed.
+test("the device allowlist matches between the daemon and the Swift exactly", () => {
+  // The doc used to carry the full list and was parsed here. At 109 names that
+  // was duplication rather than documentation, so the two enforcement points are
+  // compared directly and the doc is checked for its counts (below).
   const deviceTs = read("packages/walletd/src/device.ts");
   const daemonSet = (name) => {
     const m = new RegExp(`export const ${name}: readonly string\\[\\] = \\[([\\s\\S]*?)\\n\\];`).exec(deviceTs);
     assert.ok(m, `${name} found in device.ts`);
-    return new Set([...m[1].matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]));
+    const body = m[1].split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    return new Set([...body.matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]));
   };
-
-  const block = /```\nread      ([\s\S]*?)```/.exec(iosDoc)[1];
-  const sections = {};
-  let current = "read";
-  for (const raw of block.split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    const starts = /^(read|wallet)\s+(.*)$/.exec(line);
-    if (starts) {
-      current = starts[1];
-      sections[current] = (sections[current] ?? []).concat(starts[2].split(/\s+/));
-    } else if (current) {
-      sections[current] = (sections[current] ?? []).concat(line.split(/\s+/));
-    }
-  }
-
   const swiftSet = (name) => {
-    const m = new RegExp(`static let ${name}: Set<String> = \\[([\\s\\S]*?)\\n    \\]`).exec(swiftAllowlist);
+    const swift = read("packages/ios/Sources/BSVOSWallet/Device/DeviceAllowlist.swift");
+    const m = new RegExp(`static let ${name}: Set<String> = \\[([\\s\\S]*?)\\n    \\]`).exec(swift);
     assert.ok(m, `DeviceAllowlist.${name} found`);
     return new Set([...m[1].matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]));
   };
 
-  const triples = [
-    ["reads", daemonSet("DEVICE_READS"), new Set(sections.read), swiftSet("reads")],
-    ["writes", daemonSet("DEVICE_WRITES"), new Set(sections.wallet), swiftSet("writes")],
-  ];
-  for (const [label, daemon, doc, swift] of triples) {
-    assert.deepEqual([...daemon].sort(), [...doc].sort(), `${label}: daemon vs doc`);
-    assert.deepEqual([...daemon].sort(), [...swift].sort(), `${label}: daemon vs Swift`);
+  for (const [daemonName, swiftName] of [
+    ["DEVICE_READS", "reads"],
+    ["DEVICE_WRITES", "writes"],
+    ["NEVER_DEVICE_CALLABLE", "neverDeviceCallable"],
+  ]) {
+    const daemon = daemonSet(daemonName);
+    const swift = swiftSet(swiftName);
+    assert.deepEqual([...daemon].sort(), [...swift].sort(), `${daemonName}: daemon vs Swift`);
   }
 
-  // And the forbidden set is identical in all three.
-  const docNever = /- \*\*Key-material methods are never device-callable\*\*:([\s\S]*?)\n\n/.exec(iosDoc)[1];
-  const docNamed = new Set([...docNever.matchAll(/`([a-zA-Z]+)`/g)].map((m) => m[1]));
-  const daemonNever = daemonSet("NEVER_DEVICE_CALLABLE");
-  const swiftNever = /static let neverDeviceCallable: Set<String> = \[([\s\S]*?)\n    \]/.exec(swiftAllowlist)[1];
-  const swiftNamed = new Set([...swiftNever.matchAll(/"([A-Za-z0-9]+)"/g)].map((m) => m[1]));
-  assert.deepEqual([...daemonNever].sort(), [...swiftNamed].sort(), "forbidden sets match");
-  for (const name of docNamed) {
-    assert.ok(
-      daemonNever.has(name) || daemonNever.has(`recovery${name}`),
-      `the doc names ${name}, and the daemon must forbid it`,
-    );
-  }
+  // The counts are what the doc states, so a doc that drifts is caught here.
+  const reads = daemonSet("DEVICE_READS").size;
+  const writes = daemonSet("DEVICE_WRITES").size;
+  assert.ok(iosDoc.includes(`${reads} methods`) || iosDoc.includes(`**${reads}**`), `doc states the read count (${reads})`);
+  assert.ok(iosDoc.includes(`**${reads + writes}**`) || iosDoc.includes(`${reads + writes} methods`), `doc states the total (${reads + writes})`);
 });
 
 test("the iOS window.bsv surface matches the desktop runner's exactly", () => {

@@ -1,76 +1,60 @@
 import Foundation
 
-/// The methods a paired iOS device may call on the daemon.
+/// The methods a paired iOS device may call: **the operator tier** (option A in
+/// docs/ios.md).
 ///
-/// This is the Swift half of the design in `docs/ios.md`: the device surface is
-/// an explicit allowlist rather than the daemon's full dispatch, because the
-/// loopback surface has ~192 methods and only had that luxury because loopback
-/// needed no authentication.
+/// This is the Swift mirror of `DEVICE_READS` / `DEVICE_WRITES` in
+/// `packages/walletd/src/device.ts`, and an npm-side test
+/// (`packages/walletd/test/ios-parity.test.mjs`) parses both and fails if they
+/// disagree. Widening access therefore means editing the daemon and this file
+/// together, on purpose.
 ///
-/// An npm-side test (`packages/walletd/test/ios-parity.test.mjs`) parses this
-/// file and the design doc and fails if they disagree, so widening the list
-/// means editing the doc and the expectation on purpose — never by accident.
+/// The tier is 109 methods, and the trade is deliberate: the phone can do everything
+/// the desktop panel can, spends remain gated by the daemon's policy engine, and
+/// key material stays out. The daemon is the enforcement point; this copy exists
+/// so a mistyped call fails on the phone with a clear message instead of a round
+/// trip.
 public enum DeviceAllowlist {
-    /// Reads. No custody effect.
+    /// Reads. Not policy-gated, and no origin is involved. Most still need an
+    /// unlocked wallet: only isAuthenticated and getVersion answer while locked.
     public static let reads: Set<String> = [
-        "isAuthenticated",
-        "getVersion",
-        "getNetwork",
-        "getHeight",
-        "getHeader",
-        "balance",
-        "addressQr",
-        "history",
-        "policyList",
-        "policyPending",
-        "listPending",
-        "utxos",
-        "ordList",
-        "bsv21List",
-        "appList",
+        "isAuthenticated", "getVersion", "balance", "addressQr", "history", "policyList",
+        "policyPending", "pending", "utxos", "doctor", "ordList", "bsv21List", "appList",
+        "appOpen", "storeList", "identitySession", "identityConfigStatus",
+        "identityLoginStatus", "certList", "certShow", "profileGet", "contactList", "p2pPeers",
+        "msgList", "msgShow", "requestList", "requestCode", "receiptList", "receiptShow",
+        "faucetStatus", "recoveryStatus", "gigBoard", "gigList", "shiftList", "shiftRuns",
+        "streamTicks", "overlayHealth", "overlayLookup", "torrentList", "twetchStatus",
+        "twetchFeed", "twetchNotifications", "twetchUser", "twetchList", "twetchMarket",
+        "twetchMemes", "twetchMemeFolders", "castEpisodes", "castLiveGet", "agentList",
+        "askList", "classifyMeme",
     ]
 
-    /// Writes the phone is allowed to attempt. Every one still runs through the
-    /// daemon's policy engine under a `device:<name>` origin, so caps and the
-    /// ask-then-approve loop apply exactly as they do for the CLI.
-    ///
-    /// `pay`, `requestCreate` and `requestPay` are deliberately absent: each
-    /// resolves a person before spending, and that path hardcodes the `cli`
-    /// origin today. Supporting them from a device means threading an origin
-    /// through the person-resolution code, which is Phase 1 work. See
-    /// docs/ios.md.
+    /// Writes. Every spend among them still runs through the daemon's policy
+    /// engine under an origin: the device's own (`device:<name>`) for operator
+    /// spends, and the app's existing origin for app activity, so an app on the
+    /// phone carries the policy identity it has on the desktop.
     public static let writes: Set<String> = [
-        "lock",
-        "unlock",
-        "policyApprove",
-        "policyDeny",
-        "send",
-        "anchorFile",
-        "sweepOut",
-        "inscribe",
-        "appInvoke",
-        "appInstall",
-        "appRemove",
-        "registerPush",
+        "lock", "unlock", "policyApprove", "policyDeny", "send", "pay", "sweepOut",
+        "anchorFile", "inscribe", "requestCreate", "requestDecline", "requestImport",
+        "requestPay", "receiptIssue", "faucetClaim", "appInstall", "appRemove", "appUpdate",
+        "appLaunch", "appInvoke", "registerPush", "identityConfigure", "identityLoginStart",
+        "identityLogout", "profileSet", "contactAdd", "certRevoke", "msgSend", "msgAck",
+        "msgSync", "agentMint", "agentRevoke", "gigTrack", "gigUntrack", "gigClaim",
+        "streamPause", "streamResume", "boardCreate", "boardThread", "askPost", "askAccept",
+        "askAnswer", "askGrade", "askTriage", "torrentFetch", "torrentRemove", "twetchPost",
+        "twetchIndex", "twetchBuy", "castAdd", "castPlay", "castStop", "castSetMedia",
+        "castLiveStart", "castLiveStop", "marketCancel", "ordInscribe",
     ]
 
-    /// Methods that must never be reachable from a device, however convenient
-    /// it would be.
+    /// Key-material methods. Never device-callable.
     ///
-    /// These are the key-material paths. On the desktop they are terminal-only;
-    /// on iOS there is no terminal, which makes it tempting to expose them —
-    /// and that is exactly why this list exists as data rather than as a
-    /// comment. The phone must not become the weakest key path in the system
-    /// merely because it is the most convenient one.
+    /// Unchanged by the operator tier, and worth stating why: option A exists so
+    /// the phone can do what the desktop panel can, and the panel refuses these
+    /// too — terminal-only there, and there is no terminal here.
     public static let neverDeviceCallable: Set<String> = [
-        "createWallet",
-        "importWallet",
-        "recoverySetup",
-        "recoveryRotate",
-        "recoveryRestore",
-        "exportEntropy",
-        "twetchAccountImport",
-        "twetchAccountImportFromPhrase",
+        "createWallet", "importWallet", "recoverySetup", "recoveryRotate", "recoveryRestore",
+        "exportEntropy", "twetchAccountImport", "twetchAccountImportFromPhrase",
         "twetchAccountImportFromSeed",
     ]
 

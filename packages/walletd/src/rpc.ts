@@ -22,7 +22,7 @@ import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
-import { DEVICE_READS, deviceOrigin, isDeviceCallable } from "./device.ts";
+import { DEVICE_READS, DEVICE_WRITES, deviceOrigin, isDeviceCallable } from "./device.ts";
 import { cancelPairing, listDevices, mintPairingCode, pendingPairingView, renameDevice, revokeDevice } from "./device.ts";
 import { setDevicePushToken } from "./device.ts";
 import { emptyHistory, getHistory } from "./history.ts";
@@ -486,11 +486,218 @@ export async function deviceInvoke(
       });
     }
 
+    // Operator spends: the origin is the device's own, so a cap or a block set
+    // for the phone applies only to the phone.
+    case "pay":
+      return payFor(origin, params);
+    case "requestPay":
+      return requestPayFor(origin, params);
+    case "receiptIssue":
+      return receiptIssueFor(origin, params);
+    case "marketCancel":
+      return marketCancelFor(origin, params);
+
     default:
-      // Unreachable while the allowlist and this switch agree; a test asserts
-      // they do, so this is the belt to that test's braces.
+      // The long tail of the operator tier. These are not origin-sensitive from
+      // the device's point of view: app activity carries the app's own origin
+      // (twetch*, cast*, board*, ask*), and the rest are not policy-gated at
+      // all. Delegating keeps one implementation of each instead of a second
+      // copy here that could drift.
+      if (DEVICE_WRITES.includes(method) && METHODS[method]) {
+        return METHODS[method]!(params);
+      }
+      // Unreachable while the allowlist and METHODS agree; a test asserts every
+      // allowlisted method resolves, so this is the belt to that test's braces.
       throw Object.assign(new Error(`device method has no implementation: ${method}`), { code: "NOT_ALLOWED" });
   }
+}
+
+/**
+ * pay, with the origin as a parameter.
+ *
+ * The origin is what the policy engine keys caps and approvals on, so it must
+ * never come from the request body. The CLI path passes "cli" through the
+ * delegation above; a paired device passes device:<name> from its token.
+ */
+async function payFor(origin: string, params: unknown): Promise<unknown> {
+    const b = needBackend();
+    const { to, sats, note } = p(params) as { to?: unknown; sats?: unknown; note?: unknown };
+    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient required (@name, identity key, address)"), { code: "BAD_PARAM" });
+    const amount = Math.floor(Number(sats) || 0);
+    if (!(amount > 0)) throw Object.assign(new Error("sats must be a positive sat number"), { code: "BAD_PARAM" });
+    const person = await resolvePerson(b.db, to, livePeople());
+    let address = person.address;
+    if (!address && person.identityKey && p2pChannel?.meet) {
+      const card = await p2pChannel.meet(person.identityKey);
+      if (card?.payTo && validPayTo(card.payTo)) {
+        address = card.payTo;
+        if (person.identityKey) await learnAddress(b.db, person.identityKey, address);
+      }
+    }
+    if (!address) {
+      const hint = person.name ? `bsv contact add ${person.name} <identityKey> <address>` : "bsv contact add <name> <identityKey> <address>";
+      throw Object.assign(new Error(`no receive address for ${person.display} — ${hint}`), { code: "BAD_PARAM" });
+    }
+    const label = typeof note === "string" && note.trim() ? note.trim().slice(0, 100) : person.name ? `pay @${person.name}` : `pay ${person.display}`;
+    const r = await sendSats({ db: b.db, chain: b.chain, origin, to: address, sats: amount, label });
+    let messageSent = false;
+    if (person.identityKey && typeof note === "string" && note.trim()) {
+      try {
+        await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), person.identityKey, note.trim());
+        messageSent = true;
+      } catch {
+        messageSent = false;
+      }
+    }
+    return {
+      txid: r.txid,
+      fee: r.fee,
+      to: { name: person.name, display: person.display, identityKey: person.identityKey, address },
+      messageSent,
+    };
+}
+
+/**
+ * requestPay, with the origin as a parameter.
+ *
+ * The origin is what the policy engine keys caps and approvals on, so it must
+ * never come from the request body. The CLI path passes "cli" through the
+ * delegation above; a paired device passes device:<name> from its token.
+ */
+async function requestPayFor(origin: string, params: unknown): Promise<unknown> {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("request id required"), { code: "BAD_PARAM" });
+    const row = await getRequest(b.db, id);
+    if (!row) throw Object.assign(new Error(`no request ${id}`), { code: "NOT_FOUND" });
+    const err = payableError(row);
+    if (err) throw Object.assign(new Error(err), { code: "BAD_PARAM" });
+    // Re-verify the stored code before sats move: the ledger must agree with
+    // the signature the requester actually produced.
+    const verified = parseRequest(row.code);
+    if (verified.id !== row.id || verified.address !== row.address || verified.amount !== row.amount) {
+      throw Object.assign(new Error("stored request failed re-verification"), { code: "BAD_CODE" });
+    }
+    const label = row.memo ? row.memo.slice(0, 100) : `request ${row.id.slice(0, 8)}`;
+    const r = await sendSats({ db: b.db, chain: b.chain, origin, to: verified.address, sats: verified.amount, label });
+    await markPaid(b.db, row.id, r.txid);
+    const receipt = row.peer ? await sendReceipt(b.db, liveRelay(), p2pChannel, row, r.txid, row.amount) : { sent: false };
+    return { txid: r.txid, fee: r.fee, amount: row.amount, to: row.peer, receiptSent: receipt.sent };
+}
+
+/**
+ * receiptIssue, with the origin as a parameter.
+ *
+ * The origin is what the policy engine keys caps and approvals on, so it must
+ * never come from the request body. The CLI path passes "cli" through the
+ * delegation above; a paired device passes device:<name> from its token.
+ */
+async function receiptIssueFor(origin: string, params: unknown): Promise<unknown> {
+    const b = needBackend();
+    const { request, txid, to, amount, memo } = p(params) as {
+      request?: unknown; txid?: unknown; to?: unknown; amount?: unknown; memo?: unknown;
+    };
+    let paymentTxid = "";
+    let sats = 0;
+    let item = "";
+    let peer = "";
+    let peerAddress = "";
+    let requestId = "";
+    if (typeof request === "string" && request) {
+      const row = await getRequest(b.db, request);
+      if (!row) throw Object.assign(new Error(`no request ${request}`), { code: "NOT_FOUND" });
+      if (row.direction !== "in" || row.status !== "paid" || !row.txid) {
+        throw Object.assign(new Error("only paid incoming requests can be receipted"), { code: "BAD_PARAM" });
+      }
+      paymentTxid = row.txid;
+      sats = row.amount;
+      item = row.memo;
+      peer = row.peer;
+      peerAddress = row.address;
+      requestId = row.id;
+    } else {
+      if (typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
+        throw Object.assign(new Error("txid required (or --request <id>)"), { code: "BAD_PARAM" });
+      }
+      sats = Math.floor(Number(amount) || 0);
+      if (!(sats > 0)) throw Object.assign(new Error("amount (sats) required"), { code: "BAD_PARAM" });
+      if (typeof to !== "string" || !to) throw Object.assign(new Error("to required (@name, identity key, address)"), { code: "BAD_PARAM" });
+      const person = await resolvePerson(b.db, to, livePeople());
+      peer = person.identityKey;
+      peerAddress = person.address;
+      if (!peerAddress && peer && p2pChannel?.meet) {
+        const card = await p2pChannel.meet(peer);
+        if (card?.payTo && validPayTo(card.payTo)) {
+          peerAddress = card.payTo;
+          await learnAddress(b.db, peer, peerAddress);
+        }
+      }
+      if (!peerAddress) {
+        const hint = person.name ? `bsv contact add ${person.name} <identityKey> <address>` : "bsv contact add <name> <identityKey> <address>";
+        throw Object.assign(new Error(`no receive address for ${person.display} — ${hint}`), { code: "BAD_PARAM" });
+      }
+      paymentTxid = txid.toLowerCase();
+      item = typeof memo === "string" ? memo : "";
+    }
+    return issueReceipt(
+      {
+        db: b.db,
+        inscribe: (input) =>
+          inscribeMint({
+            db: b.db,
+            chain: b.chain,
+            origin,
+            dataHex: input.dataHex,
+            contentType: input.contentType,
+            to: input.to,
+            label: input.label,
+            ...(item ? { description: item } : {}),
+          }),
+        notify: async (peerKey, text) => {
+          try {
+            await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), peerKey, text);
+            return { sent: true };
+          } catch {
+            return { sent: false };
+          }
+        },
+      },
+      { txid: paymentTxid, amount: sats, memo: item, peer, peerAddress, requestId },
+    );
+}
+
+/**
+ * marketCancel, with the origin as a parameter.
+ *
+ * The origin is what the policy engine keys caps and approvals on, so it must
+ * never come from the request body. The CLI path passes "cli" through the
+ * delegation above; a paired device passes device:<name> from its token.
+ */
+async function marketCancelFor(origin: string, params: unknown): Promise<unknown> {
+    const b = needBackend();
+    const { listing } = p(params) as { listing?: unknown };
+    if (typeof listing !== "string" || !listing) {
+      throw Object.assign(new Error("listing (asset outpoint) required"), { code: "BAD_PARAM" });
+    }
+    const dot = listing.replace("_", ".");
+    let unlockTxid: string | undefined;
+    let unlockError: string | undefined;
+    try {
+      const l = await fetchListing(dot);
+      const kind = l?.offer && typeof l.offer === "object" ? (l.offer as { kind?: string }).kind : undefined;
+      if (l && kind === "ordlock" && l.status === "active") {
+        const unlocked = await cancelOrdLock({ db: b.db, chain: b.chain, origin, lockOutpoint: dot });
+        unlockTxid = unlocked.txid;
+      }
+    } catch (e) {
+      unlockError = e instanceof Error ? e.message : String(e);
+    }
+    await cancelListing(dot, selfAddress());
+    return {
+      cancelled: true, origin: dot,
+      ...(unlockTxid ? { unlockTxid } : {}),
+      ...(unlockError ? { unlockError } : {}),
+    };
 }
 
 const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
@@ -1176,43 +1383,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * live peer when needed, send sats, and attach the note as a DM when the
    * recipient has an identity key. Payment succeeds even if the DM fails.
    */
-  pay: async (params) => {
-    const b = needBackend();
-    const { to, sats, note } = p(params) as { to?: unknown; sats?: unknown; note?: unknown };
-    if (typeof to !== "string" || !to) throw Object.assign(new Error("recipient required (@name, identity key, address)"), { code: "BAD_PARAM" });
-    const amount = Math.floor(Number(sats) || 0);
-    if (!(amount > 0)) throw Object.assign(new Error("sats must be a positive sat number"), { code: "BAD_PARAM" });
-    const person = await resolvePerson(b.db, to, livePeople());
-    let address = person.address;
-    if (!address && person.identityKey && p2pChannel?.meet) {
-      const card = await p2pChannel.meet(person.identityKey);
-      if (card?.payTo && validPayTo(card.payTo)) {
-        address = card.payTo;
-        if (person.identityKey) await learnAddress(b.db, person.identityKey, address);
-      }
-    }
-    if (!address) {
-      const hint = person.name ? `bsv contact add ${person.name} <identityKey> <address>` : "bsv contact add <name> <identityKey> <address>";
-      throw Object.assign(new Error(`no receive address for ${person.display} — ${hint}`), { code: "BAD_PARAM" });
-    }
-    const label = typeof note === "string" && note.trim() ? note.trim().slice(0, 100) : person.name ? `pay @${person.name}` : `pay ${person.display}`;
-    const r = await sendSats({ db: b.db, chain: b.chain, origin: "cli", to: address, sats: amount, label });
-    let messageSent = false;
-    if (person.identityKey && typeof note === "string" && note.trim()) {
-      try {
-        await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), person.identityKey, note.trim());
-        messageSent = true;
-      } catch {
-        messageSent = false;
-      }
-    }
-    return {
-      txid: r.txid,
-      fee: r.fee,
-      to: { name: person.name, display: person.display, identityKey: person.identityKey, address },
-      messageSent,
-    };
-  },
+  pay: (params: unknown) => payFor("cli", params),
   /** First-run faucet (remote service; funds one claim per identity key). */
   faucetStatus: async () => {
     needBackend();
@@ -1330,26 +1501,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       sync,
     };
   },
-  requestPay: async (params) => {
-    const b = needBackend();
-    const { id } = p(params) as { id?: unknown };
-    if (typeof id !== "string" || !id) throw Object.assign(new Error("request id required"), { code: "BAD_PARAM" });
-    const row = await getRequest(b.db, id);
-    if (!row) throw Object.assign(new Error(`no request ${id}`), { code: "NOT_FOUND" });
-    const err = payableError(row);
-    if (err) throw Object.assign(new Error(err), { code: "BAD_PARAM" });
-    // Re-verify the stored code before sats move: the ledger must agree with
-    // the signature the requester actually produced.
-    const verified = parseRequest(row.code);
-    if (verified.id !== row.id || verified.address !== row.address || verified.amount !== row.amount) {
-      throw Object.assign(new Error("stored request failed re-verification"), { code: "BAD_CODE" });
-    }
-    const label = row.memo ? row.memo.slice(0, 100) : `request ${row.id.slice(0, 8)}`;
-    const r = await sendSats({ db: b.db, chain: b.chain, origin: "cli", to: verified.address, sats: verified.amount, label });
-    await markPaid(b.db, row.id, r.txid);
-    const receipt = row.peer ? await sendReceipt(b.db, liveRelay(), p2pChannel, row, r.txid, row.amount) : { sent: false };
-    return { txid: r.txid, fee: r.fee, amount: row.amount, to: row.peer, receiptSent: receipt.sent };
-  },
+  requestPay: (params: unknown) => requestPayFor("cli", params),
   requestDecline: async (params) => {
     const b = needBackend();
     const { id } = p(params) as { id?: unknown };
@@ -1379,79 +1531,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * counterparty in the same transaction. Sources: a paid incoming request
    * (knows amount, memo, peer, payment txid) or explicit txid/to/amount.
    */
-  receiptIssue: async (params) => {
-    const b = needBackend();
-    const { request, txid, to, amount, memo } = p(params) as {
-      request?: unknown; txid?: unknown; to?: unknown; amount?: unknown; memo?: unknown;
-    };
-    let paymentTxid = "";
-    let sats = 0;
-    let item = "";
-    let peer = "";
-    let peerAddress = "";
-    let requestId = "";
-    if (typeof request === "string" && request) {
-      const row = await getRequest(b.db, request);
-      if (!row) throw Object.assign(new Error(`no request ${request}`), { code: "NOT_FOUND" });
-      if (row.direction !== "in" || row.status !== "paid" || !row.txid) {
-        throw Object.assign(new Error("only paid incoming requests can be receipted"), { code: "BAD_PARAM" });
-      }
-      paymentTxid = row.txid;
-      sats = row.amount;
-      item = row.memo;
-      peer = row.peer;
-      peerAddress = row.address;
-      requestId = row.id;
-    } else {
-      if (typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
-        throw Object.assign(new Error("txid required (or --request <id>)"), { code: "BAD_PARAM" });
-      }
-      sats = Math.floor(Number(amount) || 0);
-      if (!(sats > 0)) throw Object.assign(new Error("amount (sats) required"), { code: "BAD_PARAM" });
-      if (typeof to !== "string" || !to) throw Object.assign(new Error("to required (@name, identity key, address)"), { code: "BAD_PARAM" });
-      const person = await resolvePerson(b.db, to, livePeople());
-      peer = person.identityKey;
-      peerAddress = person.address;
-      if (!peerAddress && peer && p2pChannel?.meet) {
-        const card = await p2pChannel.meet(peer);
-        if (card?.payTo && validPayTo(card.payTo)) {
-          peerAddress = card.payTo;
-          await learnAddress(b.db, peer, peerAddress);
-        }
-      }
-      if (!peerAddress) {
-        const hint = person.name ? `bsv contact add ${person.name} <identityKey> <address>` : "bsv contact add <name> <identityKey> <address>";
-        throw Object.assign(new Error(`no receive address for ${person.display} — ${hint}`), { code: "BAD_PARAM" });
-      }
-      paymentTxid = txid.toLowerCase();
-      item = typeof memo === "string" ? memo : "";
-    }
-    return issueReceipt(
-      {
-        db: b.db,
-        inscribe: (input) =>
-          inscribeMint({
-            db: b.db,
-            chain: b.chain,
-            origin: "cli",
-            dataHex: input.dataHex,
-            contentType: input.contentType,
-            to: input.to,
-            label: input.label,
-            ...(item ? { description: item } : {}),
-          }),
-        notify: async (peerKey, text) => {
-          try {
-            await sendDmPreferred(b.db, liveRelay(), p2pChannel, identityPubkeyHex(), peerKey, text);
-            return { sent: true };
-          } catch {
-            return { sent: false };
-          }
-        },
-      },
-      { txid: paymentTxid, amount: sats, memo: item, peer, peerAddress, requestId },
-    );
-  },
+  receiptIssue: (params: unknown) => receiptIssueFor("cli", params),
   receiptList: async () => {
     const b = needBackend();
     return { receipts: await listPaymentReceipts(b.db) };
@@ -3239,32 +3319,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * listings also unlock the carrier back on-chain (miner fee), so the
    * asset returns to the wallet; the market cancel always runs.
    */
-  marketCancel: async (params) => {
-    const b = needBackend();
-    const { listing } = p(params) as { listing?: unknown };
-    if (typeof listing !== "string" || !listing) {
-      throw Object.assign(new Error("listing (asset outpoint) required"), { code: "BAD_PARAM" });
-    }
-    const dot = listing.replace("_", ".");
-    let unlockTxid: string | undefined;
-    let unlockError: string | undefined;
-    try {
-      const l = await fetchListing(dot);
-      const kind = l?.offer && typeof l.offer === "object" ? (l.offer as { kind?: string }).kind : undefined;
-      if (l && kind === "ordlock" && l.status === "active") {
-        const unlocked = await cancelOrdLock({ db: b.db, chain: b.chain, origin: "cli", lockOutpoint: dot });
-        unlockTxid = unlocked.txid;
-      }
-    } catch (e) {
-      unlockError = e instanceof Error ? e.message : String(e);
-    }
-    await cancelListing(dot, selfAddress());
-    return {
-      cancelled: true, origin: dot,
-      ...(unlockTxid ? { unlockTxid } : {}),
-      ...(unlockError ? { unlockError } : {}),
-    };
-  },
+  marketCancel: (params: unknown) => marketCancelFor("cli", params),
   /**
    * Reconcile a broadcast buy with the market: post the buy (+settle for
    * atomic swaps) for a tx that already exists. Use when a buy's market

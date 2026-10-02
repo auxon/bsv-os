@@ -33,61 +33,104 @@ import type { Knex } from "knex";
 // the doc, the Swift and this file on purpose, in one commit.
 
 /**
- * Reads. These spend nothing and are not policy-gated, but most of them still
- * need an unlocked wallet: only getVersion/getNetwork/getHeight/getHeader answer
- * while locked, because the rest must derive per-wallet keys. A locked wallet
- * returns WALLET_LOCKED, which the client models as `isLocked`.
+ * The operator tier: every method a paired device may call (option A in
+ * docs/ios.md).
+ *
+ * The trade is deliberate and the operator chose it. A stolen token can now
+ * post, publish, message, start streams, revoke agents and change policy.
+ * Spends remain policy-gated and the never-callable set is unchanged, so the
+ * two things that still cannot happen are moving sats outside the policy engine
+ * and touching key material.
+ *
+ * Reads are not policy-gated and involve no origin; most still need an unlocked
+ * wallet, because only getVersion/getNetwork/getHeight/getHeader answer while
+ * locked. Writes are dispatched with an origin: the device's own for operator
+ * spends, and the app's existing origin for app activity — an app on the phone
+ * carries the policy identity it has on the desktop rather than inheriting the
+ * phone's.
  */
 export const DEVICE_READS: readonly string[] = [
-  "isAuthenticated",
-  "getVersion",
-  "getNetwork",
-  "getHeight",
-  "getHeader",
-  "balance",
-  "addressQr",
-  "history",
-  "policyList",
-  "policyPending",
-  "listPending",
-  "utxos",
-  "ordList",
-  "bsv21List",
-  "appList",
+  // wallet. Note the absence of getNetwork/getHeight/getHeader: those are
+  // BRC-100 *wire* calls (WIRE_CALL_CODES, served at /w/<call>), not members of
+  // the daemon's RPC table, so a device asking for them by those names would get
+  // NOT_FOUND. This surface speaks the RPC surface; the wire surface is a
+  // different contract. (They sat here since Phase 0 and were harmless only
+  // because nothing called them — the reachability guard now fails on names
+  // like these.)
+  "isAuthenticated", "getVersion",
+  "balance", "addressQr", "history", "policyList", "policyPending",
+  "pending", "utxos", "doctor",
+  // ordinals and tokens
+  "ordList", "bsv21List",
+  // apps
+  "appList", "appOpen", "storeList",
+  // identity, certificates, people
+  "identitySession", "identityConfigStatus", "identityLoginStatus",
+  "certList", "certShow", "profileGet", "contactList", "p2pPeers",
+  // messaging
+  "msgList", "msgShow",
+  // requests, receipts, faucet, recovery
+  "requestList", "requestCode", "receiptList", "receiptShow",
+  "faucetStatus", "recoveryStatus",
+  // work boards
+  "gigBoard", "gigList", "shiftList", "shiftRuns", "streamTicks",
+  "overlayHealth", "overlayLookup",
+  // files
+  "torrentList",
+  // twetch
+  "twetchStatus", "twetchFeed", "twetchNotifications", "twetchUser", "twetchList",
+  "twetchMarket", "twetchMemes", "twetchMemeFolders",
+  // cast
+  "castEpisodes", "castLiveGet",
+  // agents
+  "agentList",
+  // askanything and memestudio
+  "askList", "classifyMeme",
 ];
 
-/**
- * Writes. Every one still runs through the policy engine under the device's own
- * origin, so caps and the ask-then-approve loop apply exactly as they do for the
- * CLI. Being on this list is permission to *ask*, not to spend.
- */
+/** Writes. Every spend among them still runs through the policy engine. */
 export const DEVICE_WRITES: readonly string[] = [
-  "lock",
-  "unlock",
-  "policyApprove",
-  "policyDeny",
-  "send",
-  "anchorFile",
-  "sweepOut",
-  "inscribe",
+  // wallet and operator actions
+  "lock", "unlock", "policyApprove", "policyDeny",
+  "send", "pay", "sweepOut", "anchorFile", "inscribe",
+  "requestCreate", "requestDecline", "requestImport", "requestPay",
+  "receiptIssue", "faucetClaim",
+  // the app store
+  "appInstall", "appRemove", "appUpdate", "appLaunch",
+  // hosted apps reach the wallet through their own origin
   "appInvoke",
-  // The app store. Installing adds an origin that may *ask* to spend; the cap
-  // it requests still needs approval, and widening it later needs approval
-  // again, so this grants no spending authority by itself.
-  "appInstall",
-  "appRemove",
-  // The device registering its own push token. A mutation of the device record,
-  // not a wallet action, which is why it lives here rather than in `reads`.
+  // notifications
   "registerPush",
+  // identity and people
+  "identityConfigure", "identityLoginStart", "identityLogout",
+  "profileSet", "contactAdd", "certRevoke",
+  // messaging
+  "msgSend", "msgAck", "msgSync",
+  // agents
+  "agentMint", "agentRevoke",
+  // work boards and streams
+  "gigTrack", "gigUntrack", "gigClaim", "streamPause", "streamResume",
+  "boardCreate", "boardThread", "askPost", "askAccept", "askAnswer",
+  "askGrade", "askTriage",
+  // files
+  "torrentFetch", "torrentRemove",
+  // twetch: these own their origin ("twetch"), so the device origin is unused
+  "twetchPost", "twetchIndex", "twetchBuy",
+  // cast: value-for-value sessions
+  "castAdd", "castPlay", "castStop", "castSetMedia", "castLiveStart", "castLiveStop",
+  // market
+  "marketCancel",
+  // inscribed assets
+  "ordInscribe",
 ];
 
 /**
  * Key-material methods. Never device-callable, whatever the convenience.
  *
- * On the desktop these are terminal-only. iOS has no terminal, which makes
- * exposing them tempting — and that is precisely why they are data here rather
- * than a comment. The phone must not become the weakest key path in the system
- * because it is the most convenient one.
+ * Unchanged by the operator tier, and worth stating why: option A exists so the
+ * phone can do what the desktop panel can, and the desktop panel refuses these
+ * too — they are terminal-only there, and there is no terminal here. That is
+ * exactly why the rule is data rather than a comment.
  */
 export const NEVER_DEVICE_CALLABLE: readonly string[] = [
   "createWallet",

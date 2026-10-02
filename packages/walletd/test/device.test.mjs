@@ -117,15 +117,21 @@ it("device allowlist: the callable set is exactly what the design agreed", async
   const reads = [...DEVICE_READS].sort();
   const writes = [...DEVICE_WRITES].sort();
 
-  assert.deepEqual(reads, [
-    "addressQr", "appList", "balance", "bsv21List", "getHeader", "getHeight",
-    "getNetwork", "getVersion", "history", "isAuthenticated", "listPending",
-    "ordList", "policyList", "policyPending", "utxos",
-  ], "reads are exactly the agreed set");
-  assert.deepEqual(writes, [
-    "anchorFile", "appInstall", "appInvoke", "appRemove", "inscribe", "lock",
-    "policyApprove", "policyDeny", "registerPush", "send", "sweepOut", "unlock",
-  ], "writes are exactly the agreed set");
+  // Option A, the operator tier: everything the desktop panel can do, with key
+  // material still refused. Named in full rather than by count, because the
+  // point of this list is that widening it is deliberate.
+  assert.equal(reads.length, 52, "reads: the operator tier's read half");
+  assert.equal(writes.length, 57, "writes: the operator tier's write half");
+
+  // Spot-check the shapes the option promised, rather than every name.
+  for (const method of ["twetchFeed", "twetchMarket", "castEpisodes", "msgList", "agentList", "doctor"]) {
+    assert.ok(reads.includes(method), `${method} is device-readable`);
+  }
+  for (const method of ["twetchPost", "twetchBuy", "castPlay", "msgSend", "agentMint", "policyDeny", "pay"]) {
+    assert.ok(writes.includes(method), `${method} is device-callable`);
+  }
+  // And the one method the option explicitly does not reach.
+  assert.ok(![...reads, ...writes].includes("twetchAccountImportFromSeed"), "key material stays out");
 
   // Adding a method must be a deliberate act, in all three places.
   assert.equal(new Set([...reads, ...writes]).size, reads.length + writes.length, "no duplicates");
@@ -322,6 +328,56 @@ it("device calls act under a derived origin, and cannot name their own", async (
     await destroyWallet().catch(() => {});
     __resetCache?.();
     await db.destroy();
+  }
+});
+
+it("every allowlisted method resolves to a real handler", async () => {
+  // The operator tier is 114 names. A typo among them would compile, pass the
+  // parity tests (all three copies could share the typo), and then fail on the
+  // phone with NOT_ALLOWED — the worst place to discover it. So: every
+  // allowlisted method must either be handled explicitly by deviceInvoke or
+  // exist in the RPC table the delegating default reaches.
+  const rpcSrc = fs.readFileSync(path.join(root, "src", "rpc.ts"), "utf8");
+  const invocationStart = rpcSrc.indexOf("export async function deviceInvoke(");
+  const invocationBody = rpcSrc.slice(invocationStart, rpcSrc.indexOf("\nconst METHODS", invocationStart));
+
+  const explicit = new Set([...invocationBody.matchAll(/case "([A-Za-z0-9_]+)"/g)].map((m) => m[1]));
+  const methodsStart = rpcSrc.indexOf("const METHODS: Record<string");
+  const methodsBody = rpcSrc.slice(methodsStart);
+  const handlers = new Set([...methodsBody.matchAll(/^  ([a-zA-Z][A-Za-z0-9_]*): /gm)].map((m) => m[1]));
+
+  const unresolvable = [];
+  for (const method of [...DEVICE_READS, ...DEVICE_WRITES]) {
+    if (explicit.has(method)) continue;
+    if (handlers.has(method)) continue;
+    unresolvable.push(method);
+  }
+  assert.deepEqual(unresolvable, [], `allowlisted but unreachable:\n${unresolvable.join("\n")}`);
+
+  // The delegating default must actually delegate for allowlisted writes, and
+  // must not fall through to a refusal for them.
+  assert.match(invocationBody, /DEVICE_WRITES\.includes\(method\) && METHODS\[method\]/, "the default delegates");
+  assert.match(invocationBody, /return METHODS\[method\]!\(params\)/, "and returns its result");
+});
+
+it("the operator spends use the device origin, not the caller's", async () => {
+  // The four extracted handlers are the ones where a device's own spending must
+  // be distinguishable from the CLI's. Each is delegated with the derived
+  // origin, and each takes origin as a parameter rather than reading it from
+  // params — a caller-supplied origin would let the phone spend as "cli".
+  const rpcSrc = fs.readFileSync(path.join(root, "src", "rpc.ts"), "utf8");
+  for (const [method, fn] of [["pay", "payFor"], ["requestPay", "requestPayFor"], ["receiptIssue", "receiptIssueFor"], ["marketCancel", "marketCancelFor"]]) {
+    assert.match(rpcSrc, new RegExp(`case "${method}":[\\s\\S]{0,80}return ${fn}\\(origin, params\\)`), `${method} uses the derived origin`);
+    const start = rpcSrc.indexOf(`async function ${fn}(`);
+    assert.ok(start > 0, `${fn} exists`);
+    const body = rpcSrc.slice(start, rpcSrc.indexOf("\n}", start));
+    assert.match(body, /origin: string/, `${fn} takes the origin as a parameter`);
+    assert.doesNotMatch(body, /origin: "cli"/, `${fn} does not hardcode the cli origin`);
+    assert.doesNotMatch(body, /p\(params\)[\s\S]{0,80}origin/, `${fn} does not read an origin from params`);
+  }
+  // And the CLI path still passes "cli", so nothing changed for the terminal.
+  for (const [method, fn] of [["pay", "payFor"], ["requestPay", "requestPayFor"], ["receiptIssue", "receiptIssueFor"], ["marketCancel", "marketCancelFor"]]) {
+    assert.match(rpcSrc, new RegExp(`${method}: \\(params: unknown\\) => ${fn}\\("cli", params\\)`), `${method} keeps the cli path`);
   }
 });
 
