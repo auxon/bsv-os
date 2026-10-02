@@ -43,6 +43,12 @@ If you are an agent picking this up: **do not mirror a new feature across
 both UIs.** Put it in the daemon, put it in the shell app, and leave the
 panel unless it is wallet-critical.
 
+A third front end is planned: **iOS**. It follows the same rule — a client of
+the existing RPC surface, never a fork of it — and it is gated on work the
+daemon does not have yet, because the wallet RPC is loopback-only by design
+and a phone is never loopback. Design and threat model:
+[docs/ios.md](docs/ios.md).
+
 ## Install
 
 Fresh aarch64 Omarchy machine, one command:
