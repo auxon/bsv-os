@@ -37,6 +37,19 @@
         <button type="submit">Search</button>
       </form>
       <p class="hint">Blank templates live in the Twetch Meme Library — try “meme template”. Folders and tags do not filter server-side, so search is the way in.</p>
+      <div class="source-toggle">
+        <button id="src-twetch" type="button" class="active">Twetch search</button>
+        <button id="src-library" type="button">Local library</button>
+      </div>
+      <div id="library-bar" class="hidden">
+        <form id="lib-form">
+          <label>Library search <input id="lib-q" type="search" placeholder="pepe money…" autocomplete="off" /></label>
+          <label class="check"><input id="lib-money-first" type="checkbox" checked /> money angle first</label>
+          <button type="submit">Search library</button>
+        </form>
+        <div id="lib-chips" class="chips"></div>
+        <p id="lib-count" class="hint"></p>
+      </div>
       <div id="grid" class="grid"></div>
       <button id="more-btn" type="button" class="hidden">Load more</button>
     </section>

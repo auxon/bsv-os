@@ -10,6 +10,7 @@ import {
   estimateFeeSats,
   layoutCaption,
 } from "./caption.js";
+import { families, searchLibrary, toItem } from "./library.js";
 
 let rpcId = 1;
 
@@ -82,6 +83,8 @@ const state = {
   campaign: null, // { id, depositAddress, depositAmount }
   fundConfirm: createPostConfirm(),
   fundTimer: null,
+  // Local library tab (library-index.json built by evals/library).
+  lib: { index: null, loading: false, source: "twetch", family: "", moneyFirst: true },
 };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -440,6 +443,75 @@ $("back-btn").addEventListener("click", () => {
   state.selected = null;
   state.img = null;
   renderGrid();
+});
+const libBarEl = $("library-bar");
+const libChipsEl = $("lib-chips");
+const libCountEl = $("lib-count");
+
+function setSource(source) {
+  state.lib.source = source;
+  $("src-twetch").classList.toggle("active", source === "twetch");
+  $("src-library").classList.toggle("active", source === "library");
+  libBarEl.classList.toggle("hidden", source !== "library");
+  state.selected = null;
+  state.img = null;
+  editorEl.classList.add("hidden");
+  if (source === "library") void libSearch();
+  else void search(false);
+}
+
+async function libIndex() {
+  if (state.lib.index) return state.lib.index;
+  if (state.lib.loading) return null;
+  state.lib.loading = true;
+  try {
+    const res = await fetch("library-index.json");
+    if (!res.ok) throw new Error(`library index unavailable (${res.status})`);
+    state.lib.index = await res.json();
+    renderChips();
+    return state.lib.index;
+  } catch (err) {
+    gridEl.innerHTML = `<div class="notice bad">local library unavailable: ${esc(err.message)} — rebuild it with evals/library/build-index.mjs.</div>`;
+    return null;
+  } finally {
+    state.lib.loading = false;
+  }
+}
+
+function renderChips() {
+  const fams = families(state.lib.index).slice(0, 24);
+  libChipsEl.innerHTML = `<button type="button" data-fam="" class="${state.lib.family ? "" : "active"}">all</button>` +
+    fams.map(({ family, n }) =>
+      `<button type="button" data-fam="${esc(family)}" class="${state.lib.family === family ? "active" : ""}">${esc(family)} · ${n}</button>`).join("");
+}
+
+async function libSearch() {
+  const idx = await libIndex();
+  if (!idx) return;
+  const q = $("lib-q").value.trim();
+  const hookFirst = $("lib-money-first").checked ? "money" : "";
+  const rows = searchLibrary(idx, { q, family: state.lib.family, hookFirst, limit: 60 });
+  state.items = rows.map(toItem);
+  state.cursor = null;
+  libCountEl.textContent = `${rows.length} shown · ${idx.n ?? idx.rows?.length ?? "?"} indexed` +
+    (hookFirst ? " · money angle first" : "") +
+    (state.lib.family ? ` · family: ${state.lib.family}` : "");
+  renderGrid();
+}
+
+$("src-twetch").addEventListener("click", () => setSource("twetch"));
+$("src-library").addEventListener("click", () => setSource("library"));
+$("lib-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  void libSearch();
+});
+$("lib-money-first").addEventListener("change", () => void libSearch());
+libChipsEl.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-fam]");
+  if (!b) return;
+  state.lib.family = b.dataset.fam;
+  renderChips();
+  void libSearch();
 });
 $("download-btn").addEventListener("click", () => void download());
 classifyBtn.addEventListener("click", () => void classify());

@@ -39,6 +39,12 @@ button.primary { background: #2f6fed; border-color: #2f6fed; }
 button:disabled { opacity: 0.45; cursor: default; }
 .actions { display: flex; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+.source-toggle { display: flex; gap: 8px; margin: 10px 0; }
+.source-toggle button.active { background: #2f6fed; border-color: #2f6fed; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.chips button { font-size: 12px; padding: 4px 10px; }
+.chips button.active { background: #2f6fed; border-color: #2f6fed; }
+.check { display: inline-flex; align-items: center; gap: 6px; }
 .tile {
   background: #1e1e23;
   border: 1px solid #34343c;
