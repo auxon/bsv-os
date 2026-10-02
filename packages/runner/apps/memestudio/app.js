@@ -8,7 +8,8 @@ import {
   POST_TEXT_BUDGET,
   createPostConfirm,
   estimateFeeSats,
-  layoutCaption,
+  hitField,
+  layoutFields,
 } from "./caption.js";
 import { families, searchLibrary, toItem } from "./library.js";
 
@@ -85,6 +86,12 @@ const state = {
   fundTimer: null,
   // Local library tab (library-index.json built by evals/library).
   lib: { index: null, loading: false, source: "twetch", family: "", moneyFirst: true },
+  // Free-positioned captions: classic top/bottom (draggable) + extras.
+  extras: [],
+  pos: { top: null, bottom: null }, // {ax, ay} once dragged
+  boxes: [],
+  drag: null,
+  fieldSeq: 1,
 };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -197,6 +204,7 @@ async function select(i) {
   editorEl.classList.remove("hidden");
   resultEl.innerHTML = "";
   visionEl.innerHTML = "";
+  resetFields();
   drawPreview();
   editorEl.scrollIntoView();
   refreshStatus();
@@ -207,6 +215,14 @@ function measure(text, px) {
   return ctx.measureText(text).width;
 }
 
+function currentFields() {
+  return [
+    { id: "top", text: topEl.value, ...(state.pos.top ?? { ax: 0.5, ay: 0.08 }) },
+    { id: "bottom", text: bottomEl.value, ...(state.pos.bottom ?? { ax: 0.5, ay: 0.92 }) },
+    ...state.extras.map((e) => ({ id: e.id, text: e.text, ax: e.ax, ay: e.ay })),
+  ];
+}
+
 function drawPreview() {
   if (!state.img || !state.selected) return;
   const img = state.img;
@@ -214,29 +230,27 @@ function drawPreview() {
   canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
   canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const layout = layoutCaption({
-    top: topEl.value,
-    bottom: bottomEl.value,
+  const layouts = layoutFields(currentFields(), {
     width: canvas.width,
     height: canvas.height,
     measure,
   });
+  state.boxes = layouts;
   ctx.fillStyle = "#fff";
   ctx.strokeStyle = "#000";
   ctx.textAlign = "center";
   ctx.lineJoin = "round";
-  const paint = (lines, endBaselineY, upward) => {
-    ctx.font = `bold ${layout.size}px Impact, "Arial Black", "Liberation Sans", sans-serif`;
-    ctx.lineWidth = Math.max(2, Math.floor(layout.size / 8));
-    const ordered = upward ? [...lines].reverse() : lines;
+  for (const L of layouts) {
+    if (!L.lines.length) continue;
+    ctx.font = `bold ${L.size}px Impact, "Arial Black", "Liberation Sans", sans-serif`;
+    ctx.lineWidth = Math.max(2, Math.floor(L.size / 8));
+    const ordered = L.upward ? [...L.lines].reverse() : L.lines;
     ordered.forEach((line, k) => {
-      const y = upward ? endBaselineY - k * layout.lineHeight : endBaselineY + k * layout.lineHeight;
-      ctx.strokeText(line, canvas.width / 2, y);
-      ctx.fillText(line, canvas.width / 2, y);
+      const y = L.upward ? L.firstBaselineY - k * L.lineHeight : L.firstBaselineY + k * L.lineHeight;
+      ctx.strokeText(line, L.cx, y);
+      ctx.fillText(line, L.cx, y);
     });
-  };
-  if (layout.top.lines.length) paint(layout.top.lines, layout.top.firstBaselineY, false);
-  if (layout.bottom.lines.length) paint(layout.bottom.lines, layout.bottom.lastBaselineY, true);
+  }
   updateFeeLine();
 }
 
@@ -411,6 +425,100 @@ async function post() {
   }
 }
 
+function canvasPos(ev) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (ev.clientX - r.left) * (canvas.width / Math.max(1, r.width)),
+    y: (ev.clientY - r.top) * (canvas.height / Math.max(1, r.height)),
+  };
+}
+
+function writeFieldPos(id, ax, ay) {
+  ax = Math.min(1, Math.max(0, ax));
+  ay = Math.min(1, Math.max(0, ay));
+  if (id === "top") state.pos.top = { ax, ay };
+  else if (id === "bottom") state.pos.bottom = { ax, ay };
+  else {
+    const e = state.extras.find((x) => x.id === id);
+    if (e) {
+      e.ax = ax;
+      e.ay = ay;
+    }
+  }
+}
+
+canvas.addEventListener("pointerdown", (ev) => {
+  if (!state.img || !state.boxes.length) return;
+  const p = canvasPos(ev);
+  const id = hitField(state.boxes, p.x, p.y);
+  if (!id) return;
+  ev.preventDefault();
+  const L = state.boxes.find((l) => l.id === id);
+  state.drag = { id, dx: p.x - L.cx, dy: p.y - L.firstBaselineY };
+  try {
+    canvas.setPointerCapture(ev.pointerId);
+  } catch { /* ignore */ }
+  canvas.style.cursor = "grabbing";
+});
+
+canvas.addEventListener("pointermove", (ev) => {
+  if (!state.drag) return;
+  ev.preventDefault();
+  const p = canvasPos(ev);
+  writeFieldPos(state.drag.id, (p.x - state.drag.dx) / canvas.width, (p.y - state.drag.dy) / canvas.height);
+  drawPreview();
+});
+
+for (const ev of ["pointerup", "pointercancel"]) {
+  canvas.addEventListener(ev, () => {
+    state.drag = null;
+    canvas.style.cursor = "";
+  });
+}
+
+const extrasEl = $("extra-fields");
+
+function renderExtras() {
+  extrasEl.innerHTML = state.extras.map((e) =>
+    `<label>Text <input data-extra="${e.id}" type="text" maxlength="160" value="${esc(e.text)}" placeholder="MORE TEXT" autocomplete="off" /></label>` +
+    `<button type="button" data-unextra="${e.id}">✕</button>`).join("");
+}
+
+$("add-field-btn").addEventListener("click", () => {
+  if (state.extras.length >= 5) return;
+  state.extras.push({ id: `x${state.fieldSeq++}`, text: "", ax: 0.5, ay: Math.min(0.85, 0.25 + 0.12 * state.extras.length) });
+  renderExtras();
+  drawPreview();
+  const inp = extrasEl.querySelector("input[data-extra]");
+  if (inp) inp.focus();
+});
+
+extrasEl.addEventListener("input", (e) => {
+  const inp = e.target.closest("[data-extra]");
+  if (!inp) return;
+  const f = state.extras.find((x) => x.id === inp.dataset.extra);
+  if (f) {
+    f.text = inp.value;
+    drawPreview();
+  }
+});
+
+extrasEl.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-unextra]");
+  if (!b) return;
+  state.extras = state.extras.filter((x) => x.id !== b.dataset.unextra);
+  renderExtras();
+  drawPreview();
+});
+
+function resetFields() {
+  state.extras = [];
+  state.pos = { top: null, bottom: null };
+  state.boxes = [];
+  state.drag = null;
+  renderExtras();
+}
+
 $("search-form").addEventListener("submit", (e) => {
   e.preventDefault();
   state.q = $("q").value.trim();
@@ -419,6 +527,7 @@ $("search-form").addEventListener("submit", (e) => {
   editorEl.classList.add("hidden");
   state.selected = null;
   state.img = null;
+  resetFields();
   void search(false);
 });
 moreBtn.addEventListener("click", () => void search(true));
@@ -442,6 +551,7 @@ $("back-btn").addEventListener("click", () => {
   editorEl.classList.add("hidden");
   state.selected = null;
   state.img = null;
+  resetFields();
   renderGrid();
 });
 const libBarEl = $("library-bar");
@@ -456,6 +566,7 @@ function setSource(source) {
   state.selected = null;
   state.img = null;
   editorEl.classList.add("hidden");
+  resetFields();
   if (source === "library") void libSearch();
   else void search(false);
 }

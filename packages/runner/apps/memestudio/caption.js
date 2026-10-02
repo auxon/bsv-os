@@ -109,10 +109,65 @@ export function fitText({ lines, maxWidth, baseSize, minSize = 20, measure }) {
 }
 
 /**
- * Lay out a classic top/bottom caption over an image of (width x height).
- * Returns pixel geometry the app draws verbatim: font size, line height,
- * and the baseline y of the first top line and the last bottom line.
+ * Free-positioned text fields. Each field: { id, text, ax, ay } with
+ * ax/ay in 0..1 (center-x, first-baseline-y fractions). Classic top and
+ * bottom captions are just fields at (0.5, top-pad) and (0.5, bottom).
+ * layoutCaption() above is preserved byte-for-byte for its tests;
+ * this generalizes it for draggable + extra fields.
  */
+export function layoutFields(fields, { width, height, measure }) {
+  const w = Math.max(1, Math.floor(width));
+  const h = Math.max(1, Math.floor(height));
+  const maxWidth = Math.floor(w * 0.92);
+  const baseSize = Math.max(20, Math.floor(Math.min(w, h) / 9));
+  const minSize = Math.max(14, Math.floor(baseSize / 2));
+  return (Array.isArray(fields) ? fields : []).map((f, i) => {
+    const lines = splitCaption(f.text);
+    const fit = fitText({ lines, maxWidth, baseSize, minSize, measure });
+    const size = fit.size;
+    const lineHeight = Math.floor(size * 1.15);
+    const ax = clamp01(f.ax ?? 0.5);
+    const ay = clamp01(f.ay ?? (i === 0 ? 0 : 1));
+    const upward = typeof f.upward === "boolean" ? f.upward : ay > 0.5;
+    const cx = Math.floor(ax * w);
+    const firstBaselineY = Math.floor(ay * h);
+    const widths = fit.lines.map((l) => measure(l, size));
+    const boxW = widths.length ? Math.max(...widths) : 0;
+    const spanH = (fit.lines.length - 1) * lineHeight;
+    return {
+      id: f.id ?? `field-${i}`,
+      lines: fit.lines,
+      size,
+      lineHeight,
+      upward,
+      cx,
+      firstBaselineY,
+      fits: fit.fits,
+      // Hit box in canvas px (padded for fat fingers).
+      box: {
+        x0: cx - boxW / 2 - 8,
+        x1: cx + boxW / 2 + 8,
+        y0: (upward ? firstBaselineY - spanH : firstBaselineY) - size - 8,
+        y1: (upward ? firstBaselineY : firstBaselineY + spanH) + 8,
+      },
+    };
+  });
+}
+
+function clamp01(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0.5;
+  return Math.min(1, Math.max(0, n));
+}
+
+/** Topmost laid-out field containing (x, y), else null. */
+export function hitField(layouts, x, y) {
+  for (let i = layouts.length - 1; i >= 0; i--) {
+    const b = layouts[i].box;
+    if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return layouts[i].id;
+  }
+  return null;
+}
 export function layoutCaption({ top, bottom, width, height, measure }) {
   const w = Math.max(1, Math.floor(width));
   const h = Math.max(1, Math.floor(height));
