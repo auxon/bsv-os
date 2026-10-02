@@ -124,7 +124,7 @@ it("device allowlist: the callable set is exactly what the design agreed", async
   ], "reads are exactly the agreed set");
   assert.deepEqual(writes, [
     "anchorFile", "appInstall", "appInvoke", "appRemove", "inscribe", "lock",
-    "policyApprove", "policyDeny", "send", "sweepOut", "unlock",
+    "policyApprove", "policyDeny", "registerPush", "send", "sweepOut", "unlock",
   ], "writes are exactly the agreed set");
 
   // Adding a method must be a deliberate act, in all three places.

@@ -109,7 +109,7 @@ read      isAuthenticated getVersion getNetwork getHeight getHeader balance
           addressQr history policyList policyPending listPending utxos
           ordList bsv21List appList
 wallet    lock unlock policyApprove policyDeny send anchorFile sweepOut
-          inscribe appInvoke appInstall appRemove
+          inscribe appInvoke appInstall appRemove registerPush
 ```
 
 The two lines above are the authoritative list; `DEVICE_READS` / `DEVICE_WRITES`
@@ -134,6 +134,9 @@ paired and allowed to call it.
 Several wallet entries are provisional and need a deliberate yes each rather
 than inheriting approval from the block: `sweepOut`, `inscribe`, `anchorFile`,
 and `appInvoke`.
+
+`registerPush` is the device recording where to send its own notifications — a
+mutation of the device's record, not a wallet action.
 
 `appInstall` and `appRemove` are the app store: installing adds an origin that
 may *ask* to spend — the cap it requests still needs approval, and widening it
@@ -261,6 +264,10 @@ Decisions worth knowing:
 Absent and deliberate: policy *editing* from the phone (read-only for now), and
 sweep-out.
 
+The app target must also set the notification delegate and call
+`PushRegistrar.registerCategories()` before the first push arrives, or the lock
+screen shows no buttons.
+
 ## Phase 2: hosting apps
 
 The milestone is "an installed app runs on the phone and spends through
@@ -314,6 +321,74 @@ by deliberately introducing a divergence and confirming it fails.
   over the same policy engine, not a second wallet.
 - No reimplementation of policy in Swift. Two policy engines is one too many,
   and the daemon's is the one with the audit trail.
+
+## Phase 3: push (done), the long tail (blocked on a decision)
+
+The milestone is "you get a push, approve from the lock screen, no app launch".
+
+**The push half is built.**
+
+Daemon side (`packages/walletd/src/push.ts`):
+
+- `wireApprovalPush` is attached to the policy engine's request listener, so a
+  newly queued approval pushes to every paired device that registered a token.
+  It is a listener rather than an import because the policy engine must not
+  depend on iOS.
+- It **fails soft in both directions**: an unconfigured APNs key is a no-op that
+  says so once (verified live — the daemon logs the line and comes up healthy),
+  and a delivery failure is logged rather than thrown, because a phone that
+  cannot be reached must not turn into a failed spend.
+- The provider token is an ES256 JWT, cached for 50 minutes because Apple
+  throttles regeneration, and a test verifies the signature against the public
+  key. Apple's 410 is treated as a dead token to prune; a 503 is not.
+- `registerPush` is device-callable so a phone can record where to push, and a
+  revoked device stops being a target.
+
+iOS side (`Wallet/PushAction.swift`): the notification category and its two
+actions, marked `.authenticationRequired` so **a locked phone cannot approve a
+spend** — iOS demands Face ID or the passcode before either button fires, which
+is the same gate the app applies in-process. `PushAction.from(userInfo:)` maps a
+payload to an action, and is tested against malformed inputs: a payload without
+an origin does nothing rather than approving something, and a default tap is not
+an approval.
+
+**What is not verified: delivery.** That needs an Apple developer key (`.p8`),
+a team id, the bundle id, and a physical device. The code path is complete and
+the transport is injectable, but nothing here has spoken to Apple.
+
+**The long tail is not built, because it needs a decision rather than code.**
+Two blockers, both found by reading rather than assuming:
+
+1. **Bundled apps cannot load off-loopback.** The static app route sits *after*
+   `isLoopbackPeer`, so a phone gets 403 for `/twetch/` or `/bsvos/` today.
+   Serving those bundles to paired devices is easy and safe — they are public
+   source, like `/health` — but it is a deliberate widening of what leaves
+   loopback.
+2. **The shell calls 44 methods, including `twetchAccountImportFromSeed`**,
+   which is in the never-callable set. Hosting the shell wholesale would expose
+   a key-material path, so either the bridge refuses those methods and the UI
+   degrades, or the shell is not hosted on the phone at all.
+
+Beyond that, routing the long tail through a `device:<name>` origin means
+threading an origin through the handlers that still hardcode `cli` (the
+person-resolution path in `pay`, `requestCreate` and `requestPay` are the known
+ones). That is real work, and it is the same work the deferred writes need.
+
+The options, for whoever picks this up:
+
+- **Widen the allowlist to an explicit operator tier** (the bundled apps' reads
+  and writes, minus key material) and thread the origin through. Most faithful
+  to "parity with the panel", and the largest change.
+- **Reads only.** Extend `DEVICE_READS` with the long-tail reads, which need no
+  origin, and leave writes as the reviewed set. The phone gets the Twetch feed
+  and market listings but cannot post or buy.
+- **Skip it.** The phone is a wallet, approvals and app host; the long tail
+  stays on the desktop. Cheapest, and defensible given apps already run through
+  `window.bsv` — Market in particular is a remote app, so Phase 2 already
+  reaches it.
+
+I have not picked one, because each trades capability against the blast radius
+of a stolen token, and that is the operator's call rather than mine.
 
 ## Open questions
 

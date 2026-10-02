@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
 import { dispatch, setBackend, setP2P, setTorrents } from "./rpc.ts";
 import { deviceInvoke } from "./rpc.ts";
-import { authorizeDeviceRequest, completePairing } from "./device.ts";
+import { authorizeDeviceRequest, completePairing, forgetPushToken, pushTargets } from "./device.ts";
+import { ApnsHttpTransport, ApnsTokenProvider, apnsConfigFromEnv, approvalPushContent, sendToDevices } from "./push.ts";
+import { onRequestCreated } from "./policy.ts";
 import { resolveRunnerAppFile, runnerAppStamp } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
@@ -87,6 +89,46 @@ export function setWireBackend(b: { db: Knex; chain: ChainProvider } | null): vo
 function isLoopbackPeer(req: IncomingMessage): boolean {
   const a = req.socket.remoteAddress ?? "";
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+}
+
+/**
+ * Phase 3: push a newly queued approval to every paired device that asked for
+ * one.
+ *
+ * Wired as a listener so the policy engine does not import the push sender or
+ * the devices table. Two properties matter here:
+ *
+ *   - it fails soft, in both directions: an unconfigured APNs key makes it a
+ *     no-op that says so once, and a delivery failure is logged rather than
+ *     thrown, because a phone that cannot be reached must not turn into a
+ *     failed spend or a failed install;
+ *   - it prunes tokens Apple reports as dead, so a reinstalled app does not
+ *     leave a token being retried forever.
+ */
+function wireApprovalPush(db: Knex): void {
+  const config = apnsConfigFromEnv();
+  if (!config) {
+    console.error("push: APNs not configured (BSV_APNS_KEY_ID/TEAM_ID/TOPIC/KEY_P8) — approvals will not be pushed");
+    return;
+  }
+  const transport = new ApnsHttpTransport(config);
+  const tokens = new ApnsTokenProvider(config);
+
+  onRequestCreated((request) => {
+    // Deliberately fire-and-forget: the policy decision is already made.
+    void (async () => {
+      const targets = await pushTargets(db).catch(() => []);
+      if (!targets.length) return;
+      const content = approvalPushContent(request);
+      const result = await sendToDevices(transport, tokens.token(), targets, content);
+      if (result.deadTokens.length) {
+        for (const dead of result.deadTokens) await forgetPushToken(db, dead).catch(() => {});
+      }
+      if (result.failed) {
+        console.error(`push: ${result.sent} sent, ${result.failed} failed for ${request.origin}`);
+      }
+    })().catch((e) => console.error(`push: ${e instanceof Error ? e.message : e}`));
+  });
 }
 
 /**
@@ -957,6 +999,7 @@ export async function main(): Promise<void> {
     const chain = new CombinedProvider();
     setBackend({ db, chain });
     setWireBackend({ db, chain });
+    wireApprovalPush(db);
 
     // F6.3 files: BitTorrent listener + torrent registry. Discovery rides
     // the P2P channel (beacon bt port + authenticated "who has it").

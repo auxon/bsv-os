@@ -30,6 +30,7 @@ library the app will be built on.
 | `Apps/AppBridge.swift` | the native half of `window.bsv`: pinning, allowlist, error mapping |
 | `Apps/AppHostView.swift` | the `WKWebView` host and the injected shim |
 | `Apps/AppsView.swift` | the app list, install, remove, open |
+| `Wallet/PushAction.swift` | Phase 3: notification actions, and the payload → action mapping |
 
 ## Running it
 
@@ -84,6 +85,22 @@ Both are pinned by tests, because getting them backwards is a runtime
   Two policy engines is one too many.
 - **No UI.** The SwiftUI shell, the `WKWebView` app host and the `window.bsv`
   bridge are Phase 1/2; this package is what they will call.
+
+## Push (Phase 3)
+
+The daemon pushes a newly queued approval to every paired device that registered
+a token; `PushAction` turns the notification's payload and the button pressed
+into an action. The two actions are `.authenticationRequired`, so a locked phone
+cannot approve a spend — iOS asks for Face ID or the passcode first.
+
+Delivery is **not** verified anywhere: it needs an Apple developer key, a team
+id, the bundle id, and a real device. Set `BSV_APNS_KEY_ID`, `BSV_APNS_TEAM_ID`,
+`BSV_APNS_TOPIC` and `BSV_APNS_KEY_P8` on the daemon to enable it; unset, the
+daemon logs that push is off and carries on.
+
+The app target must set the notification delegate and call
+`PushRegistrar.registerCategories()` at launch, or the lock screen shows no
+buttons.
 
 ## Guarding against drift
 

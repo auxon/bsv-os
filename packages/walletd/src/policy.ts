@@ -191,6 +191,7 @@ async function upsertRequest(
       ...(score ? scoreFields(score) : {}),
     });
     await logEvent(db, "request.created", { origin, amountSats, action });
+    announceRequest(origin, amountSats, action);
   } else if (score) {
     await db("policy_requests").where({ id: seen.id }).update(scoreFields(score));
   }
@@ -313,11 +314,42 @@ export async function setPolicy(db: Knex, origin: string, mode: PolicyMode, capS
   }
 }
 
+/**
+ * Phase 3: something to tell when an approval is queued.
+ *
+ * A listener rather than a direct import, because the thing that needs to know
+ * is a push sender that reads the devices table — and policy.ts importing
+ * push/device code would tie the policy engine to iOS. index.ts wires this at
+ * startup, the same shape as setBackend.
+ */
+export type RequestCreatedListener = (request: {
+  origin: string;
+  amountSats: number;
+  action: string;
+}) => void;
+
+let requestListener: RequestCreatedListener | null = null;
+
+export function onRequestCreated(listener: RequestCreatedListener | null): void {
+  requestListener = listener;
+}
+
+/** Fire the listener without ever letting it break the caller. */
+function announceRequest(origin: string, amountSats: number, action: string): void {
+  if (!requestListener) return;
+  try {
+    requestListener({ origin, amountSats, action });
+  } catch {
+    /* a notification is not worth failing a policy decision over */
+  }
+}
+
 export async function seedRequest(db: Knex, origin: string, amountSats: number, action: string): Promise<void> {
   const seen = await db("policy_requests").where({ origin, action }).first();
   if (!seen) {
     await db("policy_requests").insert({ origin, amount_sats: amountSats, action, created_at: Date.now() });
     await logEvent(db, "request.created", { origin, amountSats, action });
+    announceRequest(origin, amountSats, action);
   }
 }
 

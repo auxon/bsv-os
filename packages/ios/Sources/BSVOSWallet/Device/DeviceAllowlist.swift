@@ -51,6 +51,7 @@ public enum DeviceAllowlist {
         "appInvoke",
         "appInstall",
         "appRemove",
+        "registerPush",
     ]
 
     /// Methods that must never be reachable from a device, however convenient

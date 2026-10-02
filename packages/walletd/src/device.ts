@@ -76,6 +76,9 @@ export const DEVICE_WRITES: readonly string[] = [
   // again, so this grants no spending authority by itself.
   "appInstall",
   "appRemove",
+  // The device registering its own push token. A mutation of the device record,
+  // not a wallet action, which is why it lives here rather than in `reads`.
+  "registerPush",
 ];
 
 /**
@@ -366,6 +369,30 @@ export async function authorizeDeviceRequest(opts: {
   }
 
   return { ok: true, status: 200, code: "OK", message: "", device };
+}
+
+/** Store (or clear) the APNs token a device wants approvals pushed to. */
+export async function setDevicePushToken(db: Knex, deviceId: string, token: string | null): Promise<boolean> {
+  const clean = (token ?? "").trim().toLowerCase();
+  if (clean && !/^[0-9a-f]{64,200}$/.test(clean)) {
+    throw new DeviceError("BAD_PARAM", "push token must be hex");
+  }
+  const updated = await db("devices").where({ id: deviceId }).update({ apns_token: clean || null });
+  return updated > 0;
+}
+
+/** Devices that asked to be pushed to. Revoked devices are excluded. */
+export async function pushTargets(db: Knex): Promise<Array<{ id: string; apnsToken: string }>> {
+  const rows = (await db("devices").select()) as Array<Record<string, unknown>>;
+  return rows
+    .filter((r) => r.revoked_at === null || r.revoked_at === undefined)
+    .filter((r) => typeof r.apns_token === "string" && r.apns_token.length > 0)
+    .map((r) => ({ id: String(r.id), apnsToken: String(r.apns_token) }));
+}
+
+/** Forget a token Apple says is dead, so we stop trying it. */
+export async function forgetPushToken(db: Knex, token: string): Promise<void> {
+  await db("devices").where({ apns_token: token }).update({ apns_token: null });
 }
 
 // ── rate limiting ────────────────────────────────────────────────────────

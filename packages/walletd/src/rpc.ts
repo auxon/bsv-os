@@ -24,6 +24,7 @@ import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
 import { DEVICE_READS, deviceOrigin, isDeviceCallable } from "./device.ts";
 import { cancelPairing, listDevices, mintPairingCode, pendingPairingView, renameDevice, revokeDevice } from "./device.ts";
+import { setDevicePushToken } from "./device.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
@@ -426,6 +427,13 @@ export async function deviceInvoke(
     case "appInstall":
     case "appRemove":
       return METHODS[method]!(params);
+
+    case "registerPush": {
+      const raw = p(params) as { token?: unknown };
+      const token = typeof raw.token === "string" && raw.token.trim() ? raw.token : null;
+      const ok = await setDevicePushToken(b.db, device.id, token);
+      return { registered: ok };
+    }
 
     case "send": {
       const raw = p(params) as { to?: unknown; sats?: unknown; label?: unknown };
