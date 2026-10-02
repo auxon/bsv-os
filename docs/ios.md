@@ -510,10 +510,39 @@ From a paired device: `twetchStatus`, `twetchFeed`, `agentList`, `doctor`,
 is refused under `device:origin-spend` with the daemon naming exactly the
 approval command, which is the extracted-origin path proving itself.
 
-Still outstanding for the long tail in the *UI*: the bundled-app assets sit
-behind `isLoopbackPeer`, so serving them to paired devices is the remaining
-change before an app like Twetch can load in the phone's web view. They are
-public source, like `/health`, so that part is small and safe.
+### The bundled apps on the phone, finished
+
+Two halves, both done.
+
+**Assets.** The bundled-app GET route moved *above* the loopback gate, with the
+serving code extracted into `serveRunnerApp` so loopback and a paired device
+share one implementation. Narrow by construction, and a test asserts the
+narrowness rather than trusting it: GET only, only names in `RUNNER_APPS`, and
+traversal refused by `resolveRunnerAppFile` (verified live — `/twetch/../../…`
+answers 404 both unencoded and percent-encoded). Everything else stayed below the
+gate, and the same test fails if `/`, `/v1/watch`, cast media, cast live segments,
+the JSON-RPC or the BRC-100 wire ever drift above it.
+
+Serving these to a peer that can already reach the daemon leaks nothing: they are
+public source in this repository, the same reasoning as `/health`.
+
+**The RPC they call.** The bundled apps call the daemon's JSON-RPC
+*same-origin* via `fetch("/")`, which works on the desktop because the page is
+loaded from loopback. On a phone it cannot, and the RPC should stay
+loopback-only. So `BundledAppHost` injects a shim that rewrites that one call
+shape into a native bridge message, and `RpcBridge` forwards it to the
+authenticated device surface.
+
+The property that makes the rewrite worth doing: **the token never enters the
+page.** The alternative — handing the page a credential and letting it call
+`/v1/device/<method>` directly — would put a wallet token in a web view, which is
+exactly what the desktop design avoids. The allowlist is checked natively before
+anything is sent, so a bundled app asking for key material is refused on the
+phone, and a test asserts the shim contains no `Bearer`, no `Authorization`, no
+`bsv-token`, and no device URL.
+
+The shim also carries `window.bsv` unchanged, so a bundled app that uses the
+bridge and one that uses same-origin RPC both work in the same host.
 
 ## Open questions
 

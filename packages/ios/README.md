@@ -30,6 +30,7 @@ library the app will be built on.
 | `Apps/AppBridge.swift` | the native half of `window.bsv`: pinning, allowlist, error mapping |
 | `Apps/AppHostView.swift` | the `WKWebView` host and the injected shim |
 | `Apps/AppsView.swift` | the app list, install, remove, open |
+| `Apps/BundledAppHost.swift` | hosts the daemon's own apps: asset loading, the `fetch("/")` rewrite, and `RpcBridge` |
 | `Wallet/PushAction.swift` | Phase 3: notification actions, and the payload → action mapping |
 
 ## Running it
@@ -85,6 +86,21 @@ Both are pinned by tests, because getting them backwards is a runtime
   Two policy engines is one too many.
 - **No UI.** The SwiftUI shell, the `WKWebView` app host and the `window.bsv`
   bridge are Phase 1/2; this package is what they will call.
+
+## Bundled apps vs downloaded apps
+
+Two hosts, because the apps differ in how they reach the wallet:
+
+- `AppHostView` hosts an **installed** app, which uses `window.bsv`. The bridge
+  pins the app's domain and allows the 13 intents.
+- `BundledAppHost` hosts the daemon's **own** apps (Twetch, Cast, Explorer,
+  Colosseum, MemeStudio, AskAnything, the shell), which call the daemon's
+  JSON-RPC same-origin. Their assets come from the daemon (public source), and
+  the host rewrites `fetch("/")` into a native bridge call so the RPC still goes
+  through the authenticated device surface.
+
+In both cases the token stays native: neither page is ever given a credential,
+and the method allowlist is enforced in Swift before anything is sent.
 
 ## Push (Phase 3)
 

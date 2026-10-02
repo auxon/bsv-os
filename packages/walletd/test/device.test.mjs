@@ -381,6 +381,49 @@ it("the operator spends use the device origin, not the caller's", async () => {
   }
 });
 
+it("bundled app assets are served to devices, and nothing else moved", () => {
+  // The phone loads these in a web view; a phone is never loopback. The assets
+  // are public source in this repository, so serving them to a peer that can
+  // already reach the daemon leaks nothing — but the carve-out must stay narrow,
+  // and everything else must remain behind the gate.
+  const src = fs.readFileSync(path.join(root, "src", "index.ts"), "utf8");
+  const handler = src.indexOf("function handler() {");
+  const gate = src.indexOf("if (!isLoopbackPeer(req))", handler);
+  assert.ok(handler > 0 && gate > handler, "the gate exists");
+
+  // A needle that is not found returns -1, which would read as "before the
+  // gate" and quietly pass. Fail loudly instead: a guard that misreports a
+  // missing route is worse than no guard.
+  const before = (needle) => {
+    const at = src.indexOf(needle, handler);
+    assert.ok(at > 0, `route not found in index.ts: ${needle}`);
+    return at < gate;
+  };
+
+  // Above the gate, deliberately.
+  assert.ok(before("/v1/device/"), "the device surface is carved out");
+  assert.ok(before("serveRunnerApp(req, res"), "bundled app assets are carved out");
+
+  // Below it, unchanged. If any of these ever moves above the gate, that is a
+  // real widening and should not happen by accident.
+  for (const [needle, label] of [
+    ['castRoute === "/cast/media"', "cast media"],
+    ['"/v1/watch"', "the watch stream"],
+    ["await dispatch(body)", "the JSON-RPC"],
+    ['req.url.startsWith("/w/")', "the BRC-100 wire"],
+    ["castSegmentHttp(req", "cast live segments"],
+  ]) {
+    assert.ok(!before(needle), `${label} must stay loopback-only`);
+  }
+
+  // And the carve-out itself is narrow: GET only, and only known app names.
+  const carve = src.slice(src.indexOf("// Bundled app assets move ABOVE"), gate);
+  assert.match(carve, /req\.method === "GET"/, "GET only");
+  // `appMatch[1]!` — the non-null assertion is part of the source text.
+  assert.match(carve, /RUNNER_APPS\.has\(appMatch\[1\]!?\)/, "only bundled app names");
+  assert.doesNotMatch(carve, /resolveRunnerAppFile\(req/, "no caller-supplied path reaches the resolver");
+});
+
 it("deviceInvoke refuses anything off the allowlist, even reachable methods", async () => {
   const db = await memdb();
   try {

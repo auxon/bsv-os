@@ -2,9 +2,11 @@ node_modules/
 dist/
 .wrangler/
 *.tsbuildinfo
-# Swift Package Manager build directory
+# Swift Package Manager / Xcode local state
 .build/
+.swiftpm/
 *.xcuserstate
+xcuserdata/
 .DS_Store
 # makepkg artifacts
 *.pkg.tar.*

@@ -707,6 +707,58 @@ export async function listenJsonApi(port = JSON_API_PORT, backend?: Brc100Contex
   return server;
 }
 
+/**
+ * Serve one file from a bundled runner app.
+ *
+ * Extracted so the same code serves both callers: loopback (the desktop, where
+ * a runner window loads the page over the pinned localhost cert) and a paired
+ * device over the VPN (docs/ios.md, Phase 3).
+ */
+async function serveRunnerApp(req: IncomingMessage, res: ServerResponse, name: string, subpath: string): Promise<void> {
+  const dir = runnerAppDir(name);
+  // Bundle stamp for the shell's staleness banner: every served file's
+  // name+size+mtime, so a view-module fix moves it too (per-file ETags only
+  // cover the file you ask for; the banner used to watch app.js).
+  if (dir && subpath === "/__build") {
+    const stamp = runnerAppStamp(dir);
+    const etag = `W/"${stamp}"`;
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, { etag, "cache-control": "no-store" });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", etag });
+    res.end(JSON.stringify({ stamp }));
+    return;
+  }
+  const asset = dir ? resolveRunnerAppFile(dir, subpath) : null;
+  if (!asset) {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found");
+    return;
+  }
+  try {
+    const body = fs.readFileSync(asset.file);
+    // An ETag from mtime+size lets a long-lived runner window notice that the
+    // bundle changed under it. The shell is a single page that imports its
+    // modules once, so after `git pull` + daemon restart it would otherwise
+    // keep running the old code with no sign anything is wrong.
+    const stat = fs.statSync(asset.file);
+    const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+    res.writeHead(200, {
+      "content-type": asset.mime,
+      "cache-control": "no-store",
+      etag,
+      "last-modified": stat.mtime.toUTCString(),
+    });
+    res.end(body);
+  } catch {
+    res.writeHead(500, { "content-type": "text/plain" });
+    res.end("app bundle unreadable");
+  }
+}
+
+
 function handler() {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.url === "/health" && req.method === "GET") {
@@ -739,6 +791,24 @@ function handler() {
       await deviceHttp(req, res);
       return;
     }
+    // Bundled app assets move ABOVE the loopback gate: a paired phone loads
+    // these in a web view, and a phone is never loopback (docs/ios.md).
+    //
+    // Safe to serve: they are public source in this repository, so a peer that
+    // can already reach the daemon learns nothing new — the same reasoning as
+    // /health. Deliberately narrow: GET only, only names in RUNNER_APPS, and
+    // resolveRunnerAppFile polices traversal. The JSON-RPC those pages call is
+    // NOT here: it stays loopback-only, and the iOS host rewrites it to the
+    // authenticated device surface (packages/ios), so the token never reaches a
+    // page.
+    if (typeof req.url === "string" && req.method === "GET") {
+      const appMatch = /^\/([a-z0-9-]+)(\/[^?]*)?$/.exec(req.url.split("?")[0]!);
+      if (appMatch && RUNNER_APPS.has(appMatch[1]!)) {
+        await serveRunnerApp(req, res, appMatch[1]!, appMatch[2] ?? "/");
+        return;
+      }
+    }
+
     if (!isLoopbackPeer(req)) {
       res.writeHead(403, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { code: "FORBIDDEN", message: "wallet RPC is loopback-only; remote buyers use /v1/serve/<method>" } }));
@@ -778,59 +848,6 @@ function handler() {
         castLiveFileHttp(req, res, m[1]!, m[2]!);
         return;
       }
-    }
-    // Bundled Twetch companion app: static files served from the daemon's
-    // own HTTPS origin, so the page's JSON-RPC calls are same-origin and
-    // the pinned loopback cert already covers it. Domain "localhost" keys
-    // the runner app; nothing here touches custody or the app bridge.
-    const appMatch =
-      req.method === "GET" && typeof req.url === "string"
-        ? /^\/([a-z0-9-]+)(\/[^?]*)?/.exec(req.url.split("?")[0]!)
-        : null;
-    if (appMatch && RUNNER_APPS.has(appMatch[1]!)) {
-      const name = appMatch[1]!;
-      const dir = runnerAppDir(name);
-      // Bundle stamp for the shell's staleness banner: every served file's
-      // name+size+mtime, so a view-module fix moves it too (per-file ETags
-      // only cover the file you ask for; the banner used to watch app.js).
-      if (dir && appMatch[2] === "/__build") {
-        const stamp = runnerAppStamp(dir);
-        const etag = `W/"${stamp}"`;
-        if (req.headers["if-none-match"] === etag) {
-          res.writeHead(304, { etag, "cache-control": "no-store" });
-          res.end();
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", etag });
-        res.end(JSON.stringify({ stamp }));
-        return;
-      }
-      const asset = dir ? resolveRunnerAppFile(dir, appMatch[2] ?? "/") : null;
-      if (!asset) {
-        res.writeHead(404, { "content-type": "text/plain" });
-        res.end("not found");
-        return;
-      }
-      try {
-        const body = fs.readFileSync(asset.file);
-        // An ETag from mtime+size lets a long-lived runner window notice that
-        // the bundle changed under it. The shell is a single page that imports
-        // its modules once, so after `git pull` + daemon restart it would
-        // otherwise keep running the old code with no sign anything is wrong.
-        const stat = fs.statSync(asset.file);
-        const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
-        res.writeHead(200, {
-          "content-type": asset.mime,
-          "cache-control": "no-store",
-          etag,
-          "last-modified": stat.mtime.toUTCString(),
-        });
-        res.end(body);
-      } catch {
-        res.writeHead(500, { "content-type": "text/plain" });
-        res.end("app bundle unreadable");
-      }
-      return;
     }
     // BRC-100 wire surface: the HTTP transport posts payload-only bodies
     // to /w/:call (originator travels in the Origin header, browser-

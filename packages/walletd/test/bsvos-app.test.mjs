@@ -66,7 +66,12 @@ test("a long-lived shell window notices when its build changes underneath it", (
   assert.ok(app.includes('fetch("__build"'), "the shell revalidates the bundle stamp");
   assert.ok(!app.includes('fetch("app.js"'), "not just the entry module");
   assert.ok(/runnerAppStamp\(/.test(src), "the daemon computes a bundle stamp");
-  assert.ok(src.includes('appMatch[2] === "/__build"'), "and serves it at /<app>/__build");
+  // The route passes the URL's remainder through as a subpath and the handler
+  // checks it there (the serving code was extracted so loopback and a paired
+  // device share one implementation). Assert both ends, so the stamp stays
+  // reachable at /<app>/__build however the plumbing is arranged.
+  assert.ok(src.includes('subpath === "/__build"'), "the handler serves the stamp at /<app>/__build");
+  assert.ok(src.includes('appMatch[2] ?? "/"'), "and the route passes the path through to it");
   // ...and the nav the user could not see must still be wired.
   // app.js must consume the registry, not reassemble it: that is exactly what
   // let a missing spread operator hide from the entire test suite.

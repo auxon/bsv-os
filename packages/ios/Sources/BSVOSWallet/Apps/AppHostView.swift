@@ -90,6 +90,7 @@ public final class AppHostController: NSObject, ObservableObject {
         _ = try? await webView.evaluateJavaScript(payload)
     }
 
+    /// Shared with BundledAppHost, which delivers replies the same way.
     static func jsonString(_ value: String) -> String {
         let data = try? JSONEncoder().encode(value)
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
@@ -104,7 +105,8 @@ public final class AppHostController: NSObject, ObservableObject {
     ///
     /// What differs is only the transport: one hop to native, instead of
     /// page → content script → loopback HTTP.
-    public static let injectedScript = """
+    /// Nonisolated so the bundled-app shim can embed it without hopping actors.
+    public nonisolated static let injectedScript = """
     (() => {
       "use strict";
       const handlers = window.webkit && window.webkit.messageHandlers;
@@ -179,7 +181,7 @@ public final class AppHostController: NSObject, ObservableObject {
 /// Routes `postMessage` into an async handler. WebKit hands messages to a
 /// delegate synchronously; the bridge needs to await the wallet, so the work
 /// hops onto a task and the reply is delivered back through evaluateJavaScript.
-private final class ScriptMessageRouter: NSObject, WKScriptMessageHandler {
+final class ScriptMessageRouter: NSObject, WKScriptMessageHandler {
     private let handler: @Sendable (WKScriptMessage) async -> Void
 
     init(handler: @escaping @Sendable (WKScriptMessage) async -> Void) {
