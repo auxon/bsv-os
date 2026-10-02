@@ -1685,6 +1685,7 @@ async function main(): Promise<void> {
           tag: flag(tRest, "tag"),
           format: flag(tRest, "format"),
           sort: flag(tRest, "sort"),
+          cursor: flag(tRest, "cursor"),
           limit: Number(flag(tRest, "limit") ?? 30),
         }));
       } else if (tSub === "meme-folders" || tSub === "memefolders") {
