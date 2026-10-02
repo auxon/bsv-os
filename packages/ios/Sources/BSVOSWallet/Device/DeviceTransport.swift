@@ -24,7 +24,29 @@ public enum DeviceWire {
         case invalidBaseURL
     }
 
-    /// Build a device request.
+    /// Build the pairing request — the one route that takes no token.
+    ///
+    /// Deliberately separate from `request(...)` below: that one enforces the
+    /// wallet allowlist, and `pair` is correctly not on it. Pairing is
+    /// pre-authentication, guarded by the one-time code instead.
+    public static func pairRequest(
+        baseURL: URL,
+        payload: Data
+    ) throws -> URLRequest {
+        guard let url = URL(string: pathPrefix + "pair", relativeTo: baseURL) else {
+            throw BuildError.invalidBaseURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = payload
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: deviceHeader)
+        // No Authorization (there is nothing to authorise with yet), and no
+        // Origin — asserted by a test.
+        return request
+    }
+
+    /// Build an authenticated device request.
     ///
     /// Throws `methodNotAllowed` rather than sending a call the daemon would
     /// refuse: failing locally keeps the allowlist authoritative on both sides.
@@ -57,6 +79,19 @@ public protocol DeviceHTTPClient: Sendable {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
 }
 
+/// The daemon's device surface mirrors the wallet's JSON shape:
+/// `{"result": …}` on success, `{"error": {"code", "message"}}` otherwise.
+/// Shared by the wallet client and the pairing client so the two cannot drift.
+public struct DeviceEnvelope<T: Decodable & Sendable>: Decodable, Sendable {
+    public let result: T?
+    public let error: WalletError?
+
+    public init(result: T?, error: WalletError?) {
+        self.result = result
+        self.error = error
+    }
+}
+
 public struct URLSessionDeviceClient: DeviceHTTPClient {
     private let session: URLSession
 
@@ -87,13 +122,6 @@ public struct DeviceWalletClient: Sendable {
         self.client = client
     }
 
-    /// The daemon's device surface mirrors the wallet's JSON shape:
-    /// `{"result": …}` on success, `{"error": {"code", "message"}}` otherwise.
-    private struct Envelope<T: Decodable>: Decodable {
-        let result: T?
-        let error: WalletError?
-    }
-
     public func call<Result: Decodable & Sendable>(
         _ method: String,
         params: some Encodable & Sendable,
@@ -107,16 +135,16 @@ public struct DeviceWalletClient: Sendable {
             // Distinguish an authorisation failure from a policy denial: the
             // first means this device is not paired (or was revoked), the
             // second means the wallet said no. Both are 403 on the wire.
-            if let envelope = try? decoder.decode(Envelope<Result>.self, from: data),
+            if let envelope = try? decoder.decode(DeviceEnvelope<Result>.self, from: data),
                let error = envelope.error {
                 throw error
             }
             throw WalletError(code: "UNAUTHORIZED", message: "device is not paired, or was revoked")
         }
 
-        let envelope: Envelope<Result>
+        let envelope: DeviceEnvelope<Result>
         do {
-            envelope = try decoder.decode(Envelope<Result>.self, from: data)
+            envelope = try decoder.decode(DeviceEnvelope<Result>.self, from: data)
         } catch {
             throw WalletError(code: "BAD_REPLY", message: "could not decode the daemon's reply: \(error)")
         }

@@ -83,13 +83,20 @@ public enum DeviceAllowlist {
 /// Stored in the iOS Keychain, Secure-Enclave-wrapped, released only after
 /// Face ID. The daemon keeps only a hash of `token`, so a database read does not
 /// yield a usable credential.
-public struct DeviceCredential: Sendable, Equatable {
+public struct DeviceCredential: Sendable, Equatable, Codable {
     public let deviceID: String
     public let token: String
 
     public init(deviceID: String, token: String) {
         self.deviceID = deviceID
         self.token = token
+    }
+
+    // The daemon writes `deviceId`; everything in this package calls it
+    // deviceID. The mapping lives here rather than at each call site.
+    enum CodingKeys: String, CodingKey {
+        case deviceID = "deviceId"
+        case token
     }
 }
 

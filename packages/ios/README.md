@@ -20,6 +20,39 @@ library the app will be built on.
 | `BRC100/Models.swift` | Wire models for the core calls, derived by reading `brc100.ts` rather than the spec prose |
 | `Device/DeviceAllowlist.swift` | What a paired phone may call, and the key-material methods it never may |
 | `Device/DeviceTransport.swift` | Phase 0 request building and an injectable HTTP client |
+| `Device/Pairing.swift` | the pairing call, Keychain credential storage, an in-memory store for tests |
+| `Wallet/WalletModels.swift` | wire models for the Phase 1 reads, taken from live daemon responses |
+| `Wallet/WalletBackend.swift` | the seam the UI depends on, plus its device implementation |
+| `Wallet/WalletSession.swift` | the view model: status, approvals, send, and their failure modes |
+| `Wallet/BiometricGate.swift` | Face ID / Touch ID, and the stubs tests use to assert a denial stops a spend |
+| `UI/` | the five Phase 1 screens, plus the app root and pairing screen |
+
+## Running it
+
+```bash
+swift test                                             # 47 tests, no daemon needed
+xcodebuild -scheme BSVOSWallet -destination 'generic/platform=iOS Simulator' build
+```
+
+A Swift package can build a library for iOS but not an `.app` bundle, so the app
+target is a few lines around `BSVOSAppView`:
+
+```swift
+import SwiftUI
+import BSVOSWallet
+
+@main
+struct BSVOSiOSApp: App {
+    var body: some Scene {
+        WindowGroup {
+            BSVOSAppView(baseURL: URL(string: "https://<daemon-vpn-address>:2121")!)
+        }
+    }
+}
+```
+
+Pair from the app with the code `bsv device pair` prints on the desktop; the
+credential is stored in the Keychain and reused on later launches.
 
 ## Two encodings that look alike and are not
 

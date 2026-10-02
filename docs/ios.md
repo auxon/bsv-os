@@ -1,4 +1,7 @@
-# bsvOS for iOS: Phase 0, authenticated remote access
+# bsvOS for iOS
+
+Covers the daemon-side gate (Phase 0) and the app skeleton (Phase 1). The
+staging beyond that is at the end.
 
 The iOS plan is staged: a remote client first (full parity, daemon keeps the
 keys), on-device custody later and only if the phone must work standalone.
@@ -202,6 +205,56 @@ Point 3 is the important one. Every previous security decision in this repo was
 made enforceable by a test that fails when the rule is bent; remote access
 should be no different.
 
+## Phase 1: the app skeleton
+
+Built in `packages/ios`, as a Swift package rather than an Xcode project so it
+can be compiled and tested on a Mac: the five screens the milestone needs
+(approvals, wallet/receive, send, history, policy), the session holding their
+state, pairing, and Keychain-backed credential storage. 47 Swift tests, and it
+compiles against the iOS Simulator SDK.
+
+What the milestone still needs is an **app target**. A Swift package can build a
+library for iOS but not an `.app` bundle, so `BSVOSAppView` is the app's root and
+the target is a few lines around it:
+
+```swift
+import SwiftUI
+import BSVOSWallet
+
+@main
+struct BSVOSiOSApp: App {
+    var body: some Scene {
+        WindowGroup {
+            BSVOSAppView(baseURL: URL(string: "https://<daemon-vpn-address>:2121")!)
+        }
+    }
+}
+```
+
+Decisions worth knowing:
+
+- **Biometrics guard the action, not the launch.** Face ID is required at the
+  moment of approving or sending, which is where the risk is; asking at launch
+  would be theatre. A denied check returns `BIOMETRIC_DENIED` and nothing
+  reaches the daemon — a test asserts the daemon is never called.
+- **The session never recomputes an amount.** It validates only what the daemon
+  would reject anyway (empty address, non-positive amount, more than the
+  balance) and passes the figure through unchanged. Fee arithmetic and policy
+  stay in the daemon; a second implementation here would be a second source of
+  truth.
+- **A locked wallet is a state, not an error.** Reads needing the key return
+  `WALLET_LOCKED`, the UI offers Unlock, and Lock lives in the status strip.
+- **Only five screens, not thirty-four.** Phase 3 reaches the long tail by
+  hosting the desktop shell app in a web view rather than rewriting it, so
+  writing those screens in SwiftUI now would be work thrown away.
+- **Credential storage is Keychain with `WhenUnlockedThisDeviceOnly`**, so the
+  token is device-bound and unreadable while locked. The Secure-Enclave wrap
+  described above is a hardening step, not a Phase 1 gate: biometrics are
+  enforced at the spend, which is where the exposure is.
+
+Absent and deliberate: policy *editing* from the phone (read-only for now),
+sweep-out, and the hosted-app web view.
+
 ## What this deliberately does not do
 
 - No seed, and no derived private key, on the phone in Phase 0.
@@ -222,3 +275,6 @@ should be no different.
    Deciding this late means reconciling two disagreeing wallets.
 3. **App Store posture** for a general-purpose BRC-100 app host. Worth a spike
    before Phase 2 goes deep.
+4. **Where the app target lives.** A `packages/ios/` Xcode project keeps it
+   together; a separate one keeps Xcode's project file noise out of this repo.
+   The package works either way, which is why this could wait.
