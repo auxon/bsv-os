@@ -86,6 +86,62 @@ test("the device allowlist in Swift matches the design doc exactly", () => {
   assert.deepEqual([...docWrites].sort(), [...swiftWrites].sort(), "writes agree");
 });
 
+test("the daemon's own allowlist matches the doc and the Swift too", () => {
+  // device.ts is the enforcement point, so it is the third copy of this list.
+  // All three must agree or the phone is either over- or under-privileged
+  // relative to what was reviewed.
+  const deviceTs = read("packages/walletd/src/device.ts");
+  const daemonSet = (name) => {
+    const m = new RegExp(`export const ${name}: readonly string\\[\\] = \\[([\\s\\S]*?)\\n\\];`).exec(deviceTs);
+    assert.ok(m, `${name} found in device.ts`);
+    return new Set([...m[1].matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]));
+  };
+
+  const block = /```\nread      ([\s\S]*?)```/.exec(iosDoc)[1];
+  const sections = {};
+  let current = "read";
+  for (const raw of block.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const starts = /^(read|wallet)\s+(.*)$/.exec(line);
+    if (starts) {
+      current = starts[1];
+      sections[current] = (sections[current] ?? []).concat(starts[2].split(/\s+/));
+    } else if (current) {
+      sections[current] = (sections[current] ?? []).concat(line.split(/\s+/));
+    }
+  }
+
+  const swiftSet = (name) => {
+    const m = new RegExp(`static let ${name}: Set<String> = \\[([\\s\\S]*?)\\n    \\]`).exec(swiftAllowlist);
+    assert.ok(m, `DeviceAllowlist.${name} found`);
+    return new Set([...m[1].matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]));
+  };
+
+  const triples = [
+    ["reads", daemonSet("DEVICE_READS"), new Set(sections.read), swiftSet("reads")],
+    ["writes", daemonSet("DEVICE_WRITES"), new Set(sections.wallet), swiftSet("writes")],
+  ];
+  for (const [label, daemon, doc, swift] of triples) {
+    assert.deepEqual([...daemon].sort(), [...doc].sort(), `${label}: daemon vs doc`);
+    assert.deepEqual([...daemon].sort(), [...swift].sort(), `${label}: daemon vs Swift`);
+  }
+
+  // And the forbidden set is identical in all three.
+  const docNever = /- \*\*Key-material methods are never device-callable\*\*:([\s\S]*?)\n\n/.exec(iosDoc)[1];
+  const docNamed = new Set([...docNever.matchAll(/`([a-zA-Z]+)`/g)].map((m) => m[1]));
+  const daemonNever = daemonSet("NEVER_DEVICE_CALLABLE");
+  const swiftNever = /static let neverDeviceCallable: Set<String> = \[([\s\S]*?)\n    \]/.exec(swiftAllowlist)[1];
+  const swiftNamed = new Set([...swiftNever.matchAll(/"([A-Za-z0-9]+)"/g)].map((m) => m[1]));
+  assert.deepEqual([...daemonNever].sort(), [...swiftNamed].sort(), "forbidden sets match");
+  for (const name of docNamed) {
+    assert.ok(
+      daemonNever.has(name) || daemonNever.has(`recovery${name}`),
+      `the doc names ${name}, and the daemon must forbid it`,
+    );
+  }
+});
+
 test("key-material methods are excluded by name, in both the doc and the Swift", () => {
   // The doc names them explicitly in prose; the Swift holds them as data.
   // The bullet wraps across lines, so capture the whole paragraph.

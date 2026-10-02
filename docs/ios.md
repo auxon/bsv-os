@@ -105,17 +105,45 @@ Starting allowlist (reads + wallet-critical writes, to be argued down not up):
 read      isAuthenticated getVersion getNetwork getHeight getHeader balance
           addressQr history policyList policyPending listPending utxos
           ordList bsv21List appList
-wallet    lock unlock policyApprove policyDeny send pay requestCreate
-          requestPay anchorFile sweepOut inscribe appInvoke
+wallet    lock unlock policyApprove policyDeny send anchorFile sweepOut
+          inscribe appInvoke
 ```
 
-The two lines above are the authoritative list; `DeviceAllowlist` in
-`packages/ios/Sources/BSVOSWallet/Device/DeviceAllowlist.swift` mirrors them and
-a test parses both, so widening either side alone fails the suite.
+The two lines above are the authoritative list; `DEVICE_READS` / `DEVICE_WRITES`
+in `packages/walletd/src/device.ts` implement it, `DeviceAllowlist` in
+`packages/ios/Sources/BSVOSWallet/Device/DeviceAllowlist.swift` mirrors it, and
+`test/ios-parity.test.mjs` parses all three, so widening either side alone fails
+the suite.
+
+**Reads split in two, which the list above does not show.** `getVersion`,
+`getNetwork`, `getHeight` and `getHeader` answer while the wallet is locked —
+they are the daemon's public methods. Everything else (`balance`, `addressQr`,
+`history`, `ordList`, …) has to derive per-wallet keys, so a locked wallet
+answers `WALLET_LOCKED`, not data. That is correct behaviour, not a fault, and
+the client already models it: `WalletError.isLocked`.
+
+`unlock` is on the list deliberately, and it is what makes the rest reachable: it
+reads the seed from the OS keyring and takes no passphrase, so the phone can
+unlock itself exactly as the desktop shell's Unlock button does. Biometric gating
+is the client's job at that point — the daemon has already decided the device is
+paired and allowed to call it.
 
 Several wallet entries are provisional and need a deliberate yes each rather
 than inheriting approval from the block: `sweepOut`, `inscribe`, `anchorFile`,
-and `appInvoke`. `appInvoke` deserves the most care: it is how hosted apps reach
+and `appInvoke`.
+
+**Deferred, and deliberately not on the list above:** `pay`, `requestCreate`
+and `requestPay`. Each resolves a person (a `@name`, an identity key, or a
+stored address) before spending, and that path currently hardcodes the `cli`
+origin. Supporting them from a device means threading an origin through the
+person-resolution code rather than duplicating it, which is Phase 1 work — and
+Phase 1 does not need them: its milestone is to approve a spend request and send
+sats, which needs `policyApprove` and `send`.
+
+This list is enforced, not aspirational. `device.ts` holds the same sets,
+`DeviceAllowlist.swift` mirrors them, and `test/ios-parity.test.mjs` fails if any
+of the three disagree — which is how the three entries above were caught stating
+intent rather than reality. `appInvoke` deserves the most care: it is how hosted apps reach
 the wallet, and on the phone the bridge must call the device surface with the
 *app's* domain, so an app gets the same policy origin it would on the desktop
 instead of inheriting the phone's blanket access.
@@ -161,6 +189,14 @@ prove a rule holds rather than trusting review:
 5. Existing loopback behaviour is unchanged — the current suite is the
    regression test, so it must stay green untouched.
 6. A request with an `Origin` header is refused on the device surface.
+
+Verified live against the running daemon (2026-10-02), not only in tests: pairing
+returns a 64-hex token; an authenticated read succeeds; and the refusals behave —
+no token 403, `Origin` present 403, missing `X-Bsv-Device` 400, unknown token 403,
+`createWallet` 403 `NOT_ALLOWED`, an off-allowlist method 403 `NOT_ALLOWED`, `GET`
+405, a wrong pairing code 403. The unlock path was exercised end to end: locked
+wallet → `WALLET_LOCKED` on `balance` → `unlock` 200 → `balance` returns the real
+address and balance.
 
 Point 3 is the important one. Every previous security decision in this repo was
 made enforceable by a test that fails when the rule is bent; remote access

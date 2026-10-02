@@ -12,6 +12,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
 import { dispatch, setBackend, setP2P, setTorrents } from "./rpc.ts";
+import { deviceInvoke } from "./rpc.ts";
+import { authorizeDeviceRequest, completePairing } from "./device.ts";
 import { resolveRunnerAppFile, runnerAppStamp } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
@@ -85,6 +87,77 @@ export function setWireBackend(b: { db: Knex; chain: ChainProvider } | null): vo
 function isLoopbackPeer(req: IncomingMessage): boolean {
   const a = req.socket.remoteAddress ?? "";
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+}
+
+/**
+ * POST /v1/device/<method> — the paired-device surface (docs/ios.md).
+ *
+ * Four gates before anything reaches the wallet, in this order:
+ *
+ *   1. POST only;
+ *   2. an `Origin` header is refused outright — browsers always send one,
+ *      native clients never do, so its presence means a web page (or a stray
+ *      browser on the LAN) is reaching for the wallet;
+ *   3. a custom `X-Bsv-Device` header is required, which a browser could not set
+ *      cross-origin without a preflight this surface never answers;
+ *   4. a bearer token resolving to a live, unrevoked device, rate limited.
+ *
+ * `/v1/device/pair` is the one unauthenticated route, and the pairing code is
+ * its only guard.
+ */
+async function deviceHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const json = (status: number, body: unknown): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  };
+  const fail = (status: number, code: string, message: string): void => json(status, { error: { code, message } });
+
+  if (req.method !== "POST") return fail(405, "BAD_METHOD", "POST only");
+
+  const route = req.url!.split("?")[0]!;
+  const method = route.slice("/v1/device/".length);
+  if (!method) return fail(404, "NOT_FOUND", "no device method in the path");
+
+  let body: Record<string, unknown> = {};
+  try {
+    const raw = await readBytes(req);
+    body = raw.length ? (JSON.parse(raw.toString("utf8")) as Record<string, unknown>) : {};
+  } catch {
+    return fail(400, "PARSE", "body must be JSON");
+  }
+
+  // Same module-level handle the other HTTP surfaces use (set in main()
+  // alongside setBackend).
+  const b = wireBackend;
+  if (!b) return fail(503, "NO_BACKEND", "wallet engine offline");
+
+  if (method === "pair") {
+    try {
+      return json(200, { result: await completePairing(b.db, body) });
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      return fail(403, err.code ?? "PAIR_FAILED", err.message ?? "pairing failed");
+    }
+  }
+
+  // The four gates — Origin, device marker, token, allowlist, rate limit — live
+  // in device.ts as a pure function so they are testable without a TLS server.
+  const decision = await authorizeDeviceRequest({
+    db: b.db,
+    method,
+    origin: typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+    deviceMarker: typeof req.headers["x-bsv-device"] === "string" ? req.headers["x-bsv-device"] : undefined,
+    authorization: typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
+  });
+  if (!decision.ok || !decision.device) return fail(decision.status, decision.code, decision.message);
+  const device = decision.device;
+
+  try {
+    return json(200, { result: await deviceInvoke({ id: device.id, name: device.name }, method, body) });
+  } catch (e) {
+    const err = e as { code?: string; message?: string };
+    return fail(400, err.code ?? "DEVICE_CALL_FAILED", err.message ?? "device call failed");
+  }
 }
 
 /** GET /v1/watch — the `bsv watch` tail as Server-Sent Events. Loopback-only. */
@@ -615,6 +688,13 @@ function handler() {
         : null;
     if (serveMatch) {
       await serveHttp(req, res, serveMatch[1]!);
+      return;
+    }
+    // Phase 0 for iOS: the paired-device surface (docs/ios.md). Carved out
+    // BEFORE the loopback gate, which is narrowed rather than weakened — every
+    // other route below still refuses non-loopback peers exactly as before.
+    if (typeof req.url === "string" && req.url.split("?")[0]!.startsWith("/v1/device/")) {
+      await deviceHttp(req, res);
       return;
     }
     if (!isLoopbackPeer(req)) {

@@ -281,6 +281,48 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "device": {
+      // Operator side of the Phase 0 pairing flow (docs/ios.md).
+      const [dSub, ...dRest] = rest;
+      if (dSub === "pair" || dSub === undefined) {
+        const res = (await call("devicePairStart")) as {
+          result?: { pairing?: { code: string; expiresAt: number } };
+        };
+        const pairing = res?.result?.pairing;
+        if (!pairing) {
+          print(res);
+          break;
+        }
+        const mins = Math.max(0, Math.round((pairing.expiresAt - Date.now()) / 60000));
+        console.error("");
+        console.error(`  pairing code: ${pairing.code}`);
+        console.error("");
+        console.error(`  Enter it in the iOS app within ${mins} minute(s).`);
+        console.error("  The daemon must be reachable over the VPN; the wallet RPC");
+        console.error("  itself stays loopback-only.");
+        console.error("");
+        print(await call("deviceList"));
+      } else if (dSub === "list") {
+        print(await call("deviceList"));
+      } else if (dSub === "revoke" && dRest.find((a) => !a.startsWith("--"))) {
+        print(await call("deviceRevoke", { id: dRest.find((a) => !a.startsWith("--"))! }));
+      } else if (dSub === "rename" && dRest.filter((a) => !a.startsWith("--")).length >= 2) {
+        const [target, to] = dRest.filter((a) => !a.startsWith("--"));
+        print(await call("deviceRename", { id: target, to }));
+      } else if (dSub === "cancel") {
+        print(await call("devicePairCancel"));
+      } else {
+        console.error(
+          "usage: bsv device pair            # mint a one-time code for the iOS app\n" +
+          "       bsv device list            # paired devices, last seen, revoked\n" +
+          "       bsv device revoke <id|name>\n" +
+          "       bsv device rename <id|name> <new name>\n" +
+          "       bsv device cancel          # discard an open pairing code",
+        );
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "anchor": {
       const sha256 = rest.find((a) => !a.startsWith("--"));
       const originFlag = rest.find((a) => a.startsWith("--origin="));
@@ -1935,7 +1977,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|ask|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|device|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|ask|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

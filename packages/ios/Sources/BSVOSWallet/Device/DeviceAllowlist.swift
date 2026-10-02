@@ -33,15 +33,18 @@ public enum DeviceAllowlist {
     /// Writes the phone is allowed to attempt. Every one still runs through the
     /// daemon's policy engine under a `device:<name>` origin, so caps and the
     /// ask-then-approve loop apply exactly as they do for the CLI.
+    ///
+    /// `pay`, `requestCreate` and `requestPay` are deliberately absent: each
+    /// resolves a person before spending, and that path hardcodes the `cli`
+    /// origin today. Supporting them from a device means threading an origin
+    /// through the person-resolution code, which is Phase 1 work. See
+    /// docs/ios.md.
     public static let writes: Set<String> = [
         "lock",
         "unlock",
         "policyApprove",
         "policyDeny",
         "send",
-        "pay",
-        "requestCreate",
-        "requestPay",
         "anchorFile",
         "sweepOut",
         "inscribe",

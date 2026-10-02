@@ -22,6 +22,8 @@ import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
+import { DEVICE_READS, deviceOrigin, isDeviceCallable } from "./device.ts";
+import { cancelPairing, listDevices, mintPairingCode, pendingPairingView, renameDevice, revokeDevice } from "./device.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
@@ -367,6 +369,115 @@ async function ordlockCancelFor(defaultOrigin: string, params: unknown): Promise
   });
 }
 
+/**
+ * Phase 0 for iOS: dispatch a paired device's call (docs/ios.md).
+ *
+ * The origin is DERIVED from the authenticated device, exactly as appInvoke
+ * derives it from the installed app's domain — never taken from the request. A
+ * device that could name its own origin could impersonate the CLI or another
+ * app, and every cap, denial and approval in the policy engine is keyed by
+ * origin.
+ *
+ * Reads delegate to the ordinary handlers, because they have no custody effect
+ * and no origin of their own. Writes go to the engine functions with the device
+ * origin attached.
+ *
+ * Reaching this function means the caller has already authenticated: the
+ * allowlist and the token check happen at the HTTP boundary (index.ts) and in
+ * device.ts. The allowlist is re-checked here anyway, because a second cheap
+ * check at the point of action is how this codebase treats security rules.
+ */
+export async function deviceInvoke(
+  device: { id: string; name: string },
+  method: string,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  const b = needBackend();
+  if (!isDeviceCallable(method)) {
+    throw Object.assign(new Error(`method not allowed for a paired device: ${method}`), { code: "NOT_ALLOWED" });
+  }
+  const origin = deviceOrigin(device.name);
+
+  if (DEVICE_READS.includes(method)) {
+    const handler = METHODS[method];
+    if (!handler) throw Object.assign(new Error(`no handler for ${method}`), { code: "NOT_FOUND" });
+    return handler(params);
+  }
+
+  switch (method) {
+    // Operator actions: the origin is the *subject* of the policy change, not
+    // the caller, so these delegate unchanged.
+    case "lock":
+    case "unlock":
+    case "policyApprove":
+    case "policyDeny":
+      return METHODS[method]!(params);
+
+    // Hosted apps reach the wallet through appInvoke, which derives the app's
+    // own origin. Deliberately NOT rewritten to the device origin: an app on
+    // the phone should carry the same policy origin it has on the desktop, not
+    // inherit the phone's access.
+    case "appInvoke":
+      return METHODS.appInvoke!(params);
+
+    case "send": {
+      const raw = p(params) as { to?: unknown; sats?: unknown; label?: unknown };
+      if (typeof raw.to !== "string" || !raw.to) {
+        throw Object.assign(new Error("recipient address required"), { code: "BAD_PARAM" });
+      }
+      const amount = Math.floor(Number(raw.sats) || 0);
+      if (!(amount > 0)) throw Object.assign(new Error("sats must be a positive sat number"), { code: "BAD_PARAM" });
+      const r = await sendSats({
+        db: b.db, chain: b.chain, origin, to: raw.to, sats: amount,
+        ...(typeof raw.label === "string" && raw.label ? { label: raw.label } : {}),
+      });
+      return { txid: r.txid, fee: r.fee };
+    }
+
+    case "anchorFile": {
+      const raw = p(params) as { sha256?: unknown; filename?: unknown };
+      const sha256 = typeof raw.sha256 === "string" ? raw.sha256.trim().toLowerCase() : "";
+      if (!/^[0-9a-f]{64}$/.test(sha256)) {
+        throw Object.assign(new Error("sha256 must be 64 hex chars"), { code: "BAD_PARAM" });
+      }
+      const filename = typeof raw.filename === "string" ? raw.filename : "";
+      return anchorTip({
+        db: b.db, chain: b.chain, origin, sha256,
+        ...(filename ? { label: safeLabel(filename, `anchor ${sha256.slice(0, 12)}`) } : {}),
+      });
+    }
+
+    case "sweepOut": {
+      const raw = p(params) as { to?: unknown };
+      if (typeof raw.to !== "string" || !raw.to) {
+        throw Object.assign(new Error("destination address required"), { code: "BAD_PARAM" });
+      }
+      const r = await sweepOut({ db: b.db, chain: b.chain, origin, to: raw.to });
+      return { txid: r.txid, fee: r.fee, sats: r.sats };
+    }
+
+    case "inscribe": {
+      const raw = p(params) as { dataHex?: unknown; contentType?: unknown; memo?: unknown };
+      if (typeof raw.dataHex !== "string" || !raw.dataHex) {
+        throw Object.assign(new Error("dataHex required"), { code: "BAD_PARAM" });
+      }
+      if (typeof raw.contentType !== "string" || !raw.contentType) {
+        throw Object.assign(new Error("contentType required"), { code: "BAD_PARAM" });
+      }
+      return inscribeMint({
+        db: b.db, chain: b.chain, origin,
+        dataHex: raw.dataHex, contentType: raw.contentType,
+        ...(Array.isArray(raw.memo) ? { memo: raw.memo as string[] } : {}),
+      });
+    }
+
+    default:
+      // Unreachable while the allowlist and this switch agree; a test asserts
+      // they do, so this is the belt to that test's braces.
+      throw Object.assign(new Error(`device method has no implementation: ${method}`), { code: "NOT_ALLOWED" });
+  }
+}
+
 const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
   getVersion: () => ({ version: VERSION, brc100: true }),
   isAuthenticated: async () => {
@@ -488,6 +599,38 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       db: b.db, chain: b.chain, wif,
       ...(typeof label === "string" && label ? { label } : {}),
     });
+  },
+  /**
+   * Phase 0 device management. Loopback-only operator actions, so they live on
+   * the ordinary RPC surface rather than the device one.
+   */
+  devicePairStart: async () => {
+    needBackend();
+    return { pairing: mintPairingCode(), devices: await listDevices(needBackend().db) };
+  },
+  devicePairCancel: () => {
+    cancelPairing();
+    return { cancelled: true };
+  },
+  deviceList: async () => {
+    const b = needBackend();
+    const devices = await listDevices(b.db);
+    return { devices, pairing: pendingPairingView() };
+  },
+  deviceRevoke: async (params) => {
+    const b = needBackend();
+    const { id, name } = p(params) as { id?: unknown; name?: unknown };
+    const target = typeof id === "string" && id ? id : typeof name === "string" && name ? name : "";
+    if (!target) throw Object.assign(new Error("device id or name required"), { code: "BAD_PARAM" });
+    return { revoked: await revokeDevice(b.db, target) };
+  },
+  deviceRename: async (params) => {
+    const b = needBackend();
+    const { id, name, to } = p(params) as { id?: unknown; name?: unknown; to?: unknown };
+    const target = typeof id === "string" && id ? id : typeof name === "string" && name ? name : "";
+    if (!target) throw Object.assign(new Error("device id or name required"), { code: "BAD_PARAM" });
+    if (typeof to !== "string" || !to.trim()) throw Object.assign(new Error("new name required"), { code: "BAD_PARAM" });
+    return { renamed: await renameDevice(b.db, target, to) };
   },
   anchor: async (params) => {
     const b = needBackend();
