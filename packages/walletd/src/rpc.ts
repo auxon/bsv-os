@@ -20,6 +20,7 @@ import {
 import { parseDurationMs } from "./watch.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
+import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
@@ -2855,6 +2856,33 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   twetchMemeFolders: async () => {
     needBackend();
     return { folders: await memeFolders(fetch) };
+  },
+  /**
+   * Classify a meme image + caption with Clef vision (advisory only).
+   * Accepts a mediaUrl (daemon fetches, 4 MiB cap) or mediaBase64.
+   * Warn-don't-block: throws coded errors, the app shows a notice.
+   */
+  classifyMeme: async (params) => {
+    const raw = p(params);
+    const caption = typeof raw.caption === "string" ? raw.caption.slice(0, 500) : "";
+    let base64 = typeof raw.mediaBase64 === "string" ? raw.mediaBase64 : "";
+    let contentType = "image/jpeg";
+    if (!base64 && typeof raw.mediaUrl === "string" && /^https?:\/\//i.test(raw.mediaUrl)) {
+      const res = await fetch(raw.mediaUrl);
+      if (!res.ok) {
+        throw Object.assign(new Error(`template fetch failed (${res.status})`), { code: "TEMPLATE_FETCH" });
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > CLEF_MAX_IMAGE_BYTES) {
+        throw Object.assign(new Error("template image exceeds the 4 MiB vision cap"), { code: "BAD_PARAM" });
+      }
+      contentType = (res.headers.get("content-type") || "image/jpeg").split(";")[0].trim() || "image/jpeg";
+      base64 = buf.toString("base64");
+    }
+    if (!base64) {
+      throw Object.assign(new Error("mediaUrl or mediaBase64 required"), { code: "BAD_PARAM" });
+    }
+    return classifyMeme({ imageBase64: base64, contentType, caption });
   },
   /** Public profile + recent posts for a Twetch user. */
   twetchUser: async (params) => {

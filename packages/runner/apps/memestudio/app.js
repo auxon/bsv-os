@@ -42,6 +42,8 @@ const fmtEl = $("export-fmt");
 const qualityEl = $("quality");
 const feeEl = $("fee-line");
 const postBtn = $("post-btn");
+const classifyBtn = $("classify-btn");
+const visionEl = $("vision");
 const resultEl = $("result");
 const pickedEl = $("picked");
 const animNoteEl = $("anim-note");
@@ -191,6 +193,7 @@ async function select(i) {
   animNoteEl.classList.toggle("hidden", item.format !== "gif" && item.format !== "mp4" && item.format !== "webm");
   editorEl.classList.remove("hidden");
   resultEl.innerHTML = "";
+  visionEl.innerHTML = "";
   drawPreview();
   editorEl.scrollIntoView();
   refreshStatus();
@@ -309,8 +312,37 @@ function disarm() {
   paintPostBtn();
 }
 
-async function download() {
+/** Vision check: Clef classifies template + hook + caption QA.
+ * Advisory only — warns, never blocks posting. */
+async function classify() {
+  if (!state.selected?.mediaUrl) return;
+  visionEl.innerHTML = `<p class="hint">classifying…</p>`;
+  const caption = [topEl.value, bottomEl.value, postTextEl.value].filter(Boolean).join(" / ").slice(0, 500);
   try {
+    const r = await rpc("classifyMeme", { mediaUrl: state.selected.mediaUrl, caption });
+    const t = r?.template;
+    const libTitle = (state.selected.title || "").toLowerCase();
+    const guess = (t?.choice || "").toLowerCase().replace(/-/g, " ");
+    const match = t && guess && libTitle.includes(guess.split(" ")[0]);
+    const hook = r?.hook;
+    const qa = r?.qa;
+    const qaLevel = typeof qa?.score === "number" ? (qa.score >= 1.5 ? "blocked" : qa.score >= 0.5 ? "minor" : "clean") : null;
+    visionEl.innerHTML = `<div class="notice ${match === false ? "bad" : "ok"}">` +
+      `template: <b>${esc(t?.choice ?? "?")}</b>` +
+      (typeof t?.confidence === "number" ? ` (${Math.round(t.confidence * 100)}%)` : "") +
+      (match === false ? ` — library says “${esc(state.selected.title || "untitled")}”, double-check the pick` : "") +
+      (hook ? `<br>angle: <b>${esc(hook.choice ?? "?")}</b>` : "") +
+      (qaLevel && qaLevel !== "clean" ? `<br>caption QA: <b>${esc(qaLevel)}</b> — review placement/contrast before posting` : "") +
+      `</div>`;
+  } catch (err) {
+    const hint = err.code === "CLEF_NO_KEY"
+      ? "vision not configured on the daemon (CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN)."
+      : err.message;
+    visionEl.innerHTML = `<div class="notice bad">vision check unavailable: ${esc(hint)}</div>`;
+  }
+}
+
+async function download() {  try {
     const { bytes, mime } = await exportMeme();
     const ext = mime === "image/png" ? "png" : "jpg";
     const a = document.createElement("a");
@@ -410,6 +442,7 @@ $("back-btn").addEventListener("click", () => {
   renderGrid();
 });
 $("download-btn").addEventListener("click", () => void download());
+classifyBtn.addEventListener("click", () => void classify());
 postBtn.addEventListener("click", () => void post());
 
 function showSponsor() {
