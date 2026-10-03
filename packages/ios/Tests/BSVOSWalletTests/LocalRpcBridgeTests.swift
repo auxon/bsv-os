@@ -25,6 +25,13 @@ final class LocalRpcBridgeTests: XCTestCase {
         func setParents(_ parents: [String: ChainTx]) { self.parents = parents }
     }
 
+    actor Tokens: TokenIndex {
+        private var rows: [TokenPosition] = []
+        func holdings(tokenId: String, outpoints: [String]) async throws -> [TokenHolding] { [] }
+        func positions(address: String) async throws -> [TokenPosition] { rows }
+        func set(_ rows: [TokenPosition]) { self.rows = rows }
+    }
+
     actor Metadata: InscriptionMetadata {
         var entries: [String: InscriptionMeta] = [:]
         func isInscribed(txid: String, vout: Int) async throws -> Bool { entries["\(txid):\(vout)"] != nil }
@@ -33,7 +40,8 @@ final class LocalRpcBridgeTests: XCTestCase {
     }
 
     private func harness(
-        inscriptions: any InscriptionMetadata = Metadata()
+        inscriptions: any InscriptionMetadata = Metadata(),
+        tokens: any TokenIndex = Tokens()
     ) -> (LocalRpcBridge, LocalWalletBackend, PolicyEngine, Chain) {
         let chain = Chain()
         let engine = PolicyEngine(store: InMemoryPolicyStore())
@@ -42,7 +50,8 @@ final class LocalRpcBridgeTests: XCTestCase {
             chain: chain,
             policy: engine,
             ledger: InMemoryLedgerStore(),
-            inscriptions: inscriptions
+            inscriptions: inscriptions,
+            tokens: tokens
         )
         return (LocalRpcBridge(origin: "bsvos", wallet: wallet, chain: chain), wallet, engine, chain)
     }
@@ -214,6 +223,32 @@ final class LocalRpcBridgeTests: XCTestCase {
         XCTAssertEqual(second["contentLength"], .int(42))
         guard case .string(let url)? = first["contentUrl"] else { return XCTFail("contentUrl") }
         XCTAssertTrue(url.hasSuffix("/content/\(inscribed)_0"))
+    }
+
+    func testBsv21ListReturnsTheIndexersPositions() async throws {
+        let tokens = Tokens()
+        let tokenId = String(repeating: "aa", count: 32) + "_0"
+        await tokens.set([TokenPosition(
+            tokenId: tokenId, symbol: "MEME", decimals: 2,
+            icon: nil, balance: 500, utxoCount: 2
+        )])
+        let (bridge, wallet, _, _) = harness(tokens: tokens)
+
+        // Gallery reads are behind the session lock like every app read.
+        var reply = await bridge.call(id: 1, method: "bsv21List", params: [:])
+        XCTAssertEqual(reply.errorCode, "WALLET_LOCKED")
+
+        try await wallet.unlock()
+        reply = await bridge.call(id: 2, method: "bsv21List", params: [:])
+        guard case .object(let object)? = try? value(reply),
+              case .array(let list)? = object["tokens"] else { return XCTFail("bsv21List shape") }
+        XCTAssertEqual(list.count, 1)
+        guard case .object(let row) = list[0] else { return XCTFail("position row") }
+        XCTAssertEqual(row["tokenId"], .string(tokenId))
+        XCTAssertEqual(row["symbol"], .string("MEME"))
+        XCTAssertEqual(row["decimals"], .int(2))
+        XCTAssertEqual(row["balance"], .int(500))
+        XCTAssertEqual(row["utxoCount"], .int(2))
     }
 
     func testDoctorReportsTheChecksAPhoneCanAnswer() async throws {

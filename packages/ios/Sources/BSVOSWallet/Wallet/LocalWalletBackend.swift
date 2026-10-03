@@ -1026,6 +1026,20 @@ public actor LocalWalletBackend: WalletBackend {
         }
     }
 
+    /// The token gallery: the indexer's registry fanned out to balances for
+    /// one address — the wallet's own unless a caller names another. A gallery
+    /// read: nothing is signed and no envelope is re-checked here.
+    public func tokenPositions(address: String? = nil) async throws -> [TokenPosition] {
+        try requireUnlocked()
+        let target: String
+        if let address, !address.isEmpty {
+            target = address
+        } else {
+            target = try keyMaterial().address
+        }
+        return try await tokens.positions(address: target)
+    }
+
     public func history() async throws -> HistoryResponse {
         let rows = try await ledger.all().sorted { $0.createdAt > $1.createdAt }
         let policies = try await policy.listPolicies()

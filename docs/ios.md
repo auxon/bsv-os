@@ -567,8 +567,9 @@ forward to, so the shim is answered in-process by `LocalRpcBridge`. It covers
 the wallet-core methods the shell actually loads — status/balance/address QR,
 history and pending in the daemon's field names, the policy list/approve/deny
 queue, `ordList` (a chain scan using the same envelope-or-ORDFS rule the lock
-paths use) and a local `doctor` — each still policy-gated under the app's own
-origin. Three families refuse by name instead of half-working: the session lock
+paths use), `bsv21List` (the 1Sat token registry fanned out to per-token
+balances, nonzero only) and a local `doctor` — each still policy-gated under
+the app's own origin. Three families refuse by name instead of half-working: the session lock
 (the app owns it, so a page cannot open the wallet), `sweepOut` (terminal-only
 by design) and app management (the Apps tab owns the registry on this device).
 Everything else the desktop shell calls answers `NOT_ALLOWED`, which the shell

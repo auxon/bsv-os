@@ -156,6 +156,10 @@ public struct LocalRpcBridge: RpcCalling {
         case "ordList":
             return try await ordinalsValue()
 
+        case "bsv21List":
+            let positions = try await wallet.tokenPositions(address: params["address"]?.stringValue)
+            return .object(["tokens": try encode(positions)])
+
         case "getVersion":
             // The daemon reports its own version; a phone carries the same
             // wallet with a marker so a page can tell the two hosts apart.
