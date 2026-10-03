@@ -135,13 +135,20 @@ test("episodes carry media URL + live flag", async () => {
 test("player app bundle: served files, no remote code", async () => {
   const fs = await import("node:fs");
   const dir = new URL("../../runner/apps/cast/", import.meta.url);
-  for (const f of ["index.html", "app.js", "styles.css", "manifest.json", "hls.min.js"]) {
+  for (const f of ["index.html", "app.js", "mp4.js", "styles.css", "manifest.json", "hls.min.js"]) {
     assert.ok(fs.existsSync(new URL(f, dir)), f);
   }
   const html = fs.readFileSync(new URL("index.html", dir), "utf8");
   const js = fs.readFileSync(new URL("app.js", dir), "utf8");
   // Parse gate: a syntax error here kills the whole page silently (it did).
   assert.doesNotThrow(() => new Function(js), "app.js must parse");
+  assert.doesNotThrow(
+    () => new Function(fs.readFileSync(new URL("mp4.js", dir), "utf8")),
+    "mp4.js must parse as a classic script",
+  );
+  // The recorder helper is loaded before app.js and reached by global name.
+  assert.ok(html.indexOf('src="mp4.js"') > 0 && html.indexOf('src="mp4.js"') < html.indexOf('src="app.js"'), "mp4.js loads before app.js");
+  assert.ok(js.includes("window.CastMp4"), "the duration repair is called by global");
   assert.doesNotThrow(() => new Function(fs.readFileSync(new URL("hls.min.js", dir), "utf8")), "hls.min.js must parse");
   // No remote scripts baked in — only same-directory assets.
   for (const src of [...html.matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1])) {

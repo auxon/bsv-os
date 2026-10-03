@@ -7,7 +7,7 @@
 // The daemon's minutely loop still posts the board beats; this page only
 // opens, pauses, resumes, and closes the money.
 
-let rpcId = 1;
+
 
 async function rpc(method, params = {}) {
   const res = await fetch("/", {
@@ -750,15 +750,30 @@ function recStart(live) {
   };
   rec.recorder.onstop = () => {
     if (!live && rec.chunks.length) {
-      rec.blob = new Blob(rec.chunks, { type: rec.mime });
-      if (rec.blobUrl) URL.revokeObjectURL(rec.blobUrl);
-      rec.blobUrl = URL.createObjectURL(rec.blob);
-      const pb = $("r-playback");
-      pb.src = rec.blobUrl;
-      const dl = $("r-download");
-      dl.href = rec.blobUrl;
-      dl.download = `cast-${Date.now()}.${rec.mime.includes("mp4") ? "mp4" : "webm"}`;
-      $("r-done").classList.remove("hidden");
+      const raw = new Blob(rec.chunks, { type: rec.mime });
+      // MediaRecorder MP4s carry a zero duration in mvhd/tkhd/mdhd/mehd
+      // (WebKit 216832): players show 0:00 and often refuse to start. We know
+      // the wall-clock length, so fill it in before preview, download, upload.
+      const finish = (blob) => {
+        rec.blob = blob;
+        if (rec.blobUrl) URL.revokeObjectURL(rec.blobUrl);
+        rec.blobUrl = URL.createObjectURL(blob);
+        const pb = $("r-playback");
+        pb.src = rec.blobUrl;
+        const dl = $("r-download");
+        dl.href = rec.blobUrl;
+        dl.download = `cast-${Date.now()}.${rec.mime.includes("mp4") ? "mp4" : "webm"}`;
+        $("r-done").classList.remove("hidden");
+      };
+      const durationMs = Date.now() - rec.startedAt;
+      const fix = window.CastMp4 && window.CastMp4.fixMp4Duration;
+      if (rec.mime.includes("mp4") && fix) {
+        raw.arrayBuffer()
+          .then((buf) => finish(new Blob([fix(buf, durationMs)], { type: rec.mime })))
+          .catch(() => finish(raw));
+      } else {
+        finish(raw);
+      }
     }
     clearInterval(rec.clockTimer);
     $("r-record").disabled = false;

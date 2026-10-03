@@ -608,7 +608,10 @@ at 256 MiB, segments at 8 MiB with an mp4/webm init check, playlists are
 generated exactly like the daemon's (windowed while live, ENDLIST after), and
 recordings serve byte ranges for seeking. iPhones do not expose
 `MediaSource`, so the app falls back to native HLS for its own live
-playlists.
+playlists. Recordings also get their fragmented-MP4 duration fields repaired
+in the browser before preview and upload: MediaRecorder writes zero
+durations (WebKit 216832) and players show exactly the reported 0:00 /
+no-playback symptom until the wall-clock length is filled in.
 
 ## Physical-device checklist
 
