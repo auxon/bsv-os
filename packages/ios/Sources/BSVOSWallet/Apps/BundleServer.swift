@@ -261,7 +261,12 @@ public final class BundleAssetServer: @unchecked Sendable {
                     self.write(reply, headOnly: true, on: connection)
                     return
                 }
-                reply = await handler.uploadRecording(data: request.body, contentType: request.headers["content-type"] ?? "")
+                reply = await handler.uploadRecording(
+                    data: request.body,
+                    contentType: request.headers["content-type"] ?? "",
+                    durationMs: request.headers["x-cast-duration-ms"].flatMap(Int.init)
+                        ?? request.query["durationMs"].flatMap(Int.init)
+                )
             } else if components.count == 3, components[0] == "cast", components[1] == "media" {
                 guard request.method == "GET" || request.method == "HEAD" else {
                     reply = .failure(405, code: "METHOD", message: "method not allowed")

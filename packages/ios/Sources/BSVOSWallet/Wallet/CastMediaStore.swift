@@ -144,7 +144,10 @@ public struct CastHTTPReply: Sendable {
 
 /// The cast half of the loopback server: what the Cast app's HTTP calls mean.
 public protocol CastMediaServing: Sendable {
-    func uploadRecording(data: Data, contentType: String) async -> CastHTTPReply
+    /// `durationMs` is the recorder's wall-clock length, when it reported one:
+    /// the server re-runs the MP4 duration repair with it so a file whose
+    /// client-side patch was skipped still lands playable.
+    func uploadRecording(data: Data, contentType: String, durationMs: Int?) async -> CastHTTPReply
     func recording(name: String, range: String?) async -> CastHTTPReply
     func appendSegment(liveId: String, data: Data, isInit: Bool, mime: String?) async -> CastHTTPReply
     func livePlaylist(liveId: String) async -> CastHTTPReply
@@ -169,10 +172,26 @@ public struct CastMediaHandler: CastMediaServing {
         self.now = now
     }
 
-    public func uploadRecording(data: Data, contentType: String) async -> CastHTTPReply {
+    public func uploadRecording(data: Data, contentType: String, durationMs: Int?) async -> CastHTTPReply {
+        var payload = data
+        var patched = false
+        if let durationMs, durationMs > 0,
+           CastRules.mediaExt(contentType) == ".mp4",
+           Mp4Duration.looksLikeMp4(payload) {
+            let fixed = Mp4Duration.fix(payload, durationMs: durationMs)
+            patched = fixed != payload
+            payload = fixed
+        }
         do {
-            let stored = try media.storeRecording(data: data, contentType: contentType)
-            return .json(200, ["id": stored.name, "url": stored.url, "bytes": stored.bytes, "mime": stored.mime])
+            let stored = try media.storeRecording(data: payload, contentType: contentType)
+            return .json(200, [
+                "id": stored.name,
+                "url": stored.url,
+                "bytes": stored.bytes,
+                "mime": stored.mime,
+                "durationMs": durationMs ?? 0,
+                "patched": patched,
+            ])
         } catch let error as CastMediaError {
             return .failure(error.code == "BAD_TYPE" ? 415 : error.code == "TOO_BIG" ? 413 : error.code == "BAD_PARAM" ? 400 : 500,
                             code: error.code, message: error.message)

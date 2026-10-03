@@ -52,6 +52,24 @@ final class CastMediaServerTests: XCTestCase {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
     }
 
+    private struct DurationVector: Decodable {
+        let name: String
+        let inputHex: String
+        let durationMs: Int
+        let expectedHex: String
+    }
+
+    private func durationVectors() throws -> [DurationVector] {
+        let here = URL(fileURLWithPath: #filePath)
+        let repoRoot = here
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("walletd/test/vectors/mp4-duration-vectors.json")
+        return try JSONDecoder().decode([DurationVector].self, from: Data(contentsOf: url))
+    }
+
     func testRecordingUploadAndRangedPlayback() async throws {
         let base = try await start()
         let recorded = Data((0..<16).map { UInt8($0) })
@@ -148,6 +166,28 @@ final class CastMediaServerTests: XCTestCase {
             body: Data([9]), contentType: "video/mp4"
         )
         XCTAssertEqual(afterCode, 409)
+    }
+
+    func testUploadRepairsAnUndatedMp4FromTheReportedDuration() async throws {
+        let base = try await start()
+        // A synthetic fragmented MP4 with the zero durations Safari writes; the
+        // recorder reports the wall-clock length on the upload.
+        let vector = try XCTUnwrap(durationVectors().first)
+        var request = URLRequest(url: base.appendingPathComponent("cast/media"))
+        request.httpMethod = "POST"
+        request.setValue("video/mp4", forHTTPHeaderField: "content-type")
+        request.setValue("\(vector.durationMs)", forHTTPHeaderField: "x-cast-duration-ms")
+        request.httpBody = Data(try Hex.decode(vector.inputHex))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let payload = json(data)
+        XCTAssertEqual(payload["patched"] as? Bool, true)
+        XCTAssertEqual(payload["durationMs"] as? Int, vector.durationMs)
+        let url = try XCTUnwrap(payload["url"] as? String)
+        let path = url.hasPrefix("/") ? String(url.dropFirst()) : url
+        let (stored, code, _) = try await get(base.appendingPathComponent(path))
+        XCTAssertEqual(code, 200)
+        XCTAssertEqual(Hex.encode([UInt8](stored)), vector.expectedHex, "the stored file carries the duration")
     }
 
     func testMissingThingsAre404s() async throws {

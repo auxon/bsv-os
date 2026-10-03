@@ -609,9 +609,12 @@ generated exactly like the daemon's (windowed while live, ENDLIST after), and
 recordings serve byte ranges for seeking. iPhones do not expose
 `MediaSource`, so the app falls back to native HLS for its own live
 playlists. Recordings also get their fragmented-MP4 duration fields repaired
-in the browser before preview and upload: MediaRecorder writes zero
-durations (WebKit 216832) and players show exactly the reported 0:00 /
-no-playback symptom until the wall-clock length is filled in.
+in the browser before preview and upload — and again by the server on upload,
+using the wall-clock length the recorder reports — because MediaRecorder
+writes zero durations (WebKit 216832) and players show exactly the reported
+0:00 / no-playback symptom until that length is filled in. The recorder panel
+states the mime and whether each repair pass ran, so a device that behaves
+differently is diagnosable in one glance.
 
 ## Physical-device checklist
 

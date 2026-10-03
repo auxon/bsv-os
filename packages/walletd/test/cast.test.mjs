@@ -163,6 +163,11 @@ test("player app bundle: served files, no remote code", async () => {
   assert.ok(js.includes("\\/cast\\/live\\/"), "own-ingest routing marker present");
   assert.ok(js.includes("void msePlay(url)"), "own ingest goes to msePlay");
   assert.ok(js.includes("bufferSeekOverHole"), "hole clamp for foreign m3u8s");
+  // The recorder reports its wall-clock length so the server can repair the
+  // file too, and the panel says which pass applied.
+  assert.ok(js.includes("x-cast-duration-ms"), "upload reports the reported duration");
+  assert.ok(js.includes('"NOT written"'), "recorder panel shows whether the repair ran");
+  assert.ok(js.includes("video/mp4;codecs=avc1"), "mime probing prefers spellable mp4 first");
   assert.ok(js.includes("initFacts"), "init sniffing decides kind+container");
   assert.ok(js.includes("bytesHave"), "track bytes are scanned for video codecs");
   assert.ok(js.includes("elementError"), "async pipeline errors abort the attempt");

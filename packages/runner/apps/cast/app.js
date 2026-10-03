@@ -586,6 +586,7 @@ const rec = {
   blob: null,
   blobUrl: "",
   uploadedUrl: "",
+  durationMs: 0,
   liveId: null,
   liveEpisode: null,
   liveCount: 0,
@@ -646,10 +647,19 @@ function attachEndedWatch(stream) {
 function pickMime(live) {
   if ($("r-miconly").checked && rec.source !== "screen") return "audio/webm";
   // Screen shares are video with (maybe) mixed audio; prefer webm for live
-  // so MSE replays exactly what the recorder produced. Files prefer mp4.
+  // so MSE replays exactly what the recorder produced. Files prefer mp4 —
+  // with a codec parameter first, because some WebKit builds only accept the
+  // spelled-out form — and the recorder panel says which one ran.
   const cands = live
     ? ["video/webm;codecs=vp9,opus", "video/webm", "video/mp4"]
-    : ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm", "audio/webm"];
+    : [
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4;codecs=avc1",
+        "video/mp4",
+        "video/webm;codecs=vp9,opus",
+        "video/webm",
+        "audio/webm",
+      ];
   for (const c of cands) {
     try {
       if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
@@ -748,13 +758,17 @@ function recStart(live) {
       else rec.chunks.push(e.data);
     }
   };
-  rec.recorder.onstop = () => {
+  rec.recorder.onstop = async () => {
     if (!live && rec.chunks.length) {
       const raw = new Blob(rec.chunks, { type: rec.mime });
+      const durationMs = Date.now() - rec.startedAt;
+      rec.durationMs = durationMs;
       // MediaRecorder MP4s carry a zero duration in mvhd/tkhd/mdhd/mehd
       // (WebKit 216832): players show 0:00 and often refuse to start. We know
       // the wall-clock length, so fill it in before preview, download, upload.
-      const finish = (blob) => {
+      // The upload also reports it, so the server can repair the file if this
+      // pass was skipped. The panel says which of the two applied.
+      const finish = (blob, patched) => {
         rec.blob = blob;
         if (rec.blobUrl) URL.revokeObjectURL(rec.blobUrl);
         rec.blobUrl = URL.createObjectURL(blob);
@@ -763,16 +777,22 @@ function recStart(live) {
         const dl = $("r-download");
         dl.href = rec.blobUrl;
         dl.download = `cast-${Date.now()}.${rec.mime.includes("mp4") ? "mp4" : "webm"}`;
+        const mb = (blob.size / (1024 * 1024)).toFixed(1);
+        const st = $("r-up-status");
+        st.className = "status";
+        st.textContent = `recorded ${mb} MB · ${rec.mime} · duration ${patched ? "written" : "NOT written"}`;
         $("r-done").classList.remove("hidden");
       };
-      const durationMs = Date.now() - rec.startedAt;
       const fix = window.CastMp4 && window.CastMp4.fixMp4Duration;
       if (rec.mime.includes("mp4") && fix) {
-        raw.arrayBuffer()
-          .then((buf) => finish(new Blob([fix(buf, durationMs)], { type: rec.mime })))
-          .catch(() => finish(raw));
+        try {
+          const buf = await raw.arrayBuffer();
+          finish(new Blob([fix(buf, durationMs)], { type: rec.mime }), true);
+        } catch {
+          finish(raw, false);
+        }
       } else {
-        finish(raw);
+        finish(raw, false);
       }
     }
     clearInterval(rec.clockTimer);
@@ -808,14 +828,19 @@ $("r-upload").addEventListener("click", async () => {
   try {
     const res = await fetch("/cast/media", {
       method: "POST",
-      headers: { "content-type": rec.blob.type || "video/webm" },
+      headers: {
+        "content-type": rec.blob.type || "video/webm",
+        ...(rec.durationMs ? { "x-cast-duration-ms": String(rec.durationMs) } : {}),
+      },
       body: rec.blob,
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error?.message || data?.error || `upload ${res.status}`);
     rec.uploadedUrl = data.url;
+    const seconds = Math.round((data.durationMs || rec.durationMs || 0) / 1000);
     st.className = "status ok";
-    st.textContent = `stored · ${data.bytes} bytes`;
+    st.textContent = `stored ${data.bytes} bytes · ${data.mime} · ${seconds}s` +
+      (data.patched ? " · server wrote duration" : "");
     $("r-publish").classList.remove("hidden");
     $("r-title").value = $("r-title").value || `Recording ${new Date().toLocaleString()}`;
   } catch (e) {
