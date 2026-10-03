@@ -242,6 +242,76 @@ public actor LocalWalletBackend: WalletBackend {
         return AppInscription(txid: broadcast.txid, fee: built.fee, hex: hex)
     }
 
+    /// An app-originated ordinal transfer, shaped like the daemon's
+    /// `sendOrdinal`: the carrier is exactly 1 sat, it is spent first
+    /// (`keepOrder`, so FIFO leaves the sat in output 0), the recipient gets a
+    /// 1-sat output, and plain UTXOs fund the miner fee. The policy gate is
+    /// charged the fee under the action `ordinal-send`.
+    public func appSendOrdinal(
+        origin: String,
+        txid: String,
+        vout: Int,
+        to: String,
+        memo: [String]? = nil
+    ) async throws -> SendResponse {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        guard txid.count == 64, txid.allSatisfy({ $0.isHexDigit }) else {
+            throw WalletError(code: "BAD_PARAM", message: "outpoint must be 64-hex txid + vout")
+        }
+        do {
+            _ = try Address.lockingScript(for: to)
+        } catch {
+            throw WalletError(code: "BAD_PARAM", message: "recipient must be a valid P2PKH address")
+        }
+
+        let indexed = try await chain.utxos(address: key.address)
+        guard let ordinal = indexed.utxos.first(where: { $0.txid == txid && $0.vout == vout }) else {
+            throw WalletError(code: "NOT_FOUND", message: "ordinal not in wallet (unknown or already spent)")
+        }
+        guard ordinal.value == 1 else {
+            throw WalletError(code: "BAD_PARAM", message: "ordinal carrier must be exactly 1 sat (found \(ordinal.value))")
+        }
+        let funding = indexed.utxos
+            .filter { !($0.txid == txid && $0.vout == vout) && $0.value > 1 }
+            .map { Tx.Input(txid: $0.txid, vout: UInt32($0.vout), value: $0.value, scriptHex: key.scriptHex) }
+        let carrier = Tx.Input(txid: ordinal.txid, vout: UInt32(ordinal.vout), value: ordinal.value, scriptHex: key.scriptHex)
+
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: [carrier] + funding,
+                payments: [Tx.Payment(address: to, sats: 1)],
+                changeScriptHex: key.scriptHex,
+                opReturn: memo?.isEmpty == false ? memo : nil,
+                keepOrder: true
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough plain sats to fund the transfer fee")
+        }
+
+        let gate = try await policy.check(
+            origin: origin,
+            amountSats: built.fee,
+            action: "ordinal-send"
+        )
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+
+        let signed = try Tx.sign(built: built, privateKey: key.privateKey, publicKey: key.publicKey)
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: "send \(txid.prefix(8)) to \(to.prefix(8))",
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now()
+        ))
+        return SendResponse(txid: broadcast.txid, fee: built.fee)
+    }
+
     /// The single signing path both `send` and `appSpend` use.
     private func spend(payments: [Tx.Payment], label: String) async throws -> SendResponse {
         let key = try keyMaterial()

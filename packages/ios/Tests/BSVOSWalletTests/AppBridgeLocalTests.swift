@@ -184,7 +184,7 @@ final class AppBridgeLocalTests: XCTestCase {
         let harness = makeHarness()
         try await harness.wallet.unlock()
 
-        for intent in [AppIntent.transferNft, .signSwapOffer, .ordlockBuy] {
+        for intent in [AppIntent.signSwapOffer, .completeSwap, .ordlockLock, .ordlockBuy, .ordlockCancel] {
             do {
                 _ = try await harness.backend.invoke(app: "app.example", intent: intent, params: [:])
                 XCTFail("\(intent.rawValue) should be unavailable on the phone")

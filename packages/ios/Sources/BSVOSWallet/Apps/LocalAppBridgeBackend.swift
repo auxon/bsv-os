@@ -108,6 +108,22 @@ public struct LocalAppBridgeBackend: AppBridgeBackend {
             )
             result = .object(["txid": .string(inscription.txid), "fee": .int(inscription.fee)])
 
+        case .transferNft:
+            guard let txid = params["txid"]?.stringValue, !txid.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "txid required")
+            }
+            guard let to = params["to"]?.stringValue, !to.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "recipient address required")
+            }
+            let sent = try await wallet.appSendOrdinal(
+                origin: domain,
+                txid: txid,
+                vout: params["vout"]?.intValue ?? 0,
+                to: to,
+                memo: strings(from: params["memo"])
+            )
+            result = .object(["txid": .string(sent.txid), "fee": .int(sent.fee)])
+
         default:
             throw WalletError(
                 code: "UNAVAILABLE",
