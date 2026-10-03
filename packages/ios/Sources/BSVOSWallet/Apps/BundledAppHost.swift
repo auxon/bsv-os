@@ -37,6 +37,10 @@ public final class BundledAppHost: NSObject, ObservableObject {
     /// in-process `LocalRpcBridge`.
     private let rpc: (any RpcCalling)?
     private var webView: WKWebView?
+    /// Camera and microphone permission delegate. WKWebView does not ask on
+    /// its own: without a `WKUIDelegate` answering
+    /// `requestMediaCapturePermissionFor`, `getUserMedia` rejects.
+    private let mediaDelegate = MediaCaptureDelegate()
 
     public init(
         app: String,
@@ -79,6 +83,10 @@ public final class BundledAppHost: NSObject, ObservableObject {
 
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.nonPersistent()
+        #if canImport(UIKit)
+        config.allowsInlineMediaPlayback = true
+        #endif
+        config.mediaTypesRequiringUserActionForPlayback = []
 
         let router = ScriptMessageRouter { [weak self] message in
             await self?.receive(message)
@@ -93,9 +101,28 @@ public final class BundledAppHost: NSObject, ObservableObject {
 
         let view = WKWebView(frame: .zero, configuration: config)
         webView = view
+        view.uiDelegate = mediaDelegate
         if let assetRoot {
-            let appRoot = assetRoot.appendingPathComponent(app, isDirectory: true)
-            view.loadFileURL(appRoot.appendingPathComponent("index.html"), allowingReadAccessTo: appRoot)
+            // file:// is not a web origin: ES modules and the secure-context
+            // APIs refuse to work there, which is how the bundled apps broke.
+            // Serve the same directory over loopback instead; fall back to the
+            // file URL only if the listener cannot start.
+            let root = assetRoot
+            let appName = app
+            let source = DirectoryAppAssetSource(root: root)
+            BundleAssetServer.shared.baseURL(for: source) { base in
+                Task { @MainActor [weak view] in
+                    guard let view else { return }
+                    if let base {
+                        view.load(URLRequest(
+                            url: base.appendingPathComponent(appName).appendingPathComponent("index.html")
+                        ))
+                    } else {
+                        let appRoot = root.appendingPathComponent(appName, isDirectory: true)
+                        view.loadFileURL(appRoot.appendingPathComponent("index.html"), allowingReadAccessTo: appRoot)
+                    }
+                }
+            }
         } else if let startURL {
             view.load(URLRequest(url: startURL))
         }
@@ -202,6 +229,25 @@ public final class BundledAppHost: NSObject, ObservableObject {
 
     /// The `window.bsv` half, shared verbatim with the app host.
     private nonisolated static var appHostShim: String { AppHostController.injectedScript }
+}
+
+/// Answers WKWebView's media-capture permission request.
+///
+/// Without this delegate a page's `getUserMedia` rejects before the OS even
+/// asks — one of the two reasons Cast's camera said "blocked" (the other was
+/// the `file://` origin hiding `navigator.mediaDevices` entirely). `.prompt`
+/// shows the system consent sheet, matching a browser's behaviour; the app's
+/// Info.plist supplies the usage strings.
+private final class MediaCaptureDelegate: NSObject, WKUIDelegate {
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping (WKPermissionDecision) -> Void
+    ) {
+        decisionHandler(.prompt)
+    }
 }
 
 #if canImport(UIKit)

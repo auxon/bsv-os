@@ -120,6 +120,23 @@ test("the iOS window.bsv surface matches the desktop runner's exactly", () => {
   assert.doesNotMatch(iosHost, /127\.0\.0\.1/, "no loopback relay on iOS");
 });
 
+test("bundled apps load from a loopback asset server, and the wallet RPC stays bridged", () => {
+  // file:// is not a web origin: module imports fail and secure-context APIs
+  // (getUserMedia among them) are hidden — how the bundled apps broke. The
+  // fix serves the bundle over loopback HTTP, which must remain an ASSET
+  // server: loopback-only, path-safe, and free of any wallet credential.
+  const server = read("packages/ios/Sources/BSVOSWallet/Apps/BundleServer.swift");
+  assert.match(server, /\.ipv4\(\.loopback\)/, "binds the loopback interface only");
+  assert.match(server, /AppAssetSource/, "serves through the asset source");
+  assert.doesNotMatch(server, /Bearer|Authorization|bsv-token|deviceID/, "no credential plumbing");
+
+  // The host uses it for local mode, and answers the media-capture decision
+  // without which getUserMedia rejects before the OS even asks.
+  const host = read("packages/ios/Sources/BSVOSWallet/Apps/BundledAppHost.swift");
+  assert.match(host, /BundleAssetServer\.shared\.baseURL/, "local mode loads from the loopback server");
+  assert.match(host, /requestMediaCapturePermissionFor/, "camera permission is answered");
+});
+
 test("the iOS bridge refuses device-only powers to apps", () => {
   // unlock/send/policyApprove are device-callable (the phone may do them) but
   // must never be app-callable: an app asks to spend through its own origin

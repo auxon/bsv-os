@@ -52,5 +52,23 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
+	<!-- Camera and microphone, for Cast's record flow. WKWebView asks the app
+	     for these the first time a page calls getUserMedia; without the usage
+	     strings the app is terminated by the system instead of prompting. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Cast records video from the camera for your episodes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cast records audio for your episodes.</string>
+
+	<!-- The bundled apps are served over loopback HTTP so they get a real web
+	     origin (file:// is not one: modules and getUserMedia refuse to work
+	     there). This key allows that local connection without loosening ATS
+	     for anything else. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

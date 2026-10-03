@@ -578,6 +578,22 @@ they proxy `api.twetch.com` with an account key the phone does not hold, so
 Twetch on the phone means the bundled Twetch app, and the shell's Twetch view
 stays desktop-only.
 
+**Why the assets come over loopback.** `loadFileURL` gives a page a `file://`
+origin, and `file://` is not a web origin: ES module imports fail (MemeStudio
+sat on its initial "connecting…" because its module never ran), `fetch` of a
+sibling file fails, and secure-context APIs are hidden — `navigator.mediaDevices`
+among them, which is why Cast's camera said `undefined is not an object`. So
+the bundle is served by an `NWListener` on `127.0.0.1` with an ephemeral port:
+a real origin, and loopback is a secure context. It is strictly an asset
+server — one app root, `DirectoryAppAssetSource`'s traversal rules,
+loopback-only, no credential plumbing — while the wallet RPC keeps travelling
+through the injected shim and the native bridge. Camera and microphone
+additionally need the `WKUIDelegate` media-capture decision (answered with
+`.prompt`) and the Info.plist usage strings; both are in place. Meme library
+search is the public Dank Rares read, answered on-device by
+`TwetchMemeLibrary`; posting and vision remain account/desktop features, and
+`twetchStatus` answers honestly that no posting key is imported.
+
 ## Physical-device checklist
 
 The simulator proves compilation, `Bundle.module` and the WebKit host. These
@@ -593,13 +609,17 @@ are the items that only a device can prove, in the order worth walking them:
    `FileAppRegistryStore` must survive a restart in the app container, and a
    fresh install must fall back to the in-memory stores without crashing.
 4. **The bundled apps.** With `scripts/sync-apps.mjs` run before the build,
-   the Apps tab must list the synced names, open each from `loadFileURL`, and
-   the shell's Money view must show balance and history through
-   `LocalRpcBridge`.
-5. **Cellular chain access.** ARC broadcast and WoC reads from a non-Wi-Fi
+   the Apps tab must list the synced names and open each from the loopback
+   origin; MemeStudio must leave "connecting…" and list memes (its search is
+   the public Dank Rares read), and the shell's Money view must show balance
+   and history through `LocalRpcBridge`.
+5. **Camera and microphone.** Cast's preview must raise the system consent
+   sheet (not `undefined is not an object`), and the recording flow must
+   capture after granting.
+6. **Cellular chain access.** ARC broadcast and WoC reads from a non-Wi-Fi
    network; a rejected broadcast must surface `BROADCAST_REJECTED` with the
    node's detail.
-6. **Background behaviour.** Backgrounding with an in-flight transaction and
+7. **Background behaviour.** Backgrounding with an in-flight transaction and
    returning must refresh it (`refreshPendingTransactions`). A
    `BGAppRefreshTask` is deliberately absent until push/APNs is funded.
 
