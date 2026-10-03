@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Push requires this entitlement and a provisioning profile that includes
+	     it. It is harmless in a simulator build, which is why it ships in the
+	     project rather than being described in a README: a build that cannot
+	     receive push should fail loudly at signing time, not silently at runtime. -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

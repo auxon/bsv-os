@@ -236,23 +236,36 @@ can be compiled and tested on a Mac: the five screens the milestone needs
 state, pairing, and Keychain-backed credential storage. 47 Swift tests, and it
 compiles against the iOS Simulator SDK.
 
-What the milestone still needs is an **app target**. A Swift package can build a
-library for iOS but not an `.app` bundle, so `BSVOSAppView` is the app's root and
-the target is a few lines around it:
+**The app target exists**: `packages/ios/App/BSVOSios.xcodeproj`, built and
+verified. It is a thin shell — `BSVOSiOSApp.swift` wires `BSVOSAppView` to a
+configured daemon and owns the notification delegate; everything else lives in
+the package, where the tests are.
 
-```swift
-import SwiftUI
-import BSVOSWallet
+```bash
+# Simulator (no signing needed)
+xcodebuild -project packages/ios/App/BSVOSios.xcodeproj -scheme BSVOSios \
+  -destination 'generic/platform=iOS Simulator' build
 
-@main
-struct BSVOSiOSApp: App {
-    var body: some Scene {
-        WindowGroup {
-            BSVOSAppView(baseURL: URL(string: "https://<daemon-vpn-address>:2121")!)
-        }
-    }
-}
+# Device: set your team in Xcode, and point the app at the daemon
+#   App/Info.plist -> BSVDaemonURL
 ```
+
+Two things about the target worth knowing, both found by building it rather
+than by writing it:
+
+- **The daemon address lives in an explicit `Info.plist`.** Xcode's generated
+  plist silently drops keys it does not recognise — `BSVDaemonURL` never reached
+  the bundle, so the app could not be pointed at a daemon without editing
+  source. That is now verified by inspecting the built bundle, not by trusting
+  the build setting.
+- **`@preconcurrency` on the notification conformance.** `UNUserNotificationCenterDelegate`
+  is not main-actor annotated while `UIApplicationDelegate` methods are, which
+  Swift 6 treats as an error rather than a warning.
+
+The notification actions deliberately do **not** re-prompt for biometrics: they
+are registered with `.authenticationRequired`, so iOS has already demanded Face ID
+or the passcode before the callback runs. Asking twice for one decision is not
+more secure, just slower.
 
 Decisions worth knowing:
 

@@ -40,22 +40,25 @@ swift test                                             # 47 tests, no daemon nee
 xcodebuild -scheme BSVOSWallet -destination 'generic/platform=iOS Simulator' build
 ```
 
-A Swift package can build a library for iOS but not an `.app` bundle, so the app
-target is a few lines around `BSVOSAppView`:
+## The app
 
-```swift
-import SwiftUI
-import BSVOSWallet
+`App/BSVOSios.xcodeproj` is the runnable target; `App/BSVOSiOSApp.swift` is the
+shell around `BSVOSAppView`, and it owns the notification delegate.
 
-@main
-struct BSVOSiOSApp: App {
-    var body: some Scene {
-        WindowGroup {
-            BSVOSAppView(baseURL: URL(string: "https://<daemon-vpn-address>:2121")!)
-        }
-    }
-}
+```bash
+xcodebuild -project App/BSVOSios.xcodeproj -scheme BSVOSios \
+  -destination 'generic/platform=iOS Simulator' build
 ```
+
+**Point it at your daemon**: set `BSVDaemonURL` in `App/Info.plist` to the
+machine's VPN address. The default is `https://127.0.0.1:2121`, which only works
+in a simulator running on the daemon's own machine — a deliberately useless
+default rather than a wrong one, because a wrong address looks like a pairing
+failure instead of a config mistake.
+
+For a device build, set your signing team in Xcode. Push also needs the
+`aps-environment` entitlement (already in `App/BSVOS.entitlements`) and a
+provisioning profile that includes it.
 
 Pair from the app with the code `bsv device pair` prints on the desktop; the
 credential is stored in the Keychain and reused on later launches.
