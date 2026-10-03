@@ -7,7 +7,7 @@
 // The daemon's minutely loop still posts the board beats; this page only
 // opens, pauses, resumes, and closes the money.
 
-
+let rpcId = 1;
 
 async function rpc(method, params = {}) {
   const res = await fetch("/", {

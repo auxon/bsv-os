@@ -251,3 +251,76 @@ test("recorder UI talks to loopback ingest +observed beats only", async () => {
   // upload endpoint is same-origin relative — never a remote host
   assert.ok(!/fetch\("https?:\/\/(?!localhost|127\.0\.0\.1)/.test(js.replace(/fetch\("\/cast\//g, "")), "remote POST");
 });
+
+test("the page boots without undeclared-variable failures", async () => {
+  // The parse gate cannot see a missing top-level declaration: deleting
+  // `let rpcId = 1` while editing the imports kept every syntax check green
+  // and the page showed "Can't find variable: rpcId" on load and on adding an
+  // episode. So execute the page against a permissive DOM and a fetch that
+  // answers with a JSON-RPC error, then require that nothing surfaced a
+  // ReferenceError.
+  const fs = await import("node:fs");
+  const vm = await import("node:vm");
+  const dir = new URL("../../runner/apps/cast/", import.meta.url);
+  const js = fs.readFileSync(new URL("app.js", dir), "utf8");
+
+  const written = [];
+  const anything = () => new Proxy(function () {}, {
+    get: (_target, prop) => {
+      if (prop === Symbol.toPrimitive) return () => "";
+      if (prop === "then") return undefined; // not thenable: awaits resolve
+      return anything();
+    },
+    set: (_target, prop, value) => {
+      if (["textContent", "innerHTML", "value", "className"].includes(prop)) written.push(String(value));
+      return true;
+    },
+    apply: () => anything(),
+  });
+
+  const context = {
+    console,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    document: {
+      getElementById: () => anything(),
+      createElement: () => anything(),
+      addEventListener: () => {},
+      documentElement: anything(),
+      body: anything(),
+    },
+    navigator: anything(),
+    location: anything(),
+    localStorage: anything(),
+    URL: { createObjectURL: () => "blob:stub", revokeObjectURL: () => {} },
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ error: { code: "TEST", message: "no daemon here" } }),
+      text: async () => "",
+    }),
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+    MediaRecorder: undefined,
+  };
+  context.window = context; // classic script: window is the global
+  vm.createContext(context);
+  vm.runInContext(js, context);
+
+  await context.boot();
+  const reference = written.find((text) => /Can't find variable|is not defined|ReferenceError/.test(text));
+  assert.equal(reference, undefined, `boot surfaced: ${reference}`);
+
+  // And the RPC path itself must fail for the daemon's reason, not a
+  // missing counter.
+  await assert.rejects(
+    () => context.rpc("isAuthenticated"),
+    (error) => {
+      assert.equal(error.message, "no daemon here");
+      return true;
+    },
+    "rpc must reach fetch",
+  );
+});
