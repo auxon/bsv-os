@@ -15,12 +15,17 @@ public struct LocalTx: Codable, Sendable, Equatable, Identifiable {
     public var createdAt: Int
     public var lastCheck: Int
     public var attempts: Int
+    /// "txid:vout" for every input this transaction spends. The chain index
+    /// lags a broadcast, so without this the next spend can select an output
+    /// this wallet already spent.
+    public var spentOutpoints: [String]?
 
     public var id: String { txid }
 
     public init(
         txid: String, label: String, status: String, detail: String? = nil,
-        createdAt: Int, lastCheck: Int, attempts: Int = 0
+        createdAt: Int, lastCheck: Int, attempts: Int = 0,
+        spentOutpoints: [String]? = nil
     ) {
         self.txid = txid
         self.label = label
@@ -29,6 +34,7 @@ public struct LocalTx: Codable, Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.lastCheck = lastCheck
         self.attempts = attempts
+        self.spentOutpoints = spentOutpoints
     }
 
     public var hint: String {

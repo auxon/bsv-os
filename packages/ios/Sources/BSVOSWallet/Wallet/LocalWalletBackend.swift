@@ -183,8 +183,10 @@ public actor LocalWalletBackend: WalletBackend {
             .filter { $0.value > 1 }
             .sorted { $0.value > $1.value }
             .prefix(12)
+        let unavailable = await unavailableOutpoints()
         var funding: [Tx.Input] = []
         for candidate in candidates where funding.count < 6 {
+            guard !unavailable.contains("\(candidate.txid):\(candidate.vout)") else { continue }
             guard let parent = try? await chain.tx(txid: candidate.txid),
                   candidate.vout >= 0, candidate.vout < parent.vout.count,
                   let fundingScript = parent.vout[candidate.vout].scriptHex,
@@ -237,7 +239,8 @@ public actor LocalWalletBackend: WalletBackend {
             status: broadcast.status == .mined ? "mined" : "seen",
             detail: broadcast.detail,
             createdAt: now(),
-            lastCheck: now()
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
         ))
         return AppInscription(txid: broadcast.txid, fee: built.fee, hex: hex)
     }
@@ -266,7 +269,9 @@ public actor LocalWalletBackend: WalletBackend {
         }
 
         let indexed = try await chain.utxos(address: key.address)
-        guard let ordinal = indexed.utxos.first(where: { $0.txid == txid && $0.vout == vout }) else {
+        let unavailable = await unavailableOutpoints()
+        guard let ordinal = indexed.utxos.first(where: { $0.txid == txid && $0.vout == vout }),
+              !unavailable.contains("\(txid):\(vout)") else {
             throw WalletError(code: "NOT_FOUND", message: "ordinal not in wallet (unknown or already spent)")
         }
         guard ordinal.value == 1 else {
@@ -274,6 +279,7 @@ public actor LocalWalletBackend: WalletBackend {
         }
         let funding = indexed.utxos
             .filter { !($0.txid == txid && $0.vout == vout) && $0.value > 1 }
+            .filter { !unavailable.contains("\($0.txid):\($0.vout)") }
             .map { Tx.Input(txid: $0.txid, vout: UInt32($0.vout), value: $0.value, scriptHex: key.scriptHex) }
         let carrier = Tx.Input(txid: ordinal.txid, vout: UInt32(ordinal.vout), value: ordinal.value, scriptHex: key.scriptHex)
 
@@ -307,7 +313,8 @@ public actor LocalWalletBackend: WalletBackend {
             status: broadcast.status == .mined ? "mined" : "seen",
             detail: broadcast.detail,
             createdAt: now(),
-            lastCheck: now()
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
         ))
         return SendResponse(txid: broadcast.txid, fee: built.fee)
     }
@@ -316,9 +323,12 @@ public actor LocalWalletBackend: WalletBackend {
     private func spend(payments: [Tx.Payment], label: String) async throws -> SendResponse {
         let key = try keyMaterial()
         let addressUtxos = try await chain.utxos(address: key.address)
-        let inputs = addressUtxos.utxos.map {
-            Tx.Input(txid: $0.txid, vout: UInt32($0.vout), value: $0.value, scriptHex: key.scriptHex)
-        }
+        let unavailable = await unavailableOutpoints()
+        let inputs = addressUtxos.utxos
+            .filter { !unavailable.contains("\($0.txid):\($0.vout)") }
+            .map {
+                Tx.Input(txid: $0.txid, vout: UInt32($0.vout), value: $0.value, scriptHex: key.scriptHex)
+            }
 
         let built: Tx.Built
         do {
@@ -327,6 +337,9 @@ public actor LocalWalletBackend: WalletBackend {
                 payments: payments,
                 changeScriptHex: key.scriptHex
             )
+        } catch Tx.Error.emptyInputs {
+            // Everything the index showed is already spent in flight.
+            throw WalletError(code: "INSUFFICIENT", message: "no spendable outputs are available right now")
         } catch Tx.Error.insufficientFunds(let have, let need) {
             throw WalletError(
                 code: "INSUFFICIENT",
@@ -345,7 +358,8 @@ public actor LocalWalletBackend: WalletBackend {
             status: status,
             detail: broadcast.detail,
             createdAt: now(),
-            lastCheck: now()
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
         ))
         return SendResponse(txid: broadcast.txid, fee: built.fee)
     }
@@ -444,6 +458,18 @@ public actor LocalWalletBackend: WalletBackend {
         var publicKey: [UInt8]
         var address: String
         var scriptHex: String
+    }
+
+    /// Outpoints spent by transactions this wallet broadcast that are still
+    /// in flight. A mined transaction's outputs are gone from the index anyway
+    /// and a failed one never moved anything, so only `seen` binds.
+    private func unavailableOutpoints() async -> Set<String> {
+        let rows = (try? await ledger.all()) ?? []
+        return Set(rows.filter { $0.status == "seen" }.flatMap { $0.spentOutpoints ?? [] })
+    }
+
+    private func spentOutpoints(of built: Tx.Built) -> [String] {
+        built.inputs.map { "\($0.txid):\(Int($0.vout))" }
     }
 
     private func requireUnlocked() throws {
