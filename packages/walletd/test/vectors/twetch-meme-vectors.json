@@ -1,0 +1,107 @@
+{
+  "requestUrl": "https://api.twetch.com/v1/dank-rares?cursor=abc&q=meme+template&format=gif&sort=recent&limit=24",
+  "responseBody": "{\"items\":[{\"id\":\"1\",\"title\":\"Café ☕ Meme!\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"mediaUrl\":\"b://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"previewUrl\":\"/v1/media/cc.jpg?v=4\",\"format\":\"gif\",\"tags\":[\"fun\",\"\",42],\"bytes\":\"1234\",\"tokenNumber\":\"7\",\"ownerUserId\":5,\"uploadedAtMs\":1700000000000,\"folder\":\"Memes\",\"folderSlug\":\"memes\",\"extra\":\"ignored\"},{\"id\":\"2\",\"title\":\"plain\",\"mediaUrl\":\"https://cdn.example/x.png\",\"format\":\"png\"},{\"id\":\"3\",\"mediaUrl\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"tokenNumber\":null,\"ownerUserId\":null},{\"id\":\"4\",\"title\":\"Ord\",\"mediaUrl\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"path\":\"/v1/foo\"},{\"id\":\"5\",\"title\":\"http\",\"mediaUrl\":\"http://cdn.example/y.png\"}],\"nextCursor\":\"c1\",\"total\":\"5\"}",
+  "page": {
+    "items": [
+      {
+        "id": "1",
+        "title": "Café ☕ Meme!",
+        "description": "",
+        "folder": "Memes",
+        "folderSlug": "memes",
+        "format": "gif",
+        "mediaUrl": "https://api.twetch.com/v1/media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg?v=4",
+        "previewUrl": "https://api.twetch.com/v1/media/cc.jpg?v=4",
+        "onchainRef": "",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          "fun",
+          ""
+        ],
+        "tokenNumber": 7,
+        "ownerUserId": 5,
+        "uploadedAtMs": 1700000000000,
+        "bytes": 1234,
+        "url": "https://twetch.com/meme-library/meme/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cafe-meme"
+      },
+      {
+        "id": "2",
+        "title": "plain",
+        "description": "",
+        "folder": "",
+        "folderSlug": "",
+        "format": "png",
+        "mediaUrl": "https://cdn.example/x.png",
+        "previewUrl": "https://cdn.example/x.png",
+        "onchainRef": "",
+        "sha256": "",
+        "tags": [],
+        "tokenNumber": null,
+        "ownerUserId": null,
+        "uploadedAtMs": 0,
+        "bytes": 0,
+        "url": "https://twetch.com/meme-library"
+      },
+      {
+        "id": "3",
+        "title": "",
+        "description": "",
+        "folder": "",
+        "folderSlug": "",
+        "format": "",
+        "mediaUrl": "https://api.twetch.com/v1/media/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.jpg?v=4",
+        "previewUrl": "https://api.twetch.com/v1/media/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.jpg?v=4",
+        "onchainRef": "",
+        "sha256": "",
+        "tags": [],
+        "tokenNumber": null,
+        "ownerUserId": null,
+        "uploadedAtMs": 0,
+        "bytes": 0,
+        "url": "https://twetch.com/meme-library"
+      },
+      {
+        "id": "4",
+        "title": "Ord",
+        "description": "",
+        "folder": "",
+        "folderSlug": "",
+        "format": "",
+        "mediaUrl": "https://media.ordinalswallet.com/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "previewUrl": "https://media.ordinalswallet.com/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "onchainRef": "/v1/foo",
+        "sha256": "",
+        "tags": [],
+        "tokenNumber": null,
+        "ownerUserId": null,
+        "uploadedAtMs": 0,
+        "bytes": 0,
+        "url": "https://twetch.com/meme-library"
+      },
+      {
+        "id": "5",
+        "title": "http",
+        "description": "",
+        "folder": "",
+        "folderSlug": "",
+        "format": "",
+        "mediaUrl": "https://cdn.example/y.png",
+        "previewUrl": "https://cdn.example/y.png",
+        "onchainRef": "",
+        "sha256": "",
+        "tags": [],
+        "tokenNumber": null,
+        "ownerUserId": null,
+        "uploadedAtMs": 0,
+        "bytes": 0,
+        "url": "https://twetch.com/meme-library"
+      }
+    ],
+    "nextCursor": "c1",
+    "total": 5
+  },
+  "error": {
+    "code": "RAILS",
+    "message": "twetch api 503: boom"
+  }
+}

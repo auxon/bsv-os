@@ -32,6 +32,17 @@ final class LocalRpcBridgeTests: XCTestCase {
         func set(_ rows: [TokenPosition]) { self.rows = rows }
     }
 
+    actor Memes: MemeLibrary {
+        var page = MemePage(items: [], nextCursor: nil, total: 0)
+        var failure: WalletError?
+        func search(_ query: MemeQuery) async throws -> MemePage {
+            if let failure { throw failure }
+            return page
+        }
+        func set(_ page: MemePage) { self.page = page }
+        func setFailure(_ error: WalletError) { failure = error }
+    }
+
     actor Metadata: InscriptionMetadata {
         var entries: [String: InscriptionMeta] = [:]
         func isInscribed(txid: String, vout: Int) async throws -> Bool { entries["\(txid):\(vout)"] != nil }
@@ -41,7 +52,8 @@ final class LocalRpcBridgeTests: XCTestCase {
 
     private func harness(
         inscriptions: any InscriptionMetadata = Metadata(),
-        tokens: any TokenIndex = Tokens()
+        tokens: any TokenIndex = Tokens(),
+        memes: any MemeLibrary = Memes()
     ) -> (LocalRpcBridge, LocalWalletBackend, PolicyEngine, Chain) {
         let chain = Chain()
         let engine = PolicyEngine(store: InMemoryPolicyStore())
@@ -53,7 +65,7 @@ final class LocalRpcBridgeTests: XCTestCase {
             inscriptions: inscriptions,
             tokens: tokens
         )
-        return (LocalRpcBridge(origin: "bsvos", wallet: wallet, chain: chain), wallet, engine, chain)
+        return (LocalRpcBridge(origin: "bsvos", wallet: wallet, chain: chain, memes: memes), wallet, engine, chain)
     }
 
     private func value(_ reply: RpcReply) throws -> JSONValue {
@@ -249,6 +261,46 @@ final class LocalRpcBridgeTests: XCTestCase {
         XCTAssertEqual(row["decimals"], .int(2))
         XCTAssertEqual(row["balance"], .int(500))
         XCTAssertEqual(row["utxoCount"], .int(2))
+    }
+
+    func testTwetchStatusAnswersInTheDaemonsShape() async throws {
+        let (bridge, _, _, _) = harness()
+        let reply = await bridge.call(id: 1, method: "twetchStatus", params: [:])
+        guard case .object(let object)? = try? value(reply),
+              case .object(let account)? = object["account"] else { return XCTFail("twetchStatus shape") }
+        XCTAssertEqual(account["imported"], .bool(false))
+        XCTAssertEqual(account["address"], .null)
+        XCTAssertEqual(object["identity"], .null)
+    }
+
+    func testTwetchMemesReturnsTheLibraryPage() async throws {
+        let memes = Memes()
+        await memes.set(MemePage(
+            items: [MemeItem(
+                id: "1", title: "Café ☕ Meme!", description: "", folder: "", folderSlug: "",
+                format: "gif", mediaUrl: "https://api.twetch.com/v1/media/x.jpg?v=4",
+                previewUrl: "https://api.twetch.com/v1/media/x.jpg?v=4", onchainRef: "",
+                sha256: String(repeating: "aa", count: 32), tags: ["fun"], tokenNumber: nil,
+                ownerUserId: nil, uploadedAtMs: 0, bytes: 0,
+                url: "https://twetch.com/meme-library"
+            )],
+            nextCursor: "next",
+            total: 1
+        ))
+        let (bridge, _, _, _) = harness(memes: memes)
+        let reply = await bridge.call(id: 1, method: "twetchMemes", params: ["q": .string("meme"), "limit": .int(10)])
+        guard case .object(let object)? = try? value(reply),
+              case .array(let items)? = object["items"] else { return XCTFail("page shape") }
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(object["nextCursor"], .string("next"))
+        XCTAssertEqual(object["total"], .int(1))
+
+        // The daemon's failure code travels through unchanged.
+        await memes.setFailure(WalletError(code: "RAILS", message: "twetch api 503: boom"))
+        let failed = await bridge.call(id: 2, method: "twetchMemes", params: [:])
+        XCTAssertFalse(failed.ok)
+        XCTAssertEqual(failed.errorCode, "RAILS")
+        XCTAssertEqual(failed.errorMessage, "twetch api 503: boom")
     }
 
     func testDoctorReportsTheChecksAPhoneCanAnswer() async throws {

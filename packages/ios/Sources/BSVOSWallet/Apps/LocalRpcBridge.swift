@@ -27,11 +27,18 @@ public struct LocalRpcBridge: RpcCalling {
     private let origin: String
     private let wallet: LocalWalletBackend
     private let chain: any ChainProvider
+    private let memes: any MemeLibrary
 
-    public init(origin: String, wallet: LocalWalletBackend, chain: any ChainProvider) {
+    public init(
+        origin: String,
+        wallet: LocalWalletBackend,
+        chain: any ChainProvider,
+        memes: any MemeLibrary = TwetchMemeLibrary()
+    ) {
         self.origin = origin
         self.wallet = wallet
         self.chain = chain
+        self.memes = memes
     }
 
     public func call(id: Int, method: String, params: [String: JSONValue]) async -> RpcReply {
@@ -159,6 +166,34 @@ public struct LocalRpcBridge: RpcCalling {
         case "bsv21List":
             let positions = try await wallet.tokenPositions(address: params["address"]?.stringValue)
             return .object(["tokens": try encode(positions)])
+
+        case "twetchStatus":
+            // The phone holds no Twetch posting key and no OIDC session.
+            // Answering in the daemon's shape lets MemeStudio render its
+            // "browsing, posting unavailable" state instead of failing over.
+            return .object([
+                "account": .object([
+                    "imported": .bool(false),
+                    "address": .null,
+                    "publicKey": .null,
+                ]),
+                "identity": .null,
+            ])
+
+        case "twetchMemes":
+            // Public meme-library search, keyless; posting and vision stay
+            // desktop features.
+            let page = try await memes.search(MemeQuery(
+                q: params["q"]?.stringValue,
+                folder: params["folder"]?.stringValue,
+                tag: params["tag"]?.stringValue,
+                format: params["format"]?.stringValue,
+                sort: params["sort"]?.stringValue,
+                cursor: params["cursor"]?.stringValue,
+                limit: params["limit"]?.intValue ?? 30,
+                uploaderUserId: params["uploaderUserId"]?.intValue
+            ))
+            return try encode(page)
 
         case "getVersion":
             // The daemon reports its own version; a phone carries the same
