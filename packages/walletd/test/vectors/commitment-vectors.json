@@ -1,0 +1,308 @@
+{
+  "grace": [
+    {
+      "cadenceSecs": 60,
+      "graceMs": 180000
+    },
+    {
+      "cadenceSecs": 90,
+      "graceMs": 180000
+    },
+    {
+      "cadenceSecs": 300,
+      "graceMs": 600000
+    },
+    {
+      "cadenceSecs": 3600,
+      "graceMs": 7200000
+    }
+  ],
+  "advance": [
+    {
+      "nextDueAt": 1000,
+      "cadenceSecs": 60,
+      "now": 1000,
+      "next": 61000
+    },
+    {
+      "nextDueAt": 1000,
+      "cadenceSecs": 60,
+      "now": 61000,
+      "next": 121000
+    },
+    {
+      "nextDueAt": 1000,
+      "cadenceSecs": 60,
+      "now": 185000,
+      "next": 241000
+    },
+    {
+      "nextDueAt": 5000,
+      "cadenceSecs": 300,
+      "now": 300000,
+      "next": 305000
+    },
+    {
+      "nextDueAt": 1000,
+      "cadenceSecs": 0,
+      "now": 999,
+      "next": 1000
+    }
+  ],
+  "accrued": [
+    {
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "now": 60000,
+      "amount": 1200
+    },
+    {
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "now": 60500,
+      "amount": 1210
+    },
+    {
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 1500,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "now": 600000,
+      "amount": 1500
+    },
+    {
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 0,
+        "fixedSats": 700,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "now": 60000,
+      "amount": 700
+    },
+    {
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 10,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 120000,
+        "nextDueAt": 0
+      },
+      "now": 60000,
+      "amount": 0
+    }
+  ],
+  "due": [
+    {
+      "name": "not due",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 120000
+      },
+      "liveness": {
+        "fresh": true,
+        "ageMs": 0
+      },
+      "now": 60000,
+      "decision": {
+        "kind": "wait",
+        "nextDueAt": 120000
+      }
+    },
+    {
+      "name": "exhausted below floor",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 500,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": true,
+        "ageMs": 0
+      },
+      "now": 60000,
+      "decision": {
+        "kind": "exhausted",
+        "remaining": 500
+      }
+    },
+    {
+      "name": "stale with reason",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": false,
+        "ageMs": 400000,
+        "reason": "last beat deadbee is 400s old (grace 180s) — auto-paused, resume when beats return"
+      },
+      "now": 60000,
+      "decision": {
+        "kind": "stale",
+        "graceMs": 180000,
+        "reason": "last beat deadbee is 400s old (grace 180s) — auto-paused, resume when beats return"
+      }
+    },
+    {
+      "name": "stale without reason",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": false,
+        "ageMs": 61400
+      },
+      "now": 60000,
+      "decision": {
+        "kind": "stale",
+        "graceMs": 180000,
+        "reason": "no liveness signal for 61s"
+      }
+    },
+    {
+      "name": "accruing",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": true,
+        "ageMs": 1000
+      },
+      "now": 60000,
+      "decision": {
+        "kind": "release",
+        "amount": 1200,
+        "remaining": 100000
+      }
+    },
+    {
+      "name": "accruing (fixed)",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 0,
+        "fixedSats": 400,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": true,
+        "ageMs": 1000
+      },
+      "now": 60000,
+      "decision": {
+        "kind": "accruing",
+        "amount": 400
+      }
+    },
+    {
+      "name": "release",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 100000,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": true,
+        "ageMs": 1000
+      },
+      "now": 120000,
+      "decision": {
+        "kind": "release",
+        "amount": 2400,
+        "remaining": 100000
+      }
+    },
+    {
+      "name": "release capped by remaining",
+      "terms": {
+        "cadenceSecs": 60,
+        "ratePerMin": 1200,
+        "fixedSats": 0,
+        "capSats": 2500,
+        "paidSats": 0,
+        "minPaymentSats": 1000,
+        "lastPaidAt": 0,
+        "nextDueAt": 0
+      },
+      "liveness": {
+        "fresh": true,
+        "ageMs": 1000
+      },
+      "now": 300000,
+      "decision": {
+        "kind": "release",
+        "amount": 2500,
+        "remaining": 2500
+      }
+    }
+  ]
+}

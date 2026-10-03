@@ -23,6 +23,7 @@ public actor LocalWalletBackend: WalletBackend {
     private let ledger: any LedgerStore
     private let inscriptions: any InscriptionMetadata
     private let tokens: any TokenIndex
+    private let cast: any CastStore
     private let now: @Sendable () -> Int
     private var locked = true
 
@@ -33,6 +34,7 @@ public actor LocalWalletBackend: WalletBackend {
         ledger: any LedgerStore,
         inscriptions: any InscriptionMetadata = OnesatInscriptionMetadata(),
         tokens: any TokenIndex = OnesatTokenIndex(),
+        cast: any CastStore = InMemoryCastStore(),
         now: @escaping @Sendable () -> Int = { Int(Date().timeIntervalSince1970 * 1000) }
     ) {
         self.vault = vault
@@ -41,6 +43,7 @@ public actor LocalWalletBackend: WalletBackend {
         self.ledger = ledger
         self.inscriptions = inscriptions
         self.tokens = tokens
+        self.cast = cast
         self.now = now
     }
 
@@ -1092,7 +1095,446 @@ public actor LocalWalletBackend: WalletBackend {
             }
             try? await ledger.update(updated)
         }
+        if await castHasWork() {
+            ensureCastTicker()
+            _ = await castTickPass()
+        }
         return changed
+    }
+
+    // MARK: - Cast (the Cast app's wallet side)
+    //
+    // The daemon's cast + stream loops, on the phone: episodes and sessions in
+    // the cast store, one pay-per-minute stream per value split, a minutely
+    // ticker that posts a liveness beat and pays what a fresh beat earns, and
+    // live broadcasts stored as init + segment files served by the loopback
+    // media routes. The payment gate is the daemon's `spendTo` shape —
+    // origin `stream`, action `app-spend`, amount including the fee.
+
+    public func castEpisodes() async throws -> [CastEpisode] {
+        try await cast.episodes()
+    }
+
+    public func castAdd(
+        title: String,
+        feed: String? = nil,
+        media: String? = nil,
+        live: Bool = false,
+        splits: String?
+    ) async throws -> CastEpisode {
+        let cleanTitle = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+        guard !cleanTitle.isEmpty else {
+            throw WalletError(code: "BAD_PARAM", message: "title required")
+        }
+        let parsedSplits: [CastSplit]
+        do {
+            parsedSplits = try CastRules.parseSplits(splits) { address in
+                (try? Address.scriptHash(from: address)) != nil
+            }
+        } catch let error as CastRuleError {
+            throw WalletError(code: error.code, message: error.message)
+        }
+        guard !parsedSplits.isEmpty else {
+            throw WalletError(code: "BAD_PARAM", message: "splits required")
+        }
+        let mediaUrl = String((media ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        if !mediaUrl.isEmpty, !CastRules.isSiteMediaUrl(mediaUrl) {
+            throw WalletError(code: "BAD_PARAM", message: "media must be an http(s) URL or site path")
+        }
+        let episode = CastEpisode(
+            id: CastRules.newId(prefix: "ep"),
+            title: cleanTitle,
+            feed: String((feed ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(500)),
+            mediaUrl: mediaUrl,
+            live: live,
+            splits: parsedSplits,
+            createdAt: now()
+        )
+        try await cast.saveEpisode(episode)
+        return episode
+    }
+
+    /// Start a listening session: one stream per split, and the money starts
+    /// with it. Not gated on the session lock — payments fail as skipped ticks
+    /// if the wallet is locked, exactly as a locked daemon behaves.
+    public func castPlay(episode: String, rate: Int, every: String? = nil, maxTotal: Int) async throws -> CastSession {
+        guard let row = try await cast.episode(id: episode) else {
+            throw WalletError(code: "NOT_FOUND", message: "no episode: \(String(episode.prefix(16)))")
+        }
+        guard rate > 0 else {
+            throw WalletError(code: "BAD_PARAM", message: "rate must be positive sats/min")
+        }
+        let tickMs: Int
+        do {
+            tickMs = try CastRules.parseTick(every ?? "5m")
+        } catch let error as CastRuleError {
+            throw WalletError(code: error.code, message: error.message)
+        }
+        let tickSecs = Int(floor(Double(tickMs) / 1000))
+        guard tickSecs >= 60 else {
+            throw WalletError(code: "BAD_PARAM", message: "interval minimum 60s")
+        }
+        guard maxTotal >= 1000 else {
+            throw WalletError(code: "BAD_PARAM", message: "max total must be at least 1000 sats")
+        }
+
+        let stamp = now()
+        var streamIds: [String] = []
+        for split in row.splits {
+            let streamRate = max(1, Int((Double(rate) * split.pct / 100).rounded()))
+            let streamMax = max(1000, Int(floor(Double(maxTotal) * split.pct / 100)))
+            let stream = PayStream(
+                id: CastRules.newStreamId(),
+                name: "cast \(String(row.title.prefix(40))) \(CastRules.formatNumber(split.pct))% \(String(split.address.prefix(8)))",
+                payee: split.address,
+                ratePerMin: streamRate,
+                tickSecs: tickSecs,
+                maxTotal: streamMax,
+                board: CastRules.board,
+                status: "active",
+                paidTotal: 0,
+                lastPaidAt: stamp,
+                nextDue: stamp + tickSecs * 1000,
+                createdAt: stamp
+            )
+            try await cast.saveStream(stream)
+            streamIds.append(stream.id)
+        }
+        let session = CastSession(
+            id: CastRules.newId(prefix: "cs"),
+            episode: row.id,
+            title: row.title,
+            ratePerMin: rate,
+            everySecs: tickSecs,
+            maxTotal: maxTotal,
+            streamIds: streamIds,
+            status: "playing",
+            startedAt: stamp,
+            stoppedAt: nil
+        )
+        try await cast.saveSession(session)
+        stopCastTicker()
+        ensureCastTicker()
+        _ = await castTickPass()
+        return session
+    }
+
+    public func castStop(id: String) async throws -> CastSession {
+        guard let session = try await cast.session(id: id) else {
+            throw WalletError(code: "NOT_FOUND", message: "no session: \(String(id.prefix(16)))")
+        }
+        guard session.status != "stopped" else { return session }
+        for streamId in session.streamIds {
+            guard var stream = try? await cast.stream(id: streamId), stream.status != "done" else { continue }
+            stream.status = "done"
+            try? await cast.saveStream(stream)
+        }
+        var stopped = session
+        stopped.status = "stopped"
+        stopped.stoppedAt = now()
+        try await cast.saveSession(stopped)
+        if !(await castHasWork()) { stopCastTicker() }
+        return stopped
+    }
+
+    public func streamPause(id: String) async throws -> PayStream {
+        guard var stream = try await cast.stream(id: id) else {
+            throw WalletError(code: "NOT_FOUND", message: "no stream: \(String(id.prefix(16)))")
+        }
+        guard stream.status != "done" else {
+            throw WalletError(code: "BAD_STATE", message: "closed streams stay closed")
+        }
+        stream.status = "paused"
+        try await cast.saveStream(stream)
+        return stream
+    }
+
+    public func streamResume(id: String) async throws -> PayStream {
+        guard var stream = try await cast.stream(id: id) else {
+            throw WalletError(code: "NOT_FOUND", message: "no stream: \(String(id.prefix(16)))")
+        }
+        guard stream.status != "done" else {
+            throw WalletError(code: "BAD_STATE", message: "closed streams stay closed")
+        }
+        let stamp = now()
+        stream.status = "active"
+        stream.nextDue = stamp + stream.tickSecs * 1000
+        stream.lastPaidAt = stamp
+        try await cast.saveStream(stream)
+        ensureCastTicker()
+        return stream
+    }
+
+    public func streamTicks(id: String, limit: Int = 50) async throws -> [StreamTick] {
+        guard try await cast.stream(id: id) != nil else {
+            throw WalletError(code: "NOT_FOUND", message: "no stream: \(String(id.prefix(16)))")
+        }
+        return try await cast.ticks(streamId: id, limit: limit)
+    }
+
+    public func castSetMedia(episode: String, mediaUrl: String) async throws -> (episode: String, mediaUrl: String) {
+        guard var row = try await cast.episode(id: episode) else {
+            throw WalletError(code: "NOT_FOUND", message: "no episode \(String(episode.prefix(16)))")
+        }
+        let url = String(mediaUrl.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        if !url.isEmpty, !CastRules.isSiteMediaUrl(url) {
+            throw WalletError(code: "BAD_PARAM", message: "media must be an http(s) URL or site path")
+        }
+        row.mediaUrl = url
+        try await cast.saveEpisode(row)
+        return (episode, url)
+    }
+
+    public func castLiveStart(episode: String) async throws -> (live: CastLive, playlist: String) {
+        guard var row = try await cast.episode(id: episode) else {
+            throw WalletError(code: "NOT_FOUND", message: "no episode: \(String(episode.prefix(16)))")
+        }
+        let live = CastLive(
+            id: CastRules.newLiveId(), episode: episode, status: "live",
+            segments: 0, mime: "", startedAt: now(), stoppedAt: nil, lastSegmentAt: nil
+        )
+        try await cast.saveLive(live)
+        row.live = true
+        try await cast.saveEpisode(row)
+        return (live, "/cast/live/\(live.id)/index.m3u8")
+    }
+
+    public func castLiveStop(id: String) async throws -> CastLive {
+        guard var live = try await cast.live(id: id) else {
+            throw WalletError(code: "NOT_FOUND", message: "no live session: \(id)")
+        }
+        guard live.status != "ended" else { return live }
+        live.status = "ended"
+        live.stoppedAt = now()
+        try await cast.saveLive(live)
+        if var episode = try await cast.episode(id: live.episode) {
+            episode.live = false
+            try await cast.saveEpisode(episode)
+        }
+        return live
+    }
+
+    public func castLiveGet(id: String) async throws -> CastLive {
+        guard CastRules.liveIdValid(id) else {
+            throw WalletError(code: "BAD_PARAM", message: "bad live id")
+        }
+        guard let live = try await cast.live(id: id) else {
+            throw WalletError(code: "NOT_FOUND", message: "no live session: \(id)")
+        }
+        return live
+    }
+
+    /// End broadcasts whose recorder went silent (crashed tab, backgrounded
+    /// app), so their playlists get ENDLIST and replay as recordings. Called
+    /// on the ticker's pass and on foreground.
+    @discardableResult
+    public func castReapStaleLive() async -> [String] {
+        let stamp = now()
+        var ended: [String] = []
+        for live in (try? await cast.lives()) ?? [] where live.status == "live" {
+            let last = max(live.lastSegmentAt ?? live.startedAt, live.startedAt)
+            guard stamp - last >= CastRules.liveIdleMs else { continue }
+            if var updated = try? await cast.live(id: live.id) {
+                updated.status = "ended"
+                updated.stoppedAt = stamp
+                try? await cast.saveLive(updated)
+                ended.append(live.id)
+            }
+        }
+        return ended
+    }
+
+    /// One pass of the daemon's cast + stream loops: a liveness beat per
+    /// playing session (minutely, as the desktop posts), then the payment
+    /// decision for every due active stream. Returns true while there is work,
+    /// so the ticker knows whether to keep going.
+    @discardableResult
+    public func castTickPass() async -> Bool {
+        if castTickRunning { return await castHasWork() }
+        castTickRunning = true
+        defer { castTickRunning = false }
+        let stamp = now()
+
+        for session in (try? await cast.sessions()) ?? [] where session.status == "playing" {
+            for streamId in session.streamIds {
+                if let last = try? await cast.latestBeat(streamId: streamId), stamp - last.ts < 5_000 {
+                    continue // an immediate pass right after play must not double-post
+                }
+                try? await cast.appendBeat(StreamBeat(id: CastRules.newId(prefix: "bt"), streamId: streamId, ts: stamp))
+            }
+        }
+
+        for stream in (try? await cast.streams()) ?? [] where stream.status == "active" {
+            if stream.nextDue > stamp || stream.tickSecs <= 0 { continue }
+            let advance = Commitment.advanceDue(nextDueAt: stream.nextDue, cadenceSecs: stream.tickSecs, now: stamp)
+            let remaining = stream.maxTotal - stream.paidTotal
+            if remaining < CastRules.minTickSats {
+                var closed = stream
+                closed.status = "done"
+                closed.nextDue = advance
+                try? await cast.saveStream(closed)
+                _ = try? await cast.appendTick(StreamTick(
+                    id: 0, streamId: stream.id, beatId: nil, amount: 0, txid: nil, status: "closed",
+                    detail: "budget exhausted (remainder \(remaining) sats below pay floor — left unpaid)",
+                    createdAt: stamp
+                ))
+                continue
+            }
+            let beat = try? await cast.latestBeat(streamId: stream.id)
+            let grace = Commitment.graceMsFor(stream.tickSecs)
+            let age = beat.map { stamp - $0.ts } ?? Int.max
+            let fresh = beat != nil && age <= grace
+            let reason: String
+            if let beat {
+                reason = "last beat \(String(beat.id.prefix(8))) is \(Int((Double(age) / 1000).rounded()))s old (grace \(Int((Double(grace) / 1000).rounded()))s) — auto-paused, resume when beats return"
+            } else {
+                reason = "no heartbeat on the board yet — auto-paused"
+            }
+            let terms = Commitment.Terms(
+                cadenceSecs: stream.tickSecs, ratePerMin: stream.ratePerMin, fixedSats: 0,
+                capSats: stream.maxTotal, paidSats: stream.paidTotal,
+                minPaymentSats: CastRules.minTickSats, lastPaidAt: stream.lastPaidAt, nextDueAt: stream.nextDue
+            )
+            switch Commitment.due(terms, fresh: fresh, ageMs: age == Int.max ? 0 : age, reason: reason, now: stamp) {
+            case .wait:
+                continue
+            case .exhausted(let left):
+                var closed = stream
+                closed.status = "done"
+                closed.nextDue = advance
+                try? await cast.saveStream(closed)
+                _ = try? await cast.appendTick(StreamTick(
+                    id: 0, streamId: stream.id, beatId: nil, amount: 0, txid: nil, status: "closed",
+                    detail: "budget exhausted (remainder \(left) sats below pay floor — left unpaid)",
+                    createdAt: stamp
+                ))
+            case .stale(_, let why):
+                var paused = stream
+                paused.status = "paused"
+                paused.nextDue = advance
+                try? await cast.saveStream(paused)
+                _ = try? await cast.appendTick(StreamTick(
+                    id: 0, streamId: stream.id, beatId: nil, amount: 0, txid: nil, status: "stale",
+                    detail: why, createdAt: stamp
+                ))
+            case .accruing(let amount):
+                var accrued = stream
+                accrued.nextDue = advance
+                try? await cast.saveStream(accrued)
+                _ = try? await cast.appendTick(StreamTick(
+                    id: 0, streamId: stream.id, beatId: beat?.id, amount: amount, txid: nil, status: "skipped",
+                    detail: "accrued \(amount) sats below \(CastRules.minTickSats) floor — carrying to next tick",
+                    createdAt: stamp
+                ))
+            case .release(let amount, _):
+                do {
+                    let paid = try await streamPay(stream: stream, amount: amount, beatId: beat?.id ?? "")
+                    var settled = stream
+                    settled.paidTotal += amount
+                    settled.lastPaidAt = stamp
+                    settled.nextDue = advance
+                    if settled.paidTotal >= settled.maxTotal { settled.status = "done" }
+                    try? await cast.saveStream(settled)
+                    _ = try? await cast.appendTick(StreamTick(
+                        id: 0, streamId: stream.id, beatId: beat?.id, amount: amount, txid: paid.txid, status: "paid",
+                        detail: "beat \(String((beat?.id ?? "").prefix(8)))", createdAt: stamp
+                    ))
+                } catch {
+                    var retry = stream
+                    retry.nextDue = advance
+                    try? await cast.saveStream(retry)
+                    let message = (error as? WalletError)?.message ?? String(describing: error)
+                    _ = try? await cast.appendTick(StreamTick(
+                        id: 0, streamId: stream.id, beatId: beat?.id, amount: amount, txid: nil, status: "skipped",
+                        detail: String("payment failed: \(message)".prefix(200)), createdAt: stamp
+                    ))
+                }
+            }
+        }
+
+        _ = await castReapStaleLive()
+        return await castHasWork()
+    }
+
+    // MARK: - cast internals
+
+    private var castTicker: Task<Void, Never>?
+    private var castTickRunning = false
+
+    private func ensureCastTicker() {
+        if let castTicker, !castTicker.isCancelled { return }
+        castTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                guard let self else { return }
+                let keep = await self.castTickPass()
+                if !keep { break }
+            }
+            guard let self else { return }
+            await self.castTickerFinished()
+        }
+    }
+
+    private func castTickerFinished() {
+        castTicker = nil
+    }
+
+    private func stopCastTicker() {
+        castTicker?.cancel()
+        castTicker = nil
+    }
+
+    private func castHasWork() async -> Bool {
+        if ((try? await cast.sessions()) ?? []).contains(where: { $0.status == "playing" }) { return true }
+        return ((try? await cast.streams()) ?? []).contains(where: { $0.status == "active" })
+    }
+
+    /// The daemon's `spendTo` for a stream tick: plain funding, one payment,
+    /// the OP_RETURN memo, the same gate (`origin: stream`, `app-spend`,
+    /// amount including the fee), then broadcast and ledger. A throw leaves
+    /// the tick unpaid; the pass records it as skipped.
+    private func streamPay(stream: PayStream, amount: Int, beatId: String) async throws -> SendResponse {
+        let key = try keyMaterial()
+        let funding = try await plainFunding()
+        guard !funding.isEmpty else {
+            throw WalletError(code: "INSUFFICIENT", message: "no plain funding UTXOs for the stream payment")
+        }
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: funding,
+                payments: [Tx.Payment(address: stream.payee, sats: amount)],
+                changeScriptHex: key.scriptHex,
+                opReturn: ["STREAM-PAY", stream.id, "beat:\(String(beatId.prefix(8)))"]
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough plain sats to pay the stream tick")
+        }
+        let total = amount + built.fee
+        let label = "stream \(stream.name) tick"
+        let description = "streamed pay \(amount) sats to \(stream.payee) for \(stream.name) (heartbeat \(String(beatId.prefix(8))))"
+        let gate = try await policy.check(
+            origin: "stream", amountSats: total, action: "app-spend",
+            context: SpendContext(
+                origin: "stream", action: "app-spend", amountSats: total,
+                label: label, to: stream.payee, description: description
+            )
+        )
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+        let signed = try Tx.sign(built: built, privateKey: key.privateKey, publicKey: key.publicKey)
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: label,
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
+        ))
+        return SendResponse(txid: broadcast.txid, fee: built.fee)
     }
 
     // MARK: - internals
