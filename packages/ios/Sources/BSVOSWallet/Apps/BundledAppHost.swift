@@ -29,13 +29,29 @@ public final class BundledAppHost: NSObject, ObservableObject {
     public let title: String
     private let baseURL: URL
     private let credential: DeviceCredential
+    /// When set, the assets come from the bundle instead of the daemon — the
+    /// standalone path. The location is served through `loadFileURL`, and the
+    /// injected shim still rewrites `fetch("/")` onto the native bridge.
+    private let assetRoot: URL?
+    /// The wallet behind the page: the daemon's device surface, or an
+    /// in-process `LocalRpcBridge`.
+    private let rpc: (any RpcCalling)?
     private var webView: WKWebView?
 
-    public init(app: String, title: String, baseURL: URL, credential: DeviceCredential) {
+    public init(
+        app: String,
+        title: String,
+        baseURL: URL,
+        credential: DeviceCredential,
+        rpc: (any RpcCalling)? = nil,
+        assetRoot: URL? = nil
+    ) {
         self.app = app
         self.title = title
         self.baseURL = baseURL
         self.credential = credential
+        self.rpc = rpc
+        self.assetRoot = assetRoot
         super.init()
     }
 
@@ -55,7 +71,7 @@ public final class BundledAppHost: NSObject, ObservableObject {
         }
         config.userContentController.add(router, contentWorld: .page, name: "bsv")
 
-        let bridge = RpcBridge(baseURL: baseURL, credential: credential)
+        let bridge: any RpcCalling = rpc ?? RpcBridge(baseURL: baseURL, credential: credential)
         self.bridge = bridge
         config.userContentController.addUserScript(
             WKUserScript(source: BundledAppHost.shim(for: app), injectionTime: .atDocumentStart, forMainFrameOnly: true)
@@ -63,11 +79,16 @@ public final class BundledAppHost: NSObject, ObservableObject {
 
         let view = WKWebView(frame: .zero, configuration: config)
         webView = view
-        if let startURL { view.load(URLRequest(url: startURL)) }
+        if let assetRoot {
+            let appRoot = assetRoot.appendingPathComponent(app, isDirectory: true)
+            view.loadFileURL(appRoot.appendingPathComponent("index.html"), allowingReadAccessTo: appRoot)
+        } else if let startURL {
+            view.load(URLRequest(url: startURL))
+        }
         return view
     }
 
-    private var bridge: RpcBridge?
+    private var bridge: (any RpcCalling)?
 
     private func receive(_ message: WKScriptMessage) async {
         guard let body = message.body as? [String: Any],
@@ -176,7 +197,7 @@ public final class BundledAppHost: NSObject, ObservableObject {
 /// refusal instead of reaching the wallet. This is the same list the daemon
 /// enforces; checking locally means a mistyped call fails on the phone rather
 /// than as a round trip.
-public struct RpcBridge: Sendable {
+public struct RpcBridge: Sendable, RpcCalling {
     private let client: DeviceWalletClient
 
     public init(baseURL: URL, credential: DeviceCredential, http: DeviceHTTPClient = URLSessionDeviceClient()) {
