@@ -1,0 +1,79 @@
+[
+  {
+    "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+    "paths": {
+      "m/0/0": {
+        "privateKeyHex": "1db589435fc2e15100af30965d58e0aaa8101e1dfc559735c34c75d5a1bd7e56",
+        "publicKeyHex": "027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62",
+        "address": "13iX7DteNj1gV7zhe4t6o9FX9CArR5wZxz",
+        "wif": "KxDTisYSXy8fwZBtxiXKNRCkipFviJLosSceTf7BXmC79xAqzDBW"
+      },
+      "m/0/1": {
+        "privateKeyHex": "64c2a35ea7eb34f49f23ff42f7479e00613e01c3335acaaa5adf63aea41e81fc",
+        "publicKeyHex": "03446801102d378f09aa200debc1acdff0f6fcf1c6d9bc1e2c7e14076d5fbc740e",
+        "address": "1QAUQ4opPaGfnow7qBMVcmMhYg9Ubv33x9",
+        "wif": "KzbaM51UVBognvXyuMMPTgrWnEZxdwTgZDqvmbf8SyqNyetVWGqm"
+      },
+      "m/44'/0'/0'/0/0": {
+        "privateKeyHex": "e284129cc0922579a535bbf4d1a3b25773090d28c909bc0fed73b5e0222cc372",
+        "publicKeyHex": "03aaeb52dd7494c361049de67cc680e83ebcbbbdbeb13637d92cd845f70308af5e",
+        "address": "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
+        "wif": "L4p2b9VAf8k5aUahF1JCJUzZkgNEAqLfq8DDdQiyAprQAKSbu8hf"
+      }
+    },
+    "signingVector": {
+      "digestHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureHex": "3045022100ce1d57f9d2a4d56dedf2e845caab166bd48a446da9d4f5f5cbfcc5bc42ffd16602203423861ca3d260cdfd627c83270535b9325c5a3fa6d2464dfb5632564f2ce032",
+      "r": "ce1d57f9d2a4d56dedf2e845caab166bd48a446da9d4f5f5cbfcc5bc42ffd166"
+    }
+  },
+  {
+    "phrase": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+    "seedHex": "878386efb78845b3355bd15ea4d39ef97d179cb712b77d5c12b6be415fffeffe5f377ba02bf3f8544ab800b955e51fbff09828f682052a20faa6addbbddfb096",
+    "paths": {
+      "m/0/0": {
+        "privateKeyHex": "18297bb1fb6b51eb05210aafc622eb1024e429d9691603783b36f998d99f588a",
+        "publicKeyHex": "0395093f8bce6d4fbeb888c9504de513f1de060da21d0f68e1fa1c465189f84739",
+        "address": "14PXLD1Yyh5Sfim1c83nCfmnPeSAKjtGsJ",
+        "wif": "Kx2gKXMtBcJ88evH7XYmRAWeW2SufKsdh6AcxyGLhBaKMVccjHCw"
+      },
+      "m/0/1": {
+        "privateKeyHex": "3ce42ddc2a2c433af36927d4c889945110202df2c1e38904eae425e4c7ff36b0",
+        "publicKeyHex": "036337b7987335254af1a314c0cfdbdd28cdca3d659d8e5a8ec7db7787f4c63775",
+        "address": "17RGS61mTKw9goT2ZLQm8LWwA9k6rQoaob",
+        "wif": "KyG5LmmfEcBgpuMVtsJ3iQLDeAP2PJHdoUjH4pnh8YymKGVKWRmh"
+      },
+      "m/44'/0'/0'/0/0": {
+        "privateKeyHex": "0f688c5d4ba70afba86924114e9055823482580f8bad62d32eeb00be9f4c7b50",
+        "publicKeyHex": "026b6eadb10ad2b787e70fb8b29d270ac6a61d34e5a76b63bd953cbb9fa31d5e22",
+        "address": "1EBuf21icKTE5m3HWVndKx2bTxvqrWCqV6",
+        "wif": "KwjfPrGWtcEt8Ez5o4qtqy5JvZjLTMsLtks7xJdpVFWv9R4v21Df"
+      }
+    }
+  },
+  {
+    "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+    "seedHex": "b6a6d8921942dd9806607ebc2750416b289adea669198769f2e15ed926c3aa92bf88ece232317b4ea463e84b0fcd3b53577812ee449ccc448eb45e6f544e25b6",
+    "paths": {
+      "m/0/0": {
+        "privateKeyHex": "21739b2adbec5d4d02282eb20d4111e08ac7b850b5c3c5dd1a54220cc683f2e1",
+        "publicKeyHex": "02df61d0e0ca2d1f02670cd94941d1f3299e10a01f0cc008b695e73006e4b28bfc",
+        "address": "13chpyELfuN926nNxpCxPJp6snQb7KLakT",
+        "wif": "KxLjfUxseecrP1kn8EAYAnWmJip9sTmpQKuNfEPrF54PpwL1Mucu"
+      },
+      "m/0/1": {
+        "privateKeyHex": "51183c20a46ca0e4095f5ff10f9a35fe98b2c2d84938390bcc9f6f3a001c34d6",
+        "publicKeyHex": "030681b0bc23b38517117e4acd4131962119dc569ee685a99633c4de8955c7f314",
+        "address": "1JHhHboY3vsEjqyf8QuCXbCBRXpJebU8Q9",
+        "wif": "KywM9zee1VTyoPoyndxDJfnnwZsEd4Jcbbv2cyTKMb8EE99j8GLR"
+      },
+      "m/44'/0'/0'/0/0": {
+        "privateKeyHex": "f362480944a2c58523734a4bd0bb3696ae7c502a2b1cd6624d8f30bccf91bc7a",
+        "publicKeyHex": "02a710461ef2cc6db53d2ceeacfbd41f9b47be0e5b62d5e0532c1c1547db4fbc89",
+        "address": "1EjnS13zBgN6tUgy6U64qFeh53fyAeUsqE",
+        "wif": "L5NpMzWdTPpmQ1WsjtBpTti3CCXQ7ZjZQo4qcJJXPUBVVWXGC8k4"
+      }
+    }
+  }
+]
