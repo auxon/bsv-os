@@ -176,6 +176,20 @@ public enum CastRules {
         return mediaExtensions[clean.lowercased()]
     }
 
+    /// The 12-character id of a stored recording.
+    public static func recordingBaseValid(_ base: String?) -> Bool {
+        guard let base else { return false }
+        return base.count == 12 && base.allSatisfy { ($0.isASCII && $0.isLowercase) || $0.isNumber }
+    }
+
+    /// A packaged part name: the init segment or one numbered segment.
+    public static func recordingPartValid(_ file: String?) -> Bool {
+        guard let file else { return false }
+        if file == "init.mp4" { return true }
+        let pattern = /^seg-(\d{1,6})\.m4s$/
+        return (try? pattern.wholeMatch(in: file)) != nil
+    }
+
     public static func mediaFileValid(_ name: String?) -> Bool {
         guard let name else { return false }
         let pattern = /^[a-z0-9]{12}\.(webm|mp4|m4a|mp3|ogg)$/

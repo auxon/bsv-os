@@ -190,6 +190,64 @@ final class CastMediaServerTests: XCTestCase {
         XCTAssertEqual(Hex.encode([UInt8](stored)), vector.expectedHex, "the stored file carries the duration")
     }
 
+    func testAMp4RecordingIsServedAsHlsAndRebuildsTheFile() async throws {
+        let base = try await start()
+        // The real Safari capture: the container WebKit cannot play
+        // progressively, but can play as HLS.
+        let here = URL(fileURLWithPath: #filePath)
+        let repoRoot = here
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        struct Fixture: Decodable {
+            let inputHex: String
+            let bytes: Int
+        }
+        let fixture = try JSONDecoder().decode(
+            Fixture.self,
+            from: Data(contentsOf: repoRoot.appendingPathComponent("walletd/test/vectors/fmp4-safari-real.json"))
+        )
+        let input = try Hex.decode(fixture.inputHex)
+
+        var request = URLRequest(url: base.appendingPathComponent("cast/media"))
+        request.httpMethod = "POST"
+        request.setValue("video/mp4", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(input)
+        let (uploadData, uploadResponse) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((uploadResponse as? HTTPURLResponse)?.statusCode, 200)
+        let payload = json(uploadData)
+        let hlsUrl = try XCTUnwrap(payload["hlsUrl"] as? String)
+        XCTAssertTrue(hlsUrl.hasSuffix(".m3u8"))
+        let base64 = String(hlsUrl.dropFirst("/cast/media/".count).dropLast(".m3u8".count))
+
+        let (playlist, playlistCode, playlistHeaders) = try await get(base.appendingPathComponent("cast/media/\(base64).m3u8"))
+        XCTAssertEqual(playlistCode, 200)
+        let text = String(decoding: playlist, as: UTF8.self)
+        XCTAssertTrue(text.contains("#EXT-X-MAP:URI=\"init.mp4\""))
+        XCTAssertTrue(text.contains("#EXT-X-ENDLIST"))
+        XCTAssertTrue(text.contains("seg-0.m4s"))
+        XCTAssertEqual(playlistHeaders?.value(forHTTPHeaderField: "content-type"), "application/vnd.apple.mpegurl")
+
+        let (initPart, initCode, initHeaders) = try await get(base.appendingPathComponent("cast/media/\(base64)/init.mp4"))
+        XCTAssertEqual(initCode, 200)
+        XCTAssertEqual(initHeaders?.value(forHTTPHeaderField: "content-type"), "video/mp4")
+        let (segment, segmentCode, _) = try await get(base.appendingPathComponent("cast/media/\(base64)/seg-0.m4s"))
+        XCTAssertEqual(segmentCode, 200)
+
+        // init + every segment must rebuild the stored file byte for byte.
+        var rebuilt = initPart
+        var index = 0
+        while true {
+            let (part, code, _) = try await get(base.appendingPathComponent("cast/media/\(base64)/seg-\(index).m4s"))
+            if code != 200 { break }
+            rebuilt.append(part)
+            index += 1
+        }
+        XCTAssertEqual(rebuilt, Data(input), "the packaged parts rebuild the recording")
+        XCTAssertEqual(index, 2, "the real capture has two fragments")
+    }
+
     func testMissingThingsAre404s() async throws {
         let base = try await start()
         let missing = try await get(base.appendingPathComponent("cast/media/abcdefghijkl.webm"))

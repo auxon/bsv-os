@@ -267,6 +267,22 @@ public final class BundleAssetServer: @unchecked Sendable {
                     durationMs: request.headers["x-cast-duration-ms"].flatMap(Int.init)
                         ?? request.query["durationMs"].flatMap(Int.init)
                 )
+            } else if components.count == 3, components[0] == "cast", components[1] == "media",
+                      components[2].hasSuffix(".m3u8") {
+                guard request.method == "GET" || request.method == "HEAD" else {
+                    reply = .failure(405, code: "METHOD", message: "method not allowed")
+                    self.write(reply, headOnly: true, on: connection)
+                    return
+                }
+                let base = String(components[2].dropLast(".m3u8".count))
+                reply = await handler.recordingPlaylist(base: base)
+            } else if components.count == 4, components[0] == "cast", components[1] == "media" {
+                guard request.method == "GET" || request.method == "HEAD" else {
+                    reply = .failure(405, code: "METHOD", message: "method not allowed")
+                    self.write(reply, headOnly: true, on: connection)
+                    return
+                }
+                reply = await handler.recordingPart(base: components[2], file: components[3])
             } else if components.count == 3, components[0] == "cast", components[1] == "media" {
                 guard request.method == "GET" || request.method == "HEAD" else {
                     reply = .failure(405, code: "METHOD", message: "method not allowed")

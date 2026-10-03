@@ -75,6 +75,20 @@ function platformHandlesDuration(blob) {
   });
 }
 
+/** Point an element at an HLS playlist: hls.js where it works, native otherwise. */
+function attachHls(element, url) {
+  try {
+    if (window.Hls && window.Hls.isSupported()) {
+      const hls = new window.Hls({ maxBufferLength: 30 });
+      hls.loadSource(url);
+      hls.attachMedia(element);
+      return hls;
+    }
+  } catch { /* fall through to native */ }
+  element.src = url;
+  return null;
+}
+
 function setStatus(text, cls = "") {
   statusEl.textContent = text;
   statusEl.className = `status ${cls}`;
@@ -307,6 +321,12 @@ async function msePlay(playlistUrl) {
 function loadMedia(url) {
   teardownMedia();
   if (!url) return;
+  // A stored MP4 recording plays as HLS: WebKit cannot progressively demux
+  // the fragmented file MediaRecorder writes, but it plays the same fragments
+  // packaged as HLS (the server splits it on demand). Old and new episodes
+  // both get this without re-uploading.
+  const recordingMp4 = /\/cast\/media\/([a-z0-9]{12})\.mp4(\?|#|$)/i.exec(url);
+  if (recordingMp4) url = `/cast/media/${recordingMp4[1]}.m3u8`;
   const isHls = /\.m3u8(\?|#|$)/i.test(url);
   // Our own ingest URLs always go straight to MSE: sequential append of the
   // exact chunks the recorder produced can never have holes or mid-stream
@@ -611,6 +631,7 @@ const rec = {
   blob: null,
   blobUrl: "",
   uploadedUrl: "",
+  playbackUrl: "",
   durationMs: 0,
   patchedDuration: false,
   liveId: null,
@@ -908,10 +929,21 @@ $("r-upload").addEventListener("click", async () => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error?.message || data?.error || `upload ${res.status}`);
     rec.uploadedUrl = data.url;
+    rec.playbackUrl = data.hlsUrl || data.url;
     const seconds = Math.round((data.durationMs || rec.durationMs || 0) / 1000);
     st.className = "status ok";
     st.textContent = `stored ${data.bytes} bytes · ${data.mime} · ${seconds}s` +
       (data.patched ? " · server wrote duration" : "");
+    // The direct file is still the download; playback moves to the streaming
+    // form the platform can actually play.
+    if (data.hlsUrl) {
+      const pb = $("r-playback");
+      const dl = $("r-download");
+      dl.href = data.url;
+      dl.download = (rec.uploadedUrl.split("/").pop() || "cast-recording");
+      attachHls(pb, data.hlsUrl);
+      $("r-diag").textContent += ` · streaming ${data.hlsUrl}`;
+    }
     $("r-publish").classList.remove("hidden");
     $("r-title").value = $("r-title").value || `Recording ${new Date().toLocaleString()}`;
   } catch (e) {
@@ -930,7 +962,7 @@ $("r-add-ep").addEventListener("click", async () => {
       st.textContent = "";
       return;
     }
-    const res = await rpc("castAdd", { title: $("r-title").value.trim(), media: rec.uploadedUrl, splits });
+    const res = await rpc("castAdd", { title: $("r-title").value.trim(), media: rec.playbackUrl || rec.uploadedUrl, splits });
     st.className = "status ok";
     st.textContent = `episode ${res.id}`;
     await loadEpisodes();

@@ -152,6 +152,12 @@ public protocol CastMediaServing: Sendable {
     func appendSegment(liveId: String, data: Data, isInit: Bool, mime: String?) async -> CastHTTPReply
     func livePlaylist(liveId: String) async -> CastHTTPReply
     func liveFile(liveId: String, name: String, range: String?) async -> CastHTTPReply
+    /// VOD playlist for a stored MP4 recording, packaged as HLS: WebKit cannot
+    /// progressively play the fragmented file MediaRecorder writes, and HLS is
+    /// what it does play without MSE.
+    func recordingPlaylist(base: String) async -> CastHTTPReply
+    /// One packaged part of a recording: `init.mp4` or `seg-N.m4s`.
+    func recordingPart(base: String, file: String) async -> CastHTTPReply
 }
 
 /// Implements the daemon's `/cast/media` and `/cast/live` routes over the
@@ -184,9 +190,11 @@ public struct CastMediaHandler: CastMediaServing {
         }
         do {
             let stored = try media.storeRecording(data: payload, contentType: contentType)
+            let base = stored.name.split(separator: ".").first.map(String.init) ?? stored.name
             return .json(200, [
                 "id": stored.name,
                 "url": stored.url,
+                "hlsUrl": stored.mime == "video/mp4" ? "/cast/media/\(base).m3u8" : NSNull(),
                 "bytes": stored.bytes,
                 "mime": stored.mime,
                 "durationMs": durationMs ?? 0,
@@ -271,6 +279,70 @@ public struct CastMediaHandler: CastMediaServing {
             return .failure(404, code: "NOT_FOUND", message: "not found")
         }
         return CastHTTPReply(status: 200, contentType: mime, body: body)
+    }
+
+    // MARK: - HLS packaging for recordings
+
+    public func recordingPlaylist(base: String) async -> CastHTTPReply {
+        guard let package = packaged(base: base) else {
+            return .failure(404, code: "NOT_FOUND", message: "not found")
+        }
+        return CastHTTPReply(
+            status: 200, contentType: "application/vnd.apple.mpegurl",
+            body: Data(package.playlist.utf8)
+        )
+    }
+
+    public func recordingPart(base: String, file: String) async -> CastHTTPReply {
+        guard CastRules.recordingPartValid(file), let package = packaged(base: base) else {
+            return .failure(404, code: "NOT_FOUND", message: "not found")
+        }
+        if file == "init.mp4" {
+            return CastHTTPReply(status: 200, contentType: "video/mp4", body: package.initSegment)
+        }
+        guard let index = Int(file.dropFirst(4).prefix(while: { $0.isNumber })), index < package.segments.count else {
+            return .failure(404, code: "NOT_FOUND", message: "not found")
+        }
+        return CastHTTPReply(status: 200, contentType: "video/iso.segment", body: package.segments[index])
+    }
+
+    /// The packaged recording, from the on-disk cache or freshly split. Stored
+    /// names are unique and immutable, so the cache never goes stale.
+    private func packaged(base: String) -> Mp4Hls.Package? {
+        guard CastRules.recordingBaseValid(base) else { return nil }
+        let cache = media.root.appendingPathComponent("\(base).hls", isDirectory: true)
+        let playlistURL = cache.appendingPathComponent("index.m3u8")
+        let initURL = cache.appendingPathComponent("init.mp4")
+        if let playlist = try? String(contentsOf: playlistURL, encoding: .utf8),
+           let initSegment = try? Data(contentsOf: initURL),
+           let names = try? FileManager.default.contentsOfDirectory(atPath: cache.path) {
+            let segments = names
+                .filter { $0.hasPrefix("seg-") && $0.hasSuffix(".m4s") }
+                .sorted { lhs, rhs in
+                    (Int(lhs.dropFirst(4).prefix(while: { $0.isNumber })) ?? 0)
+                        < (Int(rhs.dropFirst(4).prefix(while: { $0.isNumber })) ?? 0)
+                }
+                .compactMap { try? Data(contentsOf: cache.appendingPathComponent($0)) }
+            if !segments.isEmpty {
+                return Mp4Hls.Package(
+                    initSegment: initSegment, segments: segments, durationsMs: [], playlist: playlist
+                )
+            }
+        }
+        guard let source = media.recordingURL(name: "\(base).mp4"),
+              let data = try? Data(contentsOf: source),
+              let package = Mp4Hls.package(data) else { return nil }
+        do {
+            try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+            try package.initSegment.write(to: initURL, options: .atomic)
+            for (index, segment) in package.segments.enumerated() {
+                try segment.write(to: cache.appendingPathComponent("seg-\(index).m4s"), options: .atomic)
+            }
+            try Data(package.playlist.utf8).write(to: playlistURL, options: .atomic)
+        } catch {
+            // Serve from memory even if the cache could not be written.
+        }
+        return package
     }
 
     // MARK: - range serving

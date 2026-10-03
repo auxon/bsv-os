@@ -169,6 +169,9 @@ test("player app bundle: served files, no remote code", async () => {
   assert.ok(js.includes("inspectMp4"), "recorder panel inspects the recording's boxes");
   assert.ok(js.includes("platformHandlesDuration"), "the repair only runs when the platform needs it");
   assert.ok(js.includes("preview duration"), "the panel reports what the player measures");
+  assert.ok(js.includes("attachHls"), "recordings play through HLS");
+  assert.ok(js.includes("hlsUrl"), "the upload's streaming sibling is used for episodes");
+  assert.ok(js.includes("/cast/media/${recordingMp4[1]}.m3u8"), "stored MP4s are played as their HLS sibling");
   assert.ok(js.includes("no media data"), "an empty recording is called out, not implied successful");
   assert.ok(js.includes("video/mp4;codecs=avc1"), "mime probing prefers spellable mp4 first");
   assert.ok(js.includes("initFacts"), "init sniffing decides kind+container");
