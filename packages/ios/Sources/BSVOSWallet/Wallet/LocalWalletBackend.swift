@@ -21,6 +21,7 @@ public actor LocalWalletBackend: WalletBackend {
     private let chain: any ChainProvider
     private let policy: PolicyEngine
     private let ledger: any LedgerStore
+    private let inscriptions: any InscriptionMetadata
     private let now: @Sendable () -> Int
     private var locked = true
 
@@ -29,12 +30,14 @@ public actor LocalWalletBackend: WalletBackend {
         chain: any ChainProvider,
         policy: PolicyEngine,
         ledger: any LedgerStore,
+        inscriptions: any InscriptionMetadata = OnesatInscriptionMetadata(),
         now: @escaping @Sendable () -> Int = { Int(Date().timeIntervalSince1970 * 1000) }
     ) {
         self.vault = vault
         self.chain = chain
         self.policy = policy
         self.ledger = ledger
+        self.inscriptions = inscriptions
         self.now = now
     }
 
@@ -326,6 +329,470 @@ public actor LocalWalletBackend: WalletBackend {
         return SendResponse(txid: broadcast.txid, fee: built.fee)
     }
 
+    // MARK: - OrdLock and the v4 swaps (P1)
+    //
+    // Ported from the daemon's `ordlock.ts` and the ordinal half of `swaps.ts`.
+    // The scripts and every signed transaction are vector-pinned byte for byte
+    // (`OrdlockVectorTests`), so what is left here is the surrounding custody:
+    // validating the chain state before signing, gating through policy under
+    // the app's origin, and recording the inputs against double spends.
+    //
+    // The bsv21 half of swaps needs the BSV20/BSV21 envelope tooling, which the
+    // phone does not carry yet; those calls refuse by name rather than guess.
+
+    public struct OrdlockLockResult: Sendable, Equatable {
+        public let txid: String
+        public let lockOutpoint: String
+        public let fee: Int
+    }
+
+    public struct OrdlockBuyResult: Sendable, Equatable {
+        public let txid: String
+        public let fee: Int
+        public let priceSats: Int
+    }
+
+    /// Seller: move a 1-sat carrier into the OrdLock covenant. On-chain, miner
+    /// fee only; the resulting `txid.0` is what a market lists.
+    public func ordlockLock(origin: String, txid: String, vout: Int, priceSats: Int) async throws -> OrdlockLockResult {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        guard priceSats >= 1 else {
+            throw WalletError(code: "BAD_PARAM", message: "priceSats must be a positive sat number")
+        }
+        let (value, carrierScript) = try await outputData(txid: txid, vout: vout)
+        try requireOurs(carrierScript, key: key, code: "NOT_OURS", message: "carrier is not ours")
+        guard value == 1 else {
+            throw WalletError(code: "BAD_PARAM", message: "carrier must be exactly 1 sat (found \(value))")
+        }
+        if await unavailableOutpoints().contains("\(txid):\(vout)") {
+            throw WalletError(
+                code: "BAD_PARAM",
+                message: "carrier already spent by an in-flight transaction (indexers may not show it yet)"
+            )
+        }
+        try await requireInscribed(
+            carrierScript, txid: txid, vout: vout,
+            refusal: "carrier is not inscribed — refusing to lock plain dust"
+        )
+
+        let funding = try await plainFunding()
+        let lockScript = try Ordlock.lockScript(cancelAddress: key.address, payAddress: key.address, priceSats: priceSats)
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: [Tx.Input(txid: txid, vout: UInt32(vout), value: 1, scriptHex: carrierScript)] + funding,
+                payments: [Tx.Payment(scriptHex: lockScript, sats: 1)],
+                changeScriptHex: key.scriptHex,
+                keepOrder: true
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough plain sats to fund the lock fee")
+        }
+        let gate = try await policy.check(
+            origin: origin, amountSats: built.fee, action: "ordlock-lock",
+            context: SpendContext(
+                origin: origin, action: "ordlock-lock", amountSats: built.fee,
+                label: "ordlock \(priceSats) sats", to: "ordlock"
+            )
+        )
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+        let signed = try Tx.sign(built: built, privateKey: key.privateKey, publicKey: key.publicKey)
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: "ordlock lock \(priceSats) sats",
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
+        ))
+        return OrdlockLockResult(txid: broadcast.txid, lockOutpoint: "\(broadcast.txid).0", fee: built.fee)
+    }
+
+    /// Buyer: spend the lock output. The covenant enforces the payout and the
+    /// daemon re-checks the decoded seller/price before funding anything; so
+    /// does this, including the optional buyer-side checks.
+    public func ordlockBuy(
+        origin: String,
+        lockOutpoint: String,
+        fee: AppPayment? = nil,
+        memo: [String]? = nil,
+        label: String? = nil,
+        description: String? = nil,
+        expectedSeller: String? = nil,
+        maxPrice: Int? = nil
+    ) async throws -> OrdlockBuyResult {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let parsed = try parseOutpoint(lockOutpoint)
+        let (lockValue, lockScriptHex) = try await outputData(txid: parsed.txid, vout: parsed.vout)
+        guard lockValue == 1 else {
+            throw WalletError(code: "BAD_OFFER", message: "lock output must be exactly 1 sat")
+        }
+        guard let decoded = Ordlock.decode(lockScriptHex) else {
+            throw WalletError(code: "BAD_OFFER", message: "lock output is not a valid OrdLock")
+        }
+        let price = decoded.priceSats
+        guard price >= 1 else {
+            throw WalletError(code: "BAD_OFFER", message: "lock price must be positive")
+        }
+        if let expectedSeller {
+            let want: String
+            do {
+                want = Hex.encode(try Address.lockingScript(for: expectedSeller))
+            } catch {
+                throw WalletError(code: "BAD_PARAM", message: "buyerChecks.expectedSeller must be a valid P2PKH address")
+            }
+            guard decoded.payoutScriptHex.lowercased() == want.lowercased() else {
+                throw WalletError(code: "BAD_OFFER", message: "lock payout does not pay the expected seller")
+            }
+        }
+        if let maxPrice {
+            guard maxPrice >= 0 else {
+                throw WalletError(code: "BAD_PARAM", message: "buyerChecks.maxPrice must be a non-negative sat number")
+            }
+            guard price <= maxPrice else {
+                throw WalletError(code: "BAD_OFFER", message: "lock price \(price) exceeds buyer max \(maxPrice)")
+            }
+        }
+        var feeSats = 0
+        if let fee {
+            guard fee.sats > 0 else { throw WalletError(code: "BAD_PARAM", message: "fee.sats must be positive") }
+            do {
+                _ = try Address.lockingScript(for: fee.to)
+            } catch {
+                throw WalletError(code: "BAD_PARAM", message: "fee.to must be a valid P2PKH address")
+            }
+            feeSats = fee.sats
+        }
+
+        let funding = try await plainFunding()
+        var payments = [
+            Tx.Payment(address: key.address, sats: 1),                 // [0] the ordinal (FIFO: lock is input 0)
+            Tx.Payment(scriptHex: decoded.payoutScriptHex, sats: price), // [1] byte-exact payout
+        ]
+        if let fee { payments.append(Tx.Payment(address: fee.to, sats: fee.sats)) }
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: [Tx.Input(txid: parsed.txid, vout: UInt32(parsed.vout), value: 1, scriptHex: lockScriptHex)] + funding,
+                payments: payments,
+                changeScriptHex: key.scriptHex,
+                opReturn: memo?.isEmpty == false ? memo : nil,
+                keepOrder: true
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough plain sats to fund the purchase and its fee")
+        }
+        let resolvedLabel = label ?? "market buy \(lockOutpoint)"
+        let amount = price + feeSats + built.fee
+        let gate = try await policy.check(
+            origin: origin, amountSats: amount, action: "ordlock-buy",
+            context: SpendContext(
+                origin: origin, action: "ordlock-buy", amountSats: amount,
+                label: resolvedLabel, to: "\(parsed.txid.prefix(8)) lock",
+                description: description
+            )
+        )
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+        let signed = try Tx.sign(
+            built: built, privateKey: key.privateKey, publicKey: key.publicKey,
+            scopeFor: nil,
+            customUnlock: { index, built in
+                guard index == 0 else { return nil }
+                return try Ordlock.purchaseUnlock(
+                    inputs: built.inputs, outputs: built.outputs, inputIndex: 0,
+                    lockScriptHex: lockScriptHex, lockValue: 1
+                )
+            }
+        )
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: label ?? "ordlock buy \(price) sats from \(parsed.txid.prefix(8))",
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
+        ))
+        return OrdlockBuyResult(txid: broadcast.txid, fee: built.fee, priceSats: price)
+    }
+
+    /// Seller: cancel a lock back to the wallet. Signature + OP_1 selects the
+    /// covenant's cancel path; miner fee only.
+    public func ordlockCancel(origin: String, lockOutpoint: String) async throws -> SendResponse {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let parsed = try parseOutpoint(lockOutpoint)
+        let (_, lockScriptHex) = try await outputData(txid: parsed.txid, vout: parsed.vout)
+        guard let decoded = Ordlock.decode(lockScriptHex) else {
+            throw WalletError(code: "BAD_OFFER", message: "lock output is not a valid OrdLock")
+        }
+        guard decoded.cancelAddress == key.address else {
+            throw WalletError(code: "NOT_OURS", message: "lock is not cancellable by this wallet")
+        }
+        let funding = try await plainFunding()
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: [Tx.Input(txid: parsed.txid, vout: UInt32(parsed.vout), value: 1, scriptHex: lockScriptHex)] + funding,
+                payments: [Tx.Payment(address: key.address, sats: 1)],
+                changeScriptHex: key.scriptHex,
+                keepOrder: true
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough plain sats to fund the cancel fee")
+        }
+        let gate = try await policy.check(origin: origin, amountSats: built.fee, action: "ordlock-cancel")
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+        let signed = try Tx.sign(
+            built: built, privateKey: key.privateKey, publicKey: key.publicKey,
+            scopeFor: nil,
+            customUnlock: { index, built in
+                guard index == 0 else { return nil }
+                let digest = try Tx.sighash(
+                    inputs: built.inputs, outputs: built.outputs, inputIndex: 0,
+                    scriptCode: try Hex.decode(lockScriptHex)
+                )
+                let signature = try Secp256k1.sign(derForDigest: digest, withPrivateKey: key.privateKey)
+                return Tx.p2pkhUnlock(signature: signature, publicKey: key.publicKey) + [0x51] // OP_1
+            }
+        )
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: "ordlock cancel \(parsed.txid.prefix(8))",
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
+        ))
+        return SendResponse(txid: broadcast.txid, fee: built.fee)
+    }
+
+    /// Seller: pre-sign a v4 swap offer on one of our 1-sat carriers. Off-chain
+    /// (nothing broadcast, nothing tracked); proceeds always pay our own
+    /// wallet, and the prefix input is a plain 1-sat UTXO so the inscribed sat
+    /// stays on output 0 after completion.
+    public func signSwapOffer(
+        origin: String,
+        txid: String,
+        vout: Int,
+        priceSats: Int,
+        kind: String? = nil
+    ) async throws -> Ordlock.SwapOffer {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let requestedKind = kind ?? "ordinal"
+        guard requestedKind == "ordinal" else {
+            throw WalletError(code: "BAD_PARAM", message: "only ordinal swaps are available on the phone yet (bsv21 is not ported)")
+        }
+        guard priceSats >= 1 else {
+            throw WalletError(code: "BAD_PARAM", message: "priceSats must be a positive sat number")
+        }
+        let (value, carrierScript) = try await outputData(txid: txid, vout: vout)
+        try requireOurs(
+            carrierScript, key: key, code: "NOT_OURS",
+            message: "swap carrier is not ours (P2PKH prefix mismatch)"
+        )
+        guard value == 1 else {
+            throw WalletError(code: "BAD_PARAM", message: "swap carrier must be exactly 1 sat (found \(value))")
+        }
+        try await requireInscribed(
+            carrierScript, txid: txid, vout: vout,
+            refusal: "carrier is not inscribed — refusing to list plain dust"
+        )
+        let gate = try await policy.check(origin: origin, amountSats: 0, action: "app-swap-offer")
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+
+        let dust = try await plainDustExcept(txid: txid, vout: vout, key: key)
+        let template = try Ordlock.swapOfferTemplate(
+            dustTxid: dust.txid, dustVout: dust.vout, dustScriptHex: dust.scriptHex,
+            carrierTxid: txid, carrierVout: vout, carrierScriptHex: carrierScript,
+            payAddress: key.address, priceSats: priceSats
+        )
+        let built = Tx.Built(
+            inputs: template.inputs, outputs: template.outputs,
+            fee: 0, changeSats: 0, changeVout: -1
+        )
+        let unlocks = try Tx.unlockingScripts(
+            built: built, privateKey: key.privateKey, publicKey: key.publicKey,
+            scopeFor: { $0 == 0 ? Ordlock.scopeNoneAnyoneCanPay : Ordlock.scopeSingleAnyoneCanPay }
+        )
+        return Ordlock.SwapOffer(
+            version: Ordlock.swapVersionOrdinal,
+            kind: "ordinal",
+            payScriptHex: template.payScriptHex,
+            priceSats: priceSats,
+            lockTime: 0,
+            inputs: [
+                Ordlock.SwapOfferInput(
+                    txid: dust.txid, vout: dust.vout, scriptHex: dust.scriptHex,
+                    sequence: Ordlock.swapSequence, unlockHex: Hex.encode(unlocks[0])
+                ),
+                Ordlock.SwapOfferInput(
+                    txid: txid, vout: vout, scriptHex: carrierScript,
+                    sequence: Ordlock.swapSequence, unlockHex: Hex.encode(unlocks[1])
+                ),
+            ]
+        )
+    }
+
+    /// Buyer: complete a seller's offer — payment to the seller plus the NFT
+    /// sat to us in one tx, funded and signed by us, with the seller's unlocks
+    /// attached verbatim. Every constrained byte is re-derived and checked
+    /// against the chain before a single input is signed.
+    public func completeSwap(
+        origin: String,
+        offer: Ordlock.SwapOffer,
+        fee: AppPayment? = nil,
+        memo: [String]? = nil,
+        label: String? = nil,
+        description: String? = nil,
+        expectedSeller: String? = nil,
+        maxPrice: Int? = nil
+    ) async throws -> SendResponse {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let price = offer.priceSats
+        guard price >= 1 else {
+            throw WalletError(code: "BAD_OFFER", message: "offer priceSats must be a positive sat number")
+        }
+        guard offer.kind == "ordinal" else {
+            throw WalletError(code: "BAD_OFFER", message: "only ordinal swaps can be completed on the phone yet (bsv21 is not ported)")
+        }
+        if offer.version == 2 {
+            throw WalletError(
+                code: "BAD_OFFER",
+                message: "v2 offers are not indexer-safe (the inscribed sat lands on the payment output) — re-list to upgrade"
+            )
+        }
+        guard offer.version == Ordlock.swapVersionOrdinal, offer.lockTime == 0 else {
+            throw WalletError(code: "BAD_OFFER", message: "offer version/locktime mismatch")
+        }
+        guard Ordlock.isP2PKHScript(offer.payScriptHex) else {
+            throw WalletError(code: "BAD_OFFER", message: "offer payment must be a plain P2PKH script")
+        }
+        if let expectedSeller {
+            let want: String
+            do {
+                want = Hex.encode(try Address.lockingScript(for: expectedSeller))
+            } catch {
+                throw WalletError(code: "BAD_PARAM", message: "buyerChecks.expectedSeller must be a valid P2PKH address")
+            }
+            guard offer.payScriptHex.lowercased() == want.lowercased() else {
+                throw WalletError(code: "BAD_OFFER", message: "offer payment does not pay the expected seller")
+            }
+        }
+        if let maxPrice {
+            guard maxPrice >= 0 else {
+                throw WalletError(code: "BAD_PARAM", message: "buyerChecks.maxPrice must be a non-negative sat number")
+            }
+            guard price <= maxPrice else {
+                throw WalletError(code: "BAD_OFFER", message: "offer price \(price) exceeds buyer max \(maxPrice)")
+            }
+        }
+        guard let offerInputs = offer.inputs, offerInputs.count == 2 else {
+            throw WalletError(code: "BAD_OFFER", message: "v4 offer must carry exactly two inputs (1-sat prefix + carrier)")
+        }
+
+        var spendInputs: [Tx.Input] = []
+        var preSigned: [[UInt8]] = []
+        for item in offerInputs {
+            let parsed = try parseOutpoint("\(item.txid)_\(item.vout)")
+            guard item.sequence == Ordlock.swapSequence else {
+                throw WalletError(code: "BAD_OFFER", message: "offer sequence mismatch")
+            }
+            guard item.scriptHex.count % 2 == 0, item.scriptHex.allSatisfy({ $0.isHexDigit }) else {
+                throw WalletError(code: "BAD_OFFER", message: "offer scripts must be hex")
+            }
+            guard let unlockHex = item.unlockHex, !unlockHex.isEmpty,
+                  unlockHex.count % 2 == 0, unlockHex.allSatisfy({ $0.isHexDigit }) else {
+                throw WalletError(code: "BAD_OFFER", message: "offer scripts must be hex")
+            }
+            let (value, chainScript) = try await outputData(txid: parsed.txid, vout: parsed.vout)
+            guard chainScript.lowercased() == item.scriptHex.lowercased() else {
+                throw WalletError(code: "BAD_OFFER", message: "offer script disagrees with chain")
+            }
+            guard value == 1 else {
+                throw WalletError(code: "BAD_OFFER", message: "offer inputs must be exactly 1 sat")
+            }
+            spendInputs.append(Tx.Input(
+                txid: parsed.txid, vout: UInt32(parsed.vout), value: 1, scriptHex: chainScript
+            ))
+            preSigned.append(try Hex.decode(unlockHex))
+        }
+
+        var feeSats = 0
+        if let fee {
+            guard fee.sats > 0 else { throw WalletError(code: "BAD_PARAM", message: "fee.sats must be positive") }
+            do {
+                _ = try Address.lockingScript(for: fee.to)
+            } catch {
+                throw WalletError(code: "BAD_PARAM", message: "fee.to must be a valid P2PKH address")
+            }
+            feeSats = fee.sats
+        }
+        let funding = try await plainFunding()
+        var payments = [
+            Tx.Payment(address: key.address, sats: 1),           // NFT output first: FIFO assigns the inscribed sat here
+            Tx.Payment(scriptHex: offer.payScriptHex, sats: price), // byte-exact payment
+        ]
+        if let fee { payments.append(Tx.Payment(address: fee.to, sats: fee.sats)) }
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: spendInputs + funding,
+                payments: payments,
+                changeScriptHex: key.scriptHex,
+                opReturn: memo?.isEmpty == false ? memo : nil,
+                keepOrder: true
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough plain sats to fund the swap and its fee")
+        }
+        let amount = price + feeSats + built.fee
+        let gate = try await policy.check(
+            origin: origin, amountSats: amount, action: "app-swap",
+            context: SpendContext(
+                origin: origin, action: "app-swap", amountSats: amount,
+                label: label, to: "\(offerInputs[1].txid.prefix(8)) listing",
+                description: description
+            )
+        )
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+        let signed = try Tx.sign(
+            built: built, privateKey: key.privateKey, publicKey: key.publicKey,
+            scopeFor: nil,
+            customUnlock: { index, _ in index < 2 ? preSigned[index] : nil }
+        )
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: label ?? "swap buy \(price) sats from \(offerInputs[1].txid.prefix(8))",
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now(),
+            spentOutpoints: spentOutpoints(of: built)
+        ))
+        return SendResponse(txid: broadcast.txid, fee: built.fee)
+    }
+
     /// The single signing path both `send` and `appSpend` use.
     private func spend(payments: [Tx.Payment], label: String) async throws -> SendResponse {
         let key = try keyMaterial()
@@ -459,6 +926,122 @@ public actor LocalWalletBackend: WalletBackend {
     }
 
     // MARK: - internals
+    // MARK: - ordlock internals
+
+    /// An outpoint's chain script and value, from the parent transaction.
+    private func outputData(txid: String, vout: Int) async throws -> (value: Int, scriptHex: String) {
+        guard txid.count == 64, txid.allSatisfy({ $0.isHexDigit }) else {
+            throw WalletError(code: "BAD_PARAM", message: "txid must be 64-hex")
+        }
+        guard let parent = try? await chain.tx(txid: txid),
+              vout >= 0, vout < parent.vout.count,
+              let scriptHex = parent.vout[vout].scriptHex,
+              let value = parent.vout[vout].value else {
+            throw WalletError(code: "RAILS", message: "output is not visible on chain yet")
+        }
+        return (value, scriptHex)
+    }
+
+    /// `<64-hex-txid>.<vout>` or with an underscore, as the daemon accepts.
+    private func parseOutpoint(_ raw: String) throws -> (txid: String, vout: Int) {
+        guard let separator = raw.firstIndex(where: { $0 == "." || $0 == "_" }) else {
+            throw WalletError(code: "BAD_PARAM", message: "lockOutpoint must be <64-hex-txid>.<vout>")
+        }
+        let txid = String(raw[raw.startIndex..<separator])
+        let voutText = String(raw[raw.index(after: separator)...])
+        guard txid.count == 64, txid.allSatisfy({ $0.isHexDigit }),
+              !voutText.isEmpty, let vout = Int(voutText), vout >= 0 else {
+            throw WalletError(code: "BAD_PARAM", message: "lockOutpoint must be <64-hex-txid>.<vout>")
+        }
+        return (txid, vout)
+    }
+
+    /// Funding selection, the daemon's `plainFunding`: largest first, up to 12
+    /// candidates and 6 spent, never an inscription carrier and never an
+    /// outpoint already in flight.
+    private func plainFunding(maximum: Int = 6) async throws -> [Tx.Input] {
+        let key = try keyMaterial()
+        let indexed = try await chain.utxos(address: key.address)
+        let unavailable = await unavailableOutpoints()
+        let candidates = indexed.utxos
+            .filter { $0.value > 1 && !unavailable.contains("\($0.txid):\($0.vout)") }
+            .sorted { $0.value > $1.value }
+            .prefix(12)
+        var funding: [Tx.Input] = []
+        for candidate in candidates where funding.count < maximum {
+            guard let parent = try? await chain.tx(txid: candidate.txid),
+                  candidate.vout >= 0, candidate.vout < parent.vout.count,
+                  let scriptHex = parent.vout[candidate.vout].scriptHex,
+                  !Inscription.hasOrdEnvelope(scriptHex) else { continue }
+            funding.append(Tx.Input(
+                txid: candidate.txid, vout: UInt32(candidate.vout),
+                value: candidate.value, scriptHex: scriptHex
+            ))
+        }
+        return funding
+    }
+
+    /// A plain 1-sat prefix for a v4 offer, the daemon's `findPlainDust`:
+    /// unspent, not the carrier, ORDFS-clean, and still ours on chain.
+    private func plainDustExcept(
+        txid: String, vout: Int, key: KeyMaterial
+    ) async throws -> (txid: String, vout: Int, scriptHex: String) {
+        let indexed = try await chain.utxos(address: key.address)
+        let unavailable = await unavailableOutpoints()
+        let carrierKey = "\(txid):\(vout)"
+        let candidates = indexed.utxos
+            .filter {
+                $0.value == 1
+                    && "\($0.txid):\($0.vout)" != carrierKey
+                    && !unavailable.contains("\($0.txid):\($0.vout)")
+            }
+            .prefix(10)
+        for candidate in candidates {
+            let known: Bool
+            do {
+                known = try await inscriptions.isInscribed(txid: candidate.txid, vout: candidate.vout)
+            } catch {
+                throw WalletError(code: "RAILS", message: "inscription lookup unreachable — cannot pick a safe prefix input")
+            }
+            if known { continue }
+            guard let parent = try? await chain.tx(txid: candidate.txid),
+                  candidate.vout >= 0, candidate.vout < parent.vout.count,
+                  let scriptHex = parent.vout[candidate.vout].scriptHex,
+                  parent.vout[candidate.vout].value == 1,
+                  scriptHex.lowercased().hasPrefix(key.scriptHex.lowercased()) else { continue }
+            return (candidate.txid, candidate.vout, scriptHex)
+        }
+        throw WalletError(
+            code: "BAD_PARAM",
+            message: "need a plain 1-sat UTXO as the offer prefix (swap change provides one)"
+        )
+    }
+
+    /// The daemon's ownership test for a carrier: the P2PKH prefix.
+    private func requireOurs(_ scriptHex: String, key: KeyMaterial, code: String, message: String) throws {
+        guard scriptHex.lowercased().hasPrefix(key.scriptHex.lowercased()) else {
+            throw WalletError(code: code, message: message)
+        }
+    }
+
+    /// Envelope in the script, or ORDFS says the outpoint carries an
+    /// inscription — the two-layer check the daemon applies before locking or
+    /// listing a carrier.
+    private func requireInscribed(
+        _ scriptHex: String, txid: String, vout: Int, refusal: String
+    ) async throws {
+        if Inscription.hasOrdEnvelope(scriptHex) { return }
+        let known: Bool
+        do {
+            known = try await inscriptions.isInscribed(txid: txid, vout: vout)
+        } catch {
+            throw WalletError(code: "RAILS", message: "inscription lookup unreachable — cannot verify the carrier")
+        }
+        guard known else {
+            throw WalletError(code: "BAD_PARAM", message: refusal)
+        }
+    }
+
 
     private struct KeyMaterial {
         var privateKey: [UInt8]

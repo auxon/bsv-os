@@ -13,9 +13,12 @@ import Foundation
 /// - **Reads and `spend` are real.** They are the ones a phone wallet can be
 ///   truthful about: chain reads and a policy-gated payment from the same
 ///   signer the Send screen uses.
-/// - **The ordinal and swap intents answer UNAVAILABLE.** They need indexers,
-///   script tooling and marketplace state that only the daemon has. A clear
-///   refusal is the honest answer; a half-working transfer is not.
+/// - **The ordinal, OrdLock and ordinal-swap intents are real.** The covenant
+///   scripts, the purchase preimage and the v4 swaps are ported and pinned to
+///   the daemon byte for byte; carriers whose envelope is not in the script are
+///   verified through ORDFS, exactly as the daemon verifies them. The bsv21
+///   half of swaps is the one part that still answers by name: it needs the
+///   token envelope tooling the phone does not carry yet.
 /// - Reads require the wallet to be unlocked, which is stricter than the
 ///   daemon (its app reads answer while locked). Stricter is the right
 ///   direction to differ in.
@@ -124,6 +127,83 @@ public struct LocalAppBridgeBackend: AppBridgeBackend {
             )
             result = .object(["txid": .string(sent.txid), "fee": .int(sent.fee)])
 
+        case .ordlockLock:
+            guard let txid = params["txid"]?.stringValue, !txid.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "txid required")
+            }
+            let locked = try await wallet.ordlockLock(
+                origin: domain,
+                txid: txid,
+                vout: params["vout"]?.intValue ?? 0,
+                priceSats: params["priceSats"]?.intValue ?? 0
+            )
+            result = .object([
+                "txid": .string(locked.txid),
+                "lockOutpoint": .string(locked.lockOutpoint),
+                "fee": .int(locked.fee),
+            ])
+
+        case .ordlockBuy:
+            guard let lockOutpoint = params["lockOutpoint"]?.stringValue, !lockOutpoint.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "lockOutpoint required")
+            }
+            let bought = try await wallet.ordlockBuy(
+                origin: domain,
+                lockOutpoint: lockOutpoint,
+                fee: try feePayment(from: params["fee"]),
+                // The daemon's app path tags the spend itself; mirror it so the
+                // ledger and policy reasons read the same on both hosts.
+                memo: ["MARKET-BUY", lockOutpoint],
+                label: "market buy \(lockOutpoint)"
+            )
+            result = .object([
+                "txid": .string(bought.txid),
+                "fee": .int(bought.fee),
+                "priceSats": .int(bought.priceSats),
+            ])
+
+        case .ordlockCancel:
+            guard let lockOutpoint = params["lockOutpoint"]?.stringValue, !lockOutpoint.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "lockOutpoint required")
+            }
+            let cancelled = try await wallet.ordlockCancel(origin: domain, lockOutpoint: lockOutpoint)
+            result = .object(["txid": .string(cancelled.txid), "fee": .int(cancelled.fee)])
+
+        case .signSwapOffer:
+            guard let txid = params["txid"]?.stringValue, !txid.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "txid required")
+            }
+            let offer = try await wallet.signSwapOffer(
+                origin: domain,
+                txid: txid,
+                vout: params["vout"]?.intValue ?? 0,
+                priceSats: params["priceSats"]?.intValue ?? 0,
+                kind: params["kind"]?.stringValue
+            )
+            result = try asJSONValue(offer)
+
+        case .completeSwap:
+            guard case .object? = params["offer"] else {
+                throw WalletError(code: "BAD_PARAM", message: "offer required")
+            }
+            let offer = try swapOffer(from: params["offer"])
+            var expectedSeller: String? = nil
+            var maxPrice: Int? = nil
+            if case .object(let checks)? = params["buyerChecks"] {
+                expectedSeller = checks["expectedSeller"]?.stringValue
+                maxPrice = checks["maxPrice"]?.intValue
+            }
+            let completed = try await wallet.completeSwap(
+                origin: domain,
+                offer: offer,
+                fee: try feePayment(from: params["fee"]),
+                memo: strings(from: params["memo"]),
+                label: params["label"]?.stringValue,
+                expectedSeller: expectedSeller,
+                maxPrice: maxPrice
+            )
+            result = .object(["txid": .string(completed.txid), "fee": .int(completed.fee)])
+
         default:
             throw WalletError(
                 code: "UNAVAILABLE",
@@ -154,6 +234,26 @@ public struct LocalAppBridgeBackend: AppBridgeBackend {
     private func strings(from value: JSONValue?) -> [String]? {
         guard case .array(let items)? = value else { return nil }
         return items.compactMap(\.stringValue)
+    }
+
+    private func feePayment(from value: JSONValue?) throws -> LocalWalletBackend.AppPayment? {
+        guard case .object(let object)? = value else { return nil }
+        guard let to = object["to"]?.stringValue, let sats = object["sats"]?.intValue else { return nil }
+        return LocalWalletBackend.AppPayment(to: to, sats: sats)
+    }
+
+    private func swapOffer(from value: JSONValue?) throws -> Ordlock.SwapOffer {
+        let data = try JSONEncoder().encode(value)
+        do {
+            return try JSONDecoder().decode(Ordlock.SwapOffer.self, from: data)
+        } catch {
+            throw WalletError(code: "BAD_OFFER", message: "offer is not a valid swap offer")
+        }
+    }
+
+    private func asJSONValue<T: Encodable>(_ value: T) throws -> JSONValue {
+        let data = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode(JSONValue.self, from: data)
     }
 
     private func encode(_ value: JSONValue) throws -> String {

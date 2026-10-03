@@ -178,19 +178,34 @@ final class AppBridgeLocalTests: XCTestCase {
         }
     }
 
-    // MARK: - the honest refusals
+    // MARK: - what is and is not wired
 
-    func testUnsupportedIntentsFailClosed() async throws {
+    func testTimestampIsTheRemainingHonestRefusal() async throws {
         let harness = makeHarness()
         try await harness.wallet.unlock()
 
+        do {
+            _ = try await harness.backend.invoke(app: "app.example", intent: .timestamp, params: [:])
+            XCTFail("timestamp should be unavailable on the phone")
+        } catch let error as WalletError {
+            XCTAssertEqual(error.code, "UNAVAILABLE", "timestamp")
+            XCTAssertTrue(error.message.contains("timestamp"))
+        }
+    }
+
+    func testTheOrdinalAndSwapIntentsAreWiredToTheBackend() async throws {
+        let harness = makeHarness()
+        try await harness.wallet.unlock()
+
+        // Paramless calls reach an implementation and fail on the parameters —
+        // not on availability. The operations themselves are pinned to the
+        // daemon's own transactions in OrdlockBackendTests.
         for intent in [AppIntent.signSwapOffer, .completeSwap, .ordlockLock, .ordlockBuy, .ordlockCancel] {
             do {
                 _ = try await harness.backend.invoke(app: "app.example", intent: intent, params: [:])
-                XCTFail("\(intent.rawValue) should be unavailable on the phone")
+                XCTFail("\(intent.rawValue) must refuse missing parameters")
             } catch let error as WalletError {
-                XCTAssertEqual(error.code, "UNAVAILABLE", intent.rawValue)
-                XCTAssertTrue(error.message.contains(intent.rawValue))
+                XCTAssertEqual(error.code, "BAD_PARAM", intent.rawValue)
             }
         }
     }
