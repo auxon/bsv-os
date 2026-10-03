@@ -13,9 +13,11 @@ import CryptoKit
 ///   an output. A port that missed this would strand a few sats per spend.
 /// - **Order**: inputs sorted by value descending, unless the caller pins an
 ///   ordered prefix (ordinal transfers depend on FIFO sat flow).
-/// - **Sighash**: BSV's **OTDA** — the original digest algorithm, *not* BIP143,
-///   with the FORKID flag set (scope `0x41`). The daemon's SDK calls it
-///   `formatOTDA`; BIP143 exists in that file and is not what it uses.
+/// - **Sighash**: **BIP143**, which is what the daemon's SDK computes whenever
+///   SIGHASH_FORKID is set (see `sighashPreimage`; the earlier OTDA reading of
+///   that file was wrong and the vectors caught it). The default scope is
+///   `0x41` — ALL | FORKID — and the ordlock/swap flows add ANYONECANPAY,
+///   SINGLE and NONE, whose rules are documented with the preimage.
 public enum Tx {
     public static let version: UInt32 = 2
     public static let feeSatsPerKb: Int = 1000
@@ -301,6 +303,23 @@ public enum Tx {
     }
 
     /// The BIP143 preimage, before hashing.
+    ///
+    /// **Scope flags.** The low five bits are what the signature commits to —
+    /// ALL (`1`), NONE (`2`), SINGLE (`3`) — `0x40` is FORKID and `0x80` is
+    /// ANYONECANPAY. OrdLock and the atomic swaps need more than the default
+    /// `0x41`: the OrdLock purchase preimage is ALL|ANYONECANPAY (`0xc1`), the
+    /// v4 swap carrier is SINGLE|ANYONECANPAY (`0xc3`) and its 1-sat prefix is
+    /// NONE|ANYONECANPAY (`0xc2`). The denser flags change the preimage exactly
+    /// as the daemon's SDK (`TransactionSignature.formatBip143`) does:
+    ///
+    /// - ANYONECANPAY replaces hashPrevouts and hashSequence with 32 zero bytes;
+    /// - NONE replaces hashSequence and hashOutputs with 32 zero bytes;
+    /// - SINGLE replaces hashSequence with zeros and hashes only
+    ///   `outputs[inputIndex]` (zeros when that output does not exist).
+    ///
+    /// A port that ignored the flags would sign over a full-transaction digest
+    /// with a flag byte that says otherwise: a signature that never validates,
+    /// which is the safe way to be wrong.
     public static func sighashPreimage(
         inputs: [Input],
         outputs: [Output],
@@ -311,26 +330,46 @@ public enum Tx {
     ) throws -> [UInt8] {
         guard inputIndex >= 0, inputIndex < inputs.count else { throw Error.badRequiredInputs }
 
-        var prevouts = [UInt8]()
-        var sequences = [UInt8]()
-        for input in inputs {
-            prevouts.append(contentsOf: try Hex.decode(input.txid).reversed())
-            prevouts.append(contentsOf: littleEndian32(input.vout))
-            sequences.append(contentsOf: littleEndian32(input.sequence))
-        }
-        let outputsBytes = try serializeOutputsForHash(outputs)
-        let current = inputs[inputIndex]
+        let base = scope & 0x1f
+        let anyoneCanPay = scope & 0x80 != 0
+        let zeroHash = [UInt8](repeating: 0, count: 32)
 
+        var hashPrevouts = zeroHash
+        var hashSequences = zeroHash
+        if !anyoneCanPay {
+            var prevouts = [UInt8]()
+            var sequences = [UInt8]()
+            for input in inputs {
+                prevouts.append(contentsOf: try Hex.decode(input.txid).reversed())
+                prevouts.append(contentsOf: littleEndian32(input.vout))
+                sequences.append(contentsOf: littleEndian32(input.sequence))
+            }
+            hashPrevouts = doubleSHA256(prevouts)
+            if base != 2 && base != 3 {
+                hashSequences = doubleSHA256(sequences)
+            }
+        }
+
+        var hashOutputs = zeroHash
+        if base == 3 {
+            if inputIndex < outputs.count {
+                hashOutputs = doubleSHA256(try serializeOutputsForHash([outputs[inputIndex]]))
+            }
+        } else if base != 2 {
+            hashOutputs = doubleSHA256(try serializeOutputsForHash(outputs))
+        }
+
+        let current = inputs[inputIndex]
         var preimage = littleEndian32(version)
-        preimage.append(contentsOf: doubleSHA256(prevouts))
-        preimage.append(contentsOf: doubleSHA256(sequences))
+        preimage.append(contentsOf: hashPrevouts)
+        preimage.append(contentsOf: hashSequences)
         preimage.append(contentsOf: try Hex.decode(current.txid).reversed())
         preimage.append(contentsOf: littleEndian32(current.vout))
         preimage.append(contentsOf: varInt(UInt64(scriptCode.count)))
         preimage.append(contentsOf: scriptCode)
         preimage.append(contentsOf: littleEndian64(UInt64(max(0, current.value))))
         preimage.append(contentsOf: littleEndian32(current.sequence))
-        preimage.append(contentsOf: doubleSHA256(outputsBytes))
+        preimage.append(contentsOf: hashOutputs)
         preimage.append(contentsOf: littleEndian32(lockTime))
         preimage.append(contentsOf: littleEndian32(scope))
         return preimage
@@ -357,14 +396,57 @@ public enum Tx {
     /// One key because that is what the daemon's wallet is: every UTXO belongs
     /// to `m/0/0`. A future multi-key wallet signs per input.
     public static func sign(built: Built, privateKey: [UInt8], publicKey: [UInt8]) throws -> [UInt8] {
-        var signedInputs: [[UInt8]] = []
+        try sign(built: built, privateKey: privateKey, publicKey: publicKey, scopeFor: nil, customUnlock: nil)
+    }
+
+    /// The same, with per-input scopes and inputs that are not plain P2PKH.
+    ///
+    /// `scopeFor` selects the sighash flags per input (default `0x41`).
+    /// `customUnlock`, when it returns a script, takes over that input
+    /// entirely: a pre-signed swap input is attached verbatim, an OrdLock
+    /// purchase input carries the covenant preimage instead of a signature,
+    /// and a cancel input is a plain signature followed by `OP_1`. Returning
+    /// nil falls back to the standard P2PKH script with the input's scope.
+    public static func sign(
+        built: Built,
+        privateKey: [UInt8],
+        publicKey: [UInt8],
+        scopeFor: ((Int) -> UInt32)?,
+        customUnlock: ((Int, Built) throws -> [UInt8]?)?
+    ) throws -> [UInt8] {
+        try serialize(
+            inputs: built.inputs,
+            unlockingScripts: try unlockingScripts(
+                built: built, privateKey: privateKey, publicKey: publicKey,
+                scopeFor: scopeFor, customUnlock: customUnlock
+            ),
+            outputs: built.outputs
+        )
+    }
+
+    /// The unlocking scripts alone, in input order — what a swap offer hands
+    /// the buyer before there is a transaction to serialize.
+    public static func unlockingScripts(
+        built: Built,
+        privateKey: [UInt8],
+        publicKey: [UInt8],
+        scopeFor: ((Int) -> UInt32)? = nil,
+        customUnlock: ((Int, Built) throws -> [UInt8]?)? = nil
+    ) throws -> [[UInt8]] {
+        var unlockingScripts: [[UInt8]] = []
         for (index, input) in built.inputs.enumerated() {
+            if let custom = try customUnlock?(index, built) {
+                unlockingScripts.append(custom)
+                continue
+            }
+            let scope = scopeFor?(index) ?? 0x41
             let scriptCode = try Hex.decode(input.scriptHex)
-            let digest = try sighash(inputs: built.inputs, outputs: built.outputs, inputIndex: index, scriptCode: scriptCode)
+            let digest = try sighash(inputs: built.inputs, outputs: built.outputs, inputIndex: index,
+                                     scriptCode: scriptCode, scope: scope)
             let signature = try Secp256k1.sign(derForDigest: digest, withPrivateKey: privateKey)
-            signedInputs.append(p2pkhUnlock(signature: signature, publicKey: publicKey))
+            unlockingScripts.append(p2pkhUnlock(signature: signature, publicKey: publicKey, scope: scope))
         }
-        return try serialize(inputs: built.inputs, unlockingScripts: signedInputs, outputs: built.outputs)
+        return unlockingScripts
     }
 
     /// The signed serialization.
