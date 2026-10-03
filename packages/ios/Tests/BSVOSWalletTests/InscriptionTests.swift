@@ -77,6 +77,29 @@ final class InscriptionTests: XCTestCase {
         XCTAssertThrowsError(try Inscription.script(ownerAddress: owner, contentType: "application/octet-stream", dataHex: overLimit))
     }
 
+    func testEnvelopeMetadataReadsWhatTheBuilderWrote() throws {
+        let owner = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
+        // Direct push, and a data push large enough for OP_PUSHDATA1, so both
+        // readers are exercised: the content type and the byte length.
+        for dataHex in ["68656c6c6f", String(repeating: "ab", count: 100)] {
+            let script = try Inscription.script(ownerAddress: owner, contentType: "text/plain", dataHex: dataHex)
+            let meta = try XCTUnwrap(Inscription.envelopeMetadata(script))
+            XCTAssertEqual(meta.contentType, "text/plain")
+            XCTAssertEqual(meta.contentLength, dataHex.count / 2)
+        }
+        let plain = Hex.encode(try Address.lockingScript(for: owner))
+        XCTAssertNil(Inscription.envelopeMetadata(plain))
+        XCTAssertFalse(Inscription.hasOrdEnvelope(plain))
+    }
+
+    func testTheVectorsCarryTheirMetadata() throws {
+        for vector in try loadVectors().vectors {
+            let meta = try XCTUnwrap(Inscription.envelopeMetadata(vector.scriptHex), vector.name)
+            XCTAssertEqual(meta.contentType, vector.contentType, vector.name)
+            XCTAssertEqual(meta.contentLength, vector.dataHex.count / 2, vector.name)
+        }
+    }
+
     func testItRefusesWhatTheDaemonRefuses() throws {
         let owner = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
         XCTAssertThrowsError(try Inscription.script(ownerAddress: owner, contentType: "", dataHex: "00"))

@@ -870,6 +870,26 @@ public actor LocalWalletBackend: WalletBackend {
         return PolicyApproveResponse(origin: origin, mode: PolicyMode.deny.rawValue)
     }
 
+    /// Approve with the `auto` mode the daemon's handler accepts. Kept beside
+    /// the protocol's two-argument form (which stays allow) so the bundled
+    /// shell's `policyApprove` can pass `auto: true` without changing the
+    /// device contract.
+    public func policyApprove(origin: String, capSats: Int, auto: Bool) async throws -> PolicyApproveResponse {
+        try await policy.setPolicy(origin: origin, mode: auto ? .auto : .allow, capSats: capSats)
+        return PolicyApproveResponse(origin: origin, mode: (auto ? PolicyMode.auto : .allow).rawValue)
+    }
+
+    /// The ORDFS answer for one outpoint, or nil when the indexer is unsure or
+    /// unreachable. Gallery reads tolerate both; the lock/list paths use
+    /// `requireInscribed`, which fails closed instead.
+    public func inscriptionMetadata(txid: String, vout: Int) async -> InscriptionMeta? {
+        do {
+            return try await inscriptions.metadata(txid: txid, vout: vout)
+        } catch {
+            return nil
+        }
+    }
+
     public func history() async throws -> HistoryResponse {
         let rows = try await ledger.all().sorted { $0.createdAt > $1.createdAt }
         let policies = try await policy.listPolicies()

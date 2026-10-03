@@ -55,6 +55,20 @@ public final class BundledAppHost: NSObject, ObservableObject {
         super.init()
     }
 
+    /// The standalone shape: no daemon, no credential. The assets come from
+    /// the bundle and the RPC from the phone's own wallet. A local host has no
+    /// token, so it cannot be built with one by accident.
+    public convenience init(app: String, title: String, assetRoot: URL, rpc: any RpcCalling) {
+        self.init(
+            app: app,
+            title: title,
+            baseURL: URL(string: "local://bundle")!,
+            credential: DeviceCredential(deviceID: "local", token: ""),
+            rpc: rpc,
+            assetRoot: assetRoot
+        )
+    }
+
     /// The URL the web view loads: `https://host:port/<app>/`.
     public var startURL: URL? {
         URL(string: "/\(app)/", relativeTo: baseURL)?.absoluteURL

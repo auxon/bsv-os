@@ -59,6 +59,31 @@ public enum Inscription {
     /// not validate inscriptions, which is why a mutated tag reads as "not a
     /// carrier" rather than as a broken inscription.
     public static func hasOrdEnvelope(_ scriptHex: String) -> Bool {
+        envelopeShape(scriptHex)
+    }
+
+    /// What the envelope says, without an indexer: the content type and the
+    /// byte length of the data push. Nil when there is no readable envelope.
+    ///
+    /// This is what a gallery shows for an inscription that is still in its
+    /// origin script; the indexer (ORDFS) is the fallback for carriers whose
+    /// envelope has moved on.
+    public static func envelopeMetadata(_ scriptHex: String) -> (contentType: String, contentLength: Int)? {
+        guard let bytes = try? Hex.decode(scriptHex) else { return nil }
+        guard let start = envelopeStart(bytes) else { return nil }
+        guard let tag = readPush(bytes, at: start), tag.data == Array("ord".utf8) else { return nil }
+        guard tag.next < bytes.count, bytes[tag.next] == 0x51 else { return nil }
+        guard let contentType = readPush(bytes, at: tag.next + 1) else { return nil }
+        guard contentType.next < bytes.count, bytes[contentType.next] == 0x00 else { return nil }
+        guard let data = readPush(bytes, at: contentType.next + 1) else { return nil }
+        guard let text = String(bytes: contentType.data, encoding: .utf8) else { return nil }
+        return (text, data.data.count)
+    }
+
+    /// The looser shape check: `OP_0 OP_IF push("ord") OP_1`. Kept separate so
+    /// `hasOrdEnvelope` still recognises an inscribed carrier whose content
+    /// type or data push is malformed — the funding selector must not spend it.
+    private static func envelopeShape(_ scriptHex: String) -> Bool {
         guard let bytes = try? Hex.decode(scriptHex) else { return false }
         guard let start = envelopeStart(bytes) else { return false }
         guard let tag = readPush(bytes, at: start) else { return false }

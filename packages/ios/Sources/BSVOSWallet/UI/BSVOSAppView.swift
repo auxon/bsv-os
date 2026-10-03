@@ -147,10 +147,8 @@ public struct BSVOSAppView: View {
                 BundledAppHost(
                     app: name,
                     title: name.capitalized,
-                    baseURL: baseURL,
-                    credential: DeviceCredential(deviceID: "local", token: ""),
-                    rpc: LocalRpcBridge(origin: name, wallet: backend, chain: chain),
-                    assetRoot: assets.root
+                    assetRoot: assets.root,
+                    rpc: LocalRpcBridge(origin: name, wallet: backend, chain: chain)
                 )
             }
         }
