@@ -12,3 +12,7 @@ xcuserdata/
 *.pkg.tar.*
 packages/arch/bsv-os-meta/pkg/
 packages/arch/bsv-os-meta/src/
+
+# Synced into the iOS package by scripts/sync-apps.mjs; generated, not tracked.
+packages/ios/Sources/BSVOSWallet/Resources/apps/*
+!packages/ios/Sources/BSVOSWallet/Resources/apps/.gitkeep
