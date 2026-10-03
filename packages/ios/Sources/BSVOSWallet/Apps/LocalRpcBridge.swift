@@ -161,7 +161,7 @@ public struct LocalRpcBridge: RpcCalling {
             return try encode(try await wallet.policyDeny(origin: origin))
 
         case "ordList":
-            return try await ordinalsValue()
+            return try await ordinalsValue(address: params["address"]?.stringValue)
 
         case "bsv21List":
             let positions = try await wallet.tokenPositions(address: params["address"]?.stringValue)
@@ -262,10 +262,12 @@ public struct LocalRpcBridge: RpcCalling {
     /// 1-sat carriers whose script carries an envelope, plus those whose
     /// envelope has moved on and only ORDFS can identify. The phone has no
     /// gallery index, so this is a chain scan with the same two-layer rule
-    /// the lock paths use.
-    private func ordinalsValue() async throws -> JSONValue {
-        let balance = try await wallet.balance()
-        let addressUtxos = try await chain.utxos(address: balance.address)
+    /// the lock paths use. A named address is honored rather than silently
+    /// swapped for the wallet's own (the daemon lists any address).
+    private func ordinalsValue(address: String?) async throws -> JSONValue {
+        let own = try await wallet.balance() // requires the session unlocked, like every app read
+        let target = (address?.isEmpty == false ? address : nil) ?? own.address
+        let addressUtxos = try await chain.utxos(address: target)
         var ordinals: [JSONValue] = []
         for utxo in addressUtxos.utxos where utxo.value == 1 {
             guard let parent = try? await chain.tx(txid: utxo.txid),

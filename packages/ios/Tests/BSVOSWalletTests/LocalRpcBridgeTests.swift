@@ -11,9 +11,11 @@ final class LocalRpcBridgeTests: XCTestCase {
             ChainUtxo(txid: String(repeating: "aa", count: 32), vout: 0, value: 100_000, height: 1),
         ]
         var parents: [String: ChainTx] = [:]
+        private(set) var requestedAddresses: [String] = []
 
         func utxos(address: String) async throws -> AddressUtxos {
-            AddressUtxos(confirmed: utxoList.reduce(0) { $0 + $1.value }, unconfirmed: 0, utxos: utxoList)
+            requestedAddresses.append(address)
+            return AddressUtxos(confirmed: utxoList.reduce(0) { $0 + $1.value }, unconfirmed: 0, utxos: utxoList)
         }
         func broadcast(txHex: String) async throws -> BroadcastResult {
             lastBroadcastHex = txHex
@@ -235,6 +237,12 @@ final class LocalRpcBridgeTests: XCTestCase {
         XCTAssertEqual(second["contentLength"], .int(42))
         guard case .string(let url)? = first["contentUrl"] else { return XCTFail("contentUrl") }
         XCTAssertTrue(url.hasSuffix("/content/\(inscribed)_0"))
+
+        // A named address is the one the chain is asked for, not the wallet's.
+        let other = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
+        _ = await bridge.call(id: 2, method: "ordList", params: ["address": .string(other)])
+        let asked = await chain.requestedAddresses
+        XCTAssertTrue(asked.contains(other), "ordList honors the address it was given")
     }
 
     func testBsv21ListReturnsTheIndexersPositions() async throws {
