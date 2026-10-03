@@ -130,6 +130,19 @@ public enum CastRules {
 
     // MARK: - validators and allowlists
 
+    /// URLs that point at our own loopback origin are reduced to their path:
+    /// the asset server's port is ephemeral, so an absolute self-URL recorded
+    /// in one launch would be dead in the next. External URLs pass through.
+    public static func normalizeMediaUrl(_ url: String) -> String {
+        let lower = url.lowercased()
+        if lower.hasPrefix("http://127.0.0.1:") || lower.hasPrefix("http://localhost:") {
+            if let parsed = URL(string: url) {
+                return parsed.path.isEmpty ? "/" : parsed.path
+            }
+        }
+        return url
+    }
+
     /// The daemon's media-URL rule: an http(s) URL or a site path.
     public static func isSiteMediaUrl(_ url: String) -> Bool {
         let lower = url.lowercased()

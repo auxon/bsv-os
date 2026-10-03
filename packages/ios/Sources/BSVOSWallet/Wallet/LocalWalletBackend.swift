@@ -1137,7 +1137,8 @@ public actor LocalWalletBackend: WalletBackend {
         guard !parsedSplits.isEmpty else {
             throw WalletError(code: "BAD_PARAM", message: "splits required")
         }
-        let mediaUrl = String((media ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        let rawMedia = String((media ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        let mediaUrl = CastRules.normalizeMediaUrl(rawMedia)
         if !mediaUrl.isEmpty, !CastRules.isSiteMediaUrl(mediaUrl) {
             throw WalletError(code: "BAD_PARAM", message: "media must be an http(s) URL or site path")
         }
@@ -1276,7 +1277,9 @@ public actor LocalWalletBackend: WalletBackend {
         guard var row = try await cast.episode(id: episode) else {
             throw WalletError(code: "NOT_FOUND", message: "no episode \(String(episode.prefix(16)))")
         }
-        let url = String(mediaUrl.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        let url = CastRules.normalizeMediaUrl(
+            String(mediaUrl.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        )
         if !url.isEmpty, !CastRules.isSiteMediaUrl(url) {
             throw WalletError(code: "BAD_PARAM", message: "media must be an http(s) URL or site path")
         }

@@ -118,6 +118,15 @@ final class CastAppTests: XCTestCase {
         let updated = try await wallet.castSetMedia(episode: episode.id, mediaUrl: "/cast/media/x.webm")
         XCTAssertEqual(updated.mediaUrl, "/cast/media/x.webm")
 
+        // A live episode is pointed at our own origin; the port is ephemeral,
+        // so the stored form is the path that resolves against today's origin.
+        let live = try await wallet.castSetMedia(
+            episode: episode.id, mediaUrl: "http://127.0.0.1:49152/cast/live/abc123/index.m3u8"
+        )
+        XCTAssertEqual(live.mediaUrl, "/cast/live/abc123/index.m3u8")
+        let external = try await wallet.castSetMedia(episode: episode.id, mediaUrl: "https://cdn.example/x.mp4")
+        XCTAssertEqual(external.mediaUrl, "https://cdn.example/x.mp4")
+
         do {
             _ = try await wallet.castAdd(title: "", splits: "\(destination):100")
             XCTFail("title is required")
