@@ -17,11 +17,20 @@ public protocol AppRegistry: Sendable {
     func remove(domain: String) async throws
 }
 
-public enum AppRegistryError: Error, Equatable {
+public enum AppRegistryError: Error, Equatable, LocalizedError {
     case badDomain
     case badManifest(String)
     case fetchFailed(Int)
     case unsupportedVersion(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .badDomain: return "that does not look like an app domain"
+        case .badManifest(let why): return why
+        case .fetchFailed(let code): return "the manifest request failed (\(code))"
+        case .unsupportedVersion(let version): return "the registry file is from a newer app version (\(version))"
+        }
+    }
 }
 
 public protocol AppRegistryStore: Sendable {
@@ -318,5 +327,17 @@ public enum AppManifestValidator {
             intents.append(DeclaredIntent(action: action, label: label, description: description, typicalSats: typicalSats))
         }
         return intents
+    }
+}
+
+/// What the Apps screens need, whichever wallet this launch uses: a registry
+/// and a way to build a `window.bsv` bridge for one installed app.
+public struct AppsContext: Sendable {
+    public let registry: any AppRegistry
+    public let makeBridge: @Sendable (InstalledApp) -> AppBridge
+
+    public init(registry: any AppRegistry, makeBridge: @escaping @Sendable (InstalledApp) -> AppBridge) {
+        self.registry = registry
+        self.makeBridge = makeBridge
     }
 }

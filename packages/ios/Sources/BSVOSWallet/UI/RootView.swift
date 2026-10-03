@@ -12,10 +12,13 @@ public struct RootView: View {
     /// Shown on Approvals when push is not working, because an unseen approval
     /// is the failure mode that matters.
     private let pushNote: String?
+    /// The app list and bridge factory, when this launch can host apps at all.
+    private let apps: AppsContext?
 
-    public init(session: WalletSession, pushNote: String? = nil) {
+    public init(session: WalletSession, pushNote: String? = nil, apps: AppsContext? = nil) {
         _session = State(initialValue: session)
         self.pushNote = pushNote
+        self.apps = apps
     }
 
     public var body: some View {
@@ -45,6 +48,13 @@ public struct RootView: View {
                 PolicyView(session: session)
             }
             .tabItem { Label("Policy", systemImage: "slider.horizontal.3") }
+
+            if let apps {
+                NavigationStack {
+                    AppsView(session: session, context: apps)
+                }
+                .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
+            }
         }
         .task { await session.refresh() }
     }

@@ -3,16 +3,15 @@ import SwiftUI
 import WebKit
 #endif
 
-/// The app list: what the daemon has installed, and a way to launch it.
+/// The app list: what is installed, and a way to launch it.
 ///
-/// The registry stays in the daemon — `appList`, `appInstall` and `appRemove`
-/// are device-callable, so there is exactly one list of installed apps with one
-/// set of manifest hashes and spend caps, and the phone is just another view of
-/// it.
+/// Where the registry lives depends on the launch: the daemon's `appList` /
+/// `appInstall` / `appRemove` when this phone is paired, or the phone's own
+/// registry when it holds its own wallet. The view does not know the
+/// difference — `AppsContext` carries the registry and the bridge factory.
 public struct AppsView: View {
     let session: WalletSession
-    let baseURL: URL
-    let credential: DeviceCredential
+    let context: AppsContext
 
     @State private var apps: [InstalledApp] = []
     @State private var loading = false
@@ -20,10 +19,9 @@ public struct AppsView: View {
     @State private var error: WalletError?
     @State private var opened: InstalledApp?
 
-    public init(session: WalletSession, baseURL: URL, credential: DeviceCredential) {
+    public init(session: WalletSession, context: AppsContext) {
         self.session = session
-        self.baseURL = baseURL
-        self.credential = credential
+        self.context = context
     }
 
     public var body: some View {
@@ -68,7 +66,7 @@ public struct AppsView: View {
                     .installFieldStyle()
                 Button("Install") { Task { await install() } }
                     .disabled(installDomain.trimmingCharacters(in: .whitespaces).isEmpty)
-                Text("The daemon fetches and validates the manifest, pins its hash, and records the spend cap it asks for. Widening that cap later needs your approval on the desktop.")
+                Text("The wallet fetches and validates the manifest, pins its hash, and records the spend cap it asks for. Widening that cap later needs your approval.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
@@ -79,7 +77,7 @@ public struct AppsView: View {
         // The web view host is iOS-only: UIViewRepresentable has no macOS
         // counterpart, and the phone is the only place apps need hosting.
         .sheet(item: $opened) { app in
-            AppHostScreen(app: app, baseURL: baseURL, credential: credential)
+            AppHostScreen(app: app, context: context)
         }
         #endif
     }
@@ -88,13 +86,12 @@ public struct AppsView: View {
         loading = true
         defer { loading = false }
         do {
-            let response: AppListResponse = try await call("appList", [:])
-            apps = response.apps
+            apps = try await context.registry.list()
             error = nil
         } catch let walletError as WalletError {
             error = walletError
         } catch {
-            self.error = WalletError(code: "UNKNOWN", message: String(describing: error))
+            self.error = WalletError(code: "APP_REGISTRY", message: error.localizedDescription)
         }
     }
 
@@ -102,32 +99,25 @@ public struct AppsView: View {
         let domain = installDomain.trimmingCharacters(in: .whitespaces).lowercased()
         guard !domain.isEmpty else { return }
         do {
-            let _: AppMutationResponse = try await call("appInstall", ["domain": .string(domain)])
+            _ = try await context.registry.install(domain: domain, manifestJson: nil)
             installDomain = ""
             await load()
         } catch let walletError as WalletError {
             error = walletError
         } catch {
-            self.error = WalletError(code: "UNKNOWN", message: String(describing: error))
+            self.error = WalletError(code: "APP_REGISTRY", message: error.localizedDescription)
         }
     }
 
     private func remove(_ app: InstalledApp) async {
         do {
-            let _: AppMutationResponse = try await call("appRemove", ["domain": .string(app.domain)])
+            try await context.registry.remove(domain: app.domain)
             await load()
         } catch let walletError as WalletError {
             error = walletError
         } catch {
-            self.error = WalletError(code: "UNKNOWN", message: String(describing: error))
+            self.error = WalletError(code: "APP_REGISTRY", message: error.localizedDescription)
         }
-    }
-
-    /// Apps go through the same device client as everything else, so the
-    /// allowlist and the token apply unchanged.
-    private func call<T: Decodable & Sendable>(_ method: String, _ params: [String: JSONValue]) async throws -> T {
-        let client = DeviceWalletClient(baseURL: baseURL, credential: credential)
-        return try await client.call(method, params: params)
     }
 }
 
@@ -166,20 +156,14 @@ struct AppRow: View {
 /// One app in its own window, with `window.bsv` injected.
 public struct AppHostScreen: View {
     let app: InstalledApp
-    let baseURL: URL
-    let credential: DeviceCredential
+    let context: AppsContext
 
     @StateObject private var controller: AppHostController
 
-    public init(app: InstalledApp, baseURL: URL, credential: DeviceCredential) {
+    public init(app: InstalledApp, context: AppsContext) {
         self.app = app
-        self.baseURL = baseURL
-        self.credential = credential
-        let bridge = AppBridge(
-            app: app,
-            backend: DeviceAppBridgeBackend(baseURL: baseURL, credential: credential)
-        )
-        _controller = StateObject(wrappedValue: AppHostController(app: app, bridge: bridge))
+        self.context = context
+        _controller = StateObject(wrappedValue: AppHostController(app: app, bridge: context.makeBridge(app)))
     }
 
     public var body: some View {

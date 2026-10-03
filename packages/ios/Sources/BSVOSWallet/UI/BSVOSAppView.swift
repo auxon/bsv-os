@@ -17,6 +17,7 @@ public struct BSVOSAppView: View {
     /// wallet: a phone that has both should not silently spend from the other.
     @State private var launch: Launch = .checking
     @State private var session: WalletSession?
+    @State private var appsContext: AppsContext?
     /// Set when push is unavailable, so the approvals screen can say so.
     @State private var pushNote: String?
     private let pushStatus: PushStatusBox?
@@ -61,7 +62,7 @@ public struct BSVOSAppView: View {
 
             case .daemon:
                 if let session {
-                    RootView(session: session, pushNote: pushNote ?? pushStatus?.note)
+                    RootView(session: session, pushNote: pushNote ?? pushStatus?.note, apps: appsContext)
                         .task {
                             // Asked for only once paired: a notification
                             // permission prompt before there is anything to
@@ -73,7 +74,7 @@ public struct BSVOSAppView: View {
 
             case .standalone(let backend):
                 if let session {
-                    RootView(session: session, pushNote: pushStatus?.note)
+                    RootView(session: session, pushNote: pushStatus?.note, apps: appsContext)
                         .task { await backend.refreshPendingTransactions() }
                         .onChange(of: scenePhase) { _, phase in
                             // The phone-sized monitor: recheck in-flight
@@ -94,35 +95,54 @@ public struct BSVOSAppView: View {
         let credential = try? credentialStore.load()
         switch WalletLaunchMode.decide(hasLocalPhrase: seedVault.hasPhrase, hasDaemonCredential: credential != nil) {
         case .standalone:
-            let backend = makeStandaloneBackend()
-            session = WalletSession(backend: backend, biometrics: biometrics)
-            launch = .standalone(backend)
+            let stack = makeStandaloneStack()
+            session = WalletSession(backend: stack.backend, biometrics: biometrics)
+            appsContext = stack.apps
+            launch = .standalone(stack.backend)
         case .daemon:
             guard let credential else { launch = .unconfigured; return }
             session = WalletSession(
                 backend: DeviceWalletBackend(baseURL: baseURL, credential: credential),
                 biometrics: biometrics
             )
+            appsContext = AppsContext(
+                registry: DeviceAppRegistry(baseURL: baseURL, credential: credential)
+            ) { app in
+                AppBridge(app: app, backend: DeviceAppBridgeBackend(baseURL: baseURL, credential: credential))
+            }
             launch = .daemon(credential)
         case .unconfigured:
             session = nil
+            appsContext = nil
             launch = .unconfigured
         }
     }
 
+    private struct StandaloneStack {
+        let backend: LocalWalletBackend
+        let apps: AppsContext
+    }
+
     /// The standalone stack: file-backed stores next to the Keychain phrase,
     /// falling back to memory if the directory cannot be made (a broken store
-    /// should not stop the wallet from opening).
-    private func makeStandaloneBackend() -> LocalWalletBackend {
+    /// should not stop the wallet from opening), plus the phone's registry and
+    /// the in-process bridge for whatever app it hosts.
+    private func makeStandaloneStack() -> StandaloneStack {
         let policyStore: any PolicyStore = (try? FilePolicyStore(url: FilePolicyStore.defaultURL()))
             ?? InMemoryPolicyStore()
         let ledger: any LedgerStore = (try? FileLedgerStore(url: FileLedgerStore.defaultURL()))
             ?? InMemoryLedgerStore()
-        return LocalWalletBackend(
-            vault: seedVault,
-            chain: CombinedProvider(),
-            policy: PolicyEngine(store: policyStore),
-            ledger: ledger
+        let chain = CombinedProvider()
+        let policy = PolicyEngine(store: policyStore)
+        let backend = LocalWalletBackend(vault: seedVault, chain: chain, policy: policy, ledger: ledger)
+        let registryStore: any AppRegistryStore = (try? FileAppRegistryStore(url: FileAppRegistryStore.defaultURL()))
+            ?? InMemoryAppRegistryStore()
+        let registry = LocalAppRegistry(store: registryStore, transport: URLSessionTransport(), policy: policy)
+        return StandaloneStack(
+            backend: backend,
+            apps: AppsContext(registry: registry) { app in
+                AppBridge(app: app, backend: LocalAppBridgeBackend(wallet: backend, chain: chain))
+            }
         )
     }
 
