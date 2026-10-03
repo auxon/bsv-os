@@ -42,9 +42,14 @@ public struct ChainTx: Equatable, Sendable {
     public struct Vout: Equatable, Sendable {
         public var value: Int?
         public var addresses: [String]?
-        public init(value: Int?, addresses: [String]?) {
+        /// The output's script, when the provider gave one. The inscription
+        /// paths need it: skipping ordinal carriers means reading scripts, and
+        /// an address index cannot see a script that maps to no address.
+        public var scriptHex: String?
+        public init(value: Int?, addresses: [String]?, scriptHex: String? = nil) {
             self.value = value
             self.addresses = addresses
+            self.scriptHex = scriptHex
         }
     }
     public var confirmations: Int
@@ -318,6 +323,7 @@ public struct WocProvider: ChainReader {
         struct Vout: Decodable {
             struct ScriptPubKey: Decodable {
                 var addresses: [String]?
+                var hex: String?
             }
             var value: Int?
             var scriptPubKey: ScriptPubKey?
@@ -339,7 +345,9 @@ public struct WocProvider: ChainReader {
         return ChainTx(
             confirmations: decoded.confirmations ?? 0,
             vin: (decoded.vin ?? []).map { ChainTx.Vin(txid: $0.txid, vout: $0.vout) },
-            vout: (decoded.vout ?? []).map { ChainTx.Vout(value: $0.value, addresses: $0.scriptPubKey?.addresses) }
+            vout: (decoded.vout ?? []).map {
+                ChainTx.Vout(value: $0.value, addresses: $0.scriptPubKey?.addresses, scriptHex: $0.scriptPubKey?.hex)
+            }
         )
     }
 }

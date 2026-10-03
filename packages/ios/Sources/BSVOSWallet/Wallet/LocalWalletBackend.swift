@@ -150,6 +150,98 @@ public actor LocalWalletBackend: WalletBackend {
         )
     }
 
+    public struct AppInscription: Sendable {
+        public let txid: String
+        public let fee: Int
+        public let hex: String
+    }
+
+    /// An app-originated inscription, shaped like the daemon's `inscribeMint`:
+    /// a 1-sat output whose script is the recipient's P2PKH plus the ord
+    /// envelope, funded from plain UTXOs only, with the policy gate charged
+    /// `1 + fee + minerFee` under the app's origin and the action
+    /// `app-inscribe`. A refusal is POLICY_DENY with `denied: <reason>`.
+    public func appInscribe(
+        origin: String,
+        to recipient: String,
+        contentType: String,
+        dataHex: String,
+        fee: AppPayment? = nil,
+        memo: [String]? = nil,
+        label: String? = nil
+    ) async throws -> AppInscription {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let to = recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? key.address : recipient
+        _ = try Address.lockingScript(for: to)                     // valid P2PKH or BAD_PARAM
+        let script = try Inscription.script(ownerAddress: to, contentType: contentType, dataHex: dataHex)
+
+        // Funding: plain outputs only. The daemon fetches each candidate's
+        // script and skips carriers; so does this.
+        let indexed = try await chain.utxos(address: key.address)
+        let candidates = indexed.utxos
+            .filter { $0.value > 1 }
+            .sorted { $0.value > $1.value }
+            .prefix(12)
+        var funding: [Tx.Input] = []
+        for candidate in candidates where funding.count < 6 {
+            guard let parent = try? await chain.tx(txid: candidate.txid),
+                  candidate.vout >= 0, candidate.vout < parent.vout.count,
+                  let fundingScript = parent.vout[candidate.vout].scriptHex,
+                  !Inscription.hasOrdEnvelope(fundingScript) else { continue }
+            funding.append(Tx.Input(
+                txid: candidate.txid, vout: UInt32(candidate.vout),
+                value: candidate.value, scriptHex: fundingScript
+            ))
+        }
+        guard !funding.isEmpty else {
+            throw WalletError(code: "INSUFFICIENT", message: "no plain funding UTXOs (everything is inscribed?)")
+        }
+
+        var payments = [Tx.Payment(scriptHex: script, sats: 1)]
+        var feeSats = 0
+        if let fee {
+            guard fee.sats > 0 else { throw WalletError(code: "BAD_PARAM", message: "fee.sats must be positive") }
+            _ = try Address.lockingScript(for: fee.to)
+            feeSats = fee.sats
+            payments.append(Tx.Payment(address: fee.to, sats: feeSats))
+        }
+
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: funding,
+                payments: payments,
+                changeScriptHex: key.scriptHex,
+                opReturn: memo?.isEmpty == false ? memo : nil
+            )
+        } catch {
+            throw WalletError(code: "INSUFFICIENT", message: "not enough to fund the inscription and its fee")
+        }
+
+        let gate = try await policy.check(
+            origin: origin,
+            amountSats: 1 + feeSats + built.fee,
+            action: "app-inscribe"
+        )
+        guard gate.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+        }
+
+        let signed = try Tx.sign(built: built, privateKey: key.privateKey, publicKey: key.publicKey)
+        let hex = Hex.encode(signed)
+        let broadcast = try await broadcast(hex: hex)
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: label ?? "inscribe \(contentType) to \(to.prefix(8))",
+            status: broadcast.status == .mined ? "mined" : "seen",
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now()
+        ))
+        return AppInscription(txid: broadcast.txid, fee: built.fee, hex: hex)
+    }
+
     /// The single signing path both `send` and `appSpend` use.
     private func spend(payments: [Tx.Payment], label: String) async throws -> SendResponse {
         let key = try keyMaterial()

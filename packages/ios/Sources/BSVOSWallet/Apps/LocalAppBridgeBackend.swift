@@ -84,6 +84,30 @@ public struct LocalAppBridgeBackend: AppBridgeBackend {
             )
             result = .object(["txid": .string(sent.txid), "fee": .int(sent.fee)])
 
+        case .inscribe:
+            guard let dataHex = params["dataHex"]?.stringValue, !dataHex.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "dataHex required")
+            }
+            guard let contentType = params["contentType"]?.stringValue, !contentType.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "contentType required")
+            }
+            var fee: LocalWalletBackend.AppPayment? = nil
+            if case .object(let feeObject)? = params["fee"],
+               let feeTo = feeObject["to"]?.stringValue,
+               let feeSats = feeObject["sats"]?.intValue {
+                fee = LocalWalletBackend.AppPayment(to: feeTo, sats: feeSats)
+            }
+            let inscription = try await wallet.appInscribe(
+                origin: domain,
+                to: params["to"]?.stringValue ?? "",
+                contentType: contentType,
+                dataHex: dataHex,
+                fee: fee,
+                memo: strings(from: params["memo"]),
+                label: params["label"]?.stringValue
+            )
+            result = .object(["txid": .string(inscription.txid), "fee": .int(inscription.fee)])
+
         default:
             throw WalletError(
                 code: "UNAVAILABLE",

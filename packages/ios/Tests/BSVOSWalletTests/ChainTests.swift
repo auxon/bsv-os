@@ -161,7 +161,7 @@ final class ChainTests: XCTestCase {
     func testWocTransactionParsesVinVoutAndAddresses() async throws {
         let transport = MockTransport()
         transport.getResponses["https://api.whatsonchain.com/v1/bsv/main/tx/hash/ff00"] = MockTransport.json(
-            #"{"confirmations":3,"vin":[{"txid":"cc","vout":1}],"vout":[{"value":5000,"scriptPubKey":{"addresses":["1Dest"]}}]}"#
+            #"{"confirmations":3,"vin":[{"txid":"cc","vout":1}],"vout":[{"value":5000,"scriptPubKey":{"addresses":["1Dest"],"hex":"76a914aabb88ac"}}]}"#
         )
         let woc = WocProvider(transport: transport)
 
@@ -169,7 +169,7 @@ final class ChainTests: XCTestCase {
         XCTAssertEqual(tx, ChainTx(
             confirmations: 3,
             vin: [ChainTx.Vin(txid: "cc", vout: 1)],
-            vout: [ChainTx.Vout(value: 5000, addresses: ["1Dest"])]
+            vout: [ChainTx.Vout(value: 5000, addresses: ["1Dest"], scriptHex: "76a914aabb88ac")]
         ))
     }
 
