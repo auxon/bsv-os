@@ -14,11 +14,10 @@ import Foundation
 ///   truthful about: chain reads and a policy-gated payment from the same
 ///   signer the Send screen uses.
 /// - **The ordinal, OrdLock and ordinal-swap intents are real.** The covenant
-///   scripts, the purchase preimage and the v4 swaps are ported and pinned to
-///   the daemon byte for byte; carriers whose envelope is not in the script are
-///   verified through ORDFS, exactly as the daemon verifies them. The bsv21
-///   half of swaps is the one part that still answers by name: it needs the
-///   token envelope tooling the phone does not carry yet.
+///   scripts, the purchase preimage and both swap kinds (v4 ordinal, v3
+///   bsv21) are ported and pinned to the daemon byte for byte; carriers whose
+///   envelope is not in the script are verified through ORDFS and token offers
+///   through the 1Sat holdings endpoint, exactly as the daemon verifies them.
 /// - Reads require the wallet to be unlocked, which is stricter than the
 ///   daemon (its app reads answer while locked). Stricter is the right
 ///   direction to differ in.
@@ -173,12 +172,18 @@ public struct LocalAppBridgeBackend: AppBridgeBackend {
             guard let txid = params["txid"]?.stringValue, !txid.isEmpty else {
                 throw WalletError(code: "BAD_PARAM", message: "txid required")
             }
+            // JS may hand the amount over as a number; the token layer only
+            // takes base-unit strings.
+            let tokenAmount = params["tokenAmount"]?.stringValue
+                ?? params["tokenAmount"]?.intValue.map(String.init)
             let offer = try await wallet.signSwapOffer(
                 origin: domain,
                 txid: txid,
                 vout: params["vout"]?.intValue ?? 0,
                 priceSats: params["priceSats"]?.intValue ?? 0,
-                kind: params["kind"]?.stringValue
+                kind: params["kind"]?.stringValue,
+                tokenId: params["tokenId"]?.stringValue,
+                tokenAmount: tokenAmount
             )
             result = try asJSONValue(offer)
 

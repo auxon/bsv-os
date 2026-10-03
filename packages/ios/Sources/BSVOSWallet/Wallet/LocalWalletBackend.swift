@@ -22,6 +22,7 @@ public actor LocalWalletBackend: WalletBackend {
     private let policy: PolicyEngine
     private let ledger: any LedgerStore
     private let inscriptions: any InscriptionMetadata
+    private let tokens: any TokenIndex
     private let now: @Sendable () -> Int
     private var locked = true
 
@@ -31,6 +32,7 @@ public actor LocalWalletBackend: WalletBackend {
         policy: PolicyEngine,
         ledger: any LedgerStore,
         inscriptions: any InscriptionMetadata = OnesatInscriptionMetadata(),
+        tokens: any TokenIndex = OnesatTokenIndex(),
         now: @escaping @Sendable () -> Int = { Int(Date().timeIntervalSince1970 * 1000) }
     ) {
         self.vault = vault
@@ -38,6 +40,7 @@ public actor LocalWalletBackend: WalletBackend {
         self.policy = policy
         self.ledger = ledger
         self.inscriptions = inscriptions
+        self.tokens = tokens
         self.now = now
     }
 
@@ -337,8 +340,10 @@ public actor LocalWalletBackend: WalletBackend {
     // validating the chain state before signing, gating through policy under
     // the app's origin, and recording the inputs against double spends.
     //
-    // The bsv21 half of swaps needs the BSV20/BSV21 envelope tooling, which the
-    // phone does not carry yet; those calls refuse by name rather than guess.
+    // Both swap kinds are here: the v4 ordinal template (prefix + inscribed
+    // carrier) and the v3 bsv21 template (one exact-UTXO token carrier). The
+    // token path also asks the 1Sat indexer for spend state, because a token
+    // output's amount is only authoritative there.
 
     public struct OrdlockLockResult: Sendable, Equatable {
         public let txid: String
@@ -580,22 +585,26 @@ public actor LocalWalletBackend: WalletBackend {
         return SendResponse(txid: broadcast.txid, fee: built.fee)
     }
 
-    /// Seller: pre-sign a v4 swap offer on one of our 1-sat carriers. Off-chain
+    /// Seller: pre-sign a swap offer on one of our 1-sat carriers. Off-chain
     /// (nothing broadcast, nothing tracked); proceeds always pay our own
-    /// wallet, and the prefix input is a plain 1-sat UTXO so the inscribed sat
-    /// stays on output 0 after completion.
+    /// wallet. Ordinal offers use the v4 two-input template; bsv21 offers use
+    /// the v3 single-carrier template and must hold exactly `tokenAmount` of
+    /// `tokenId` — exact-UTXO only, because partial fills cannot be
+    /// atomic-safe.
     public func signSwapOffer(
         origin: String,
         txid: String,
         vout: Int,
         priceSats: Int,
-        kind: String? = nil
+        kind: String? = nil,
+        tokenId: String? = nil,
+        tokenAmount: String? = nil
     ) async throws -> Ordlock.SwapOffer {
         try requireUnlocked()
         let key = try keyMaterial()
         let requestedKind = kind ?? "ordinal"
-        guard requestedKind == "ordinal" else {
-            throw WalletError(code: "BAD_PARAM", message: "only ordinal swaps are available on the phone yet (bsv21 is not ported)")
+        guard requestedKind == "ordinal" || requestedKind == "bsv21" else {
+            throw WalletError(code: "BAD_PARAM", message: "kind must be ordinal or bsv21")
         }
         guard priceSats >= 1 else {
             throw WalletError(code: "BAD_PARAM", message: "priceSats must be a positive sat number")
@@ -608,6 +617,47 @@ public actor LocalWalletBackend: WalletBackend {
         guard value == 1 else {
             throw WalletError(code: "BAD_PARAM", message: "swap carrier must be exactly 1 sat (found \(value))")
         }
+
+        if requestedKind == "bsv21" {
+            let id = try requireTokenId(tokenId)
+            let amt = try requireTokenAmount(tokenAmount)
+            guard let envelope = Bsv21.parseEnvelope(carrierScript),
+                  envelope.protocolId == Bsv21.protocolId,
+                  envelope.contentType == Bsv21.contentType,
+                  envelope.id == id, envelope.amt == amt else {
+                throw WalletError(code: "BAD_PARAM", message: "carrier is not the listed token output")
+            }
+            let gate = try await policy.check(origin: origin, amountSats: 0, action: "app-swap-offer")
+            guard gate.verdict == .allow else {
+                throw WalletError(code: "POLICY_DENY", message: "denied: \(gate.reason)")
+            }
+            // v3: one input, one payment output, SINGLE|ANYONECANPAY — the
+            // same pre-signature shape the desktop produces.
+            let payScriptHex = Hex.encode(try Address.lockingScript(for: key.address))
+            let built = Tx.Built(
+                inputs: [Tx.Input(txid: txid, vout: UInt32(vout), value: 1, scriptHex: carrierScript)],
+                outputs: [Tx.Output(scriptHex: payScriptHex, sats: priceSats)],
+                fee: 0, changeSats: 0, changeVout: -1
+            )
+            let unlocks = try Tx.unlockingScripts(
+                built: built, privateKey: key.privateKey, publicKey: key.publicKey,
+                scopeFor: { _ in Ordlock.scopeSingleAnyoneCanPay }
+            )
+            return Ordlock.SwapOffer(
+                version: Ordlock.swapVersionToken,
+                kind: "bsv21",
+                payScriptHex: payScriptHex,
+                priceSats: priceSats,
+                lockTime: 0,
+                input: Ordlock.SwapOfferInput(
+                    txid: txid, vout: vout, scriptHex: carrierScript,
+                    sequence: Ordlock.swapSequence, unlockHex: Hex.encode(unlocks[0])
+                ),
+                tokenId: id,
+                tokenAmount: amt
+            )
+        }
+
         try await requireInscribed(
             carrierScript, txid: txid, vout: vout,
             refusal: "carrier is not inscribed — refusing to list plain dust"
@@ -650,10 +700,12 @@ public actor LocalWalletBackend: WalletBackend {
         )
     }
 
-    /// Buyer: complete a seller's offer — payment to the seller plus the NFT
-    /// sat to us in one tx, funded and signed by us, with the seller's unlocks
-    /// attached verbatim. Every constrained byte is re-derived and checked
-    /// against the chain before a single input is signed.
+    /// Buyer: complete a seller's offer — payment to the seller plus the asset
+    /// (the inscribed sat, or the token in a fresh transfer envelope) to us in
+    /// one tx, funded and signed by us, with the seller's unlocks attached
+    /// verbatim. Every constrained byte is re-derived and checked against the
+    /// chain before a single input is signed; a bsv21 offer is additionally
+    /// checked against the token indexer, which arbitrates spend state.
     public func completeSwap(
         origin: String,
         offer: Ordlock.SwapOffer,
@@ -670,16 +722,10 @@ public actor LocalWalletBackend: WalletBackend {
         guard price >= 1 else {
             throw WalletError(code: "BAD_OFFER", message: "offer priceSats must be a positive sat number")
         }
-        guard offer.kind == "ordinal" else {
-            throw WalletError(code: "BAD_OFFER", message: "only ordinal swaps can be completed on the phone yet (bsv21 is not ported)")
+        guard offer.kind == "ordinal" || offer.kind == "bsv21" else {
+            throw WalletError(code: "BAD_OFFER", message: "offer kind must be ordinal or bsv21")
         }
-        if offer.version == 2 {
-            throw WalletError(
-                code: "BAD_OFFER",
-                message: "v2 offers are not indexer-safe (the inscribed sat lands on the payment output) — re-list to upgrade"
-            )
-        }
-        guard offer.version == Ordlock.swapVersionOrdinal, offer.lockTime == 0 else {
+        guard offer.lockTime == 0 else {
             throw WalletError(code: "BAD_OFFER", message: "offer version/locktime mismatch")
         }
         guard Ordlock.isP2PKHScript(offer.payScriptHex) else {
@@ -704,13 +750,64 @@ public actor LocalWalletBackend: WalletBackend {
                 throw WalletError(code: "BAD_OFFER", message: "offer price \(price) exceeds buyer max \(maxPrice)")
             }
         }
-        guard let offerInputs = offer.inputs, offerInputs.count == 2 else {
-            throw WalletError(code: "BAD_OFFER", message: "v4 offer must carry exactly two inputs (1-sat prefix + carrier)")
-        }
 
         var spendInputs: [Tx.Input] = []
         var preSigned: [[UInt8]] = []
-        for item in offerInputs {
+        var payments: [Tx.Payment] = []
+        var carrierShort = ""
+        var tokenId = ""
+        var tokenAmount = ""
+
+        if offer.kind == "ordinal" {
+            if offer.version == 2 {
+                throw WalletError(
+                    code: "BAD_OFFER",
+                    message: "v2 offers are not indexer-safe (the inscribed sat lands on the payment output) — re-list to upgrade"
+                )
+            }
+            guard offer.version == Ordlock.swapVersionOrdinal else {
+                throw WalletError(code: "BAD_OFFER", message: "offer version/locktime mismatch")
+            }
+            guard let offerInputs = offer.inputs, offerInputs.count == 2 else {
+                throw WalletError(code: "BAD_OFFER", message: "v4 offer must carry exactly two inputs (1-sat prefix + carrier)")
+            }
+            for item in offerInputs {
+                let parsed = try parseOutpoint("\(item.txid)_\(item.vout)")
+                guard item.sequence == Ordlock.swapSequence else {
+                    throw WalletError(code: "BAD_OFFER", message: "offer sequence mismatch")
+                }
+                guard item.scriptHex.count % 2 == 0, item.scriptHex.allSatisfy({ $0.isHexDigit }) else {
+                    throw WalletError(code: "BAD_OFFER", message: "offer scripts must be hex")
+                }
+                guard let unlockHex = item.unlockHex, !unlockHex.isEmpty,
+                      unlockHex.count % 2 == 0, unlockHex.allSatisfy({ $0.isHexDigit }) else {
+                    throw WalletError(code: "BAD_OFFER", message: "offer scripts must be hex")
+                }
+                let (value, chainScript) = try await outputData(txid: parsed.txid, vout: parsed.vout)
+                guard chainScript.lowercased() == item.scriptHex.lowercased() else {
+                    throw WalletError(code: "BAD_OFFER", message: "offer script disagrees with chain")
+                }
+                guard value == 1 else {
+                    throw WalletError(code: "BAD_OFFER", message: "offer inputs must be exactly 1 sat")
+                }
+                spendInputs.append(Tx.Input(
+                    txid: parsed.txid, vout: UInt32(parsed.vout), value: 1, scriptHex: chainScript
+                ))
+                preSigned.append(try Hex.decode(unlockHex))
+            }
+            carrierShort = offerInputs[1].txid.prefix(8).description
+            // NFT output FIRST: FIFO assigns the inscribed sat here.
+            payments = [
+                Tx.Payment(address: key.address, sats: 1),
+                Tx.Payment(scriptHex: offer.payScriptHex, sats: price),
+            ]
+        } else {
+            guard offer.version == Ordlock.swapVersionToken else {
+                throw WalletError(code: "BAD_OFFER", message: "offer version/locktime mismatch")
+            }
+            guard let item = offer.input else {
+                throw WalletError(code: "BAD_OFFER", message: "offer input must be 64-hex txid + vout")
+            }
             let parsed = try parseOutpoint("\(item.txid)_\(item.vout)")
             guard item.sequence == Ordlock.swapSequence else {
                 throw WalletError(code: "BAD_OFFER", message: "offer sequence mismatch")
@@ -727,12 +824,52 @@ public actor LocalWalletBackend: WalletBackend {
                 throw WalletError(code: "BAD_OFFER", message: "offer script disagrees with chain")
             }
             guard value == 1 else {
-                throw WalletError(code: "BAD_OFFER", message: "offer inputs must be exactly 1 sat")
+                throw WalletError(code: "BAD_OFFER", message: "offer carrier is not 1 sat")
+            }
+            guard let id = Bsv21.normalizeTokenId(offer.tokenId) else {
+                throw WalletError(code: "BAD_OFFER", message: "offer tokenId must be <64-hex-txid>_<vout>")
+            }
+            guard let amt = Bsv21.parseTokenAmount(offer.tokenAmount) else {
+                throw WalletError(code: "BAD_OFFER", message: "offer tokenAmount must be a positive base-unit integer string")
+            }
+            tokenId = id
+            tokenAmount = amt
+            // The indexer is the arbiter of token spend state; the envelope is
+            // re-checked locally below — the same two-layer rule as sending.
+            do {
+                let holdings = try await tokens.holdings(
+                    tokenId: id, outpoints: ["\(parsed.txid)_\(parsed.vout)"]
+                )
+                guard holdings.contains(where: {
+                    $0.txid == parsed.txid && $0.vout == parsed.vout && $0.amt == amt
+                }) else {
+                    throw WalletError(code: "BAD_OFFER", message: "offer token output is spent or disagrees with the indexer")
+                }
+            } catch let error as WalletError {
+                throw error
+            } catch {
+                throw WalletError(code: "RAILS", message: "token lookup unreachable — cannot verify the offer")
+            }
+            guard let envelope = Bsv21.parseEnvelope(chainScript),
+                  envelope.protocolId == Bsv21.protocolId,
+                  envelope.contentType == Bsv21.contentType,
+                  envelope.id == id, envelope.amt == amt else {
+                throw WalletError(code: "BAD_OFFER", message: "offer script is not the listed token output")
             }
             spendInputs.append(Tx.Input(
                 txid: parsed.txid, vout: UInt32(parsed.vout), value: 1, scriptHex: chainScript
             ))
             preSigned.append(try Hex.decode(unlockHex))
+            carrierShort = parsed.txid.prefix(8).description
+            // Exact-UTXO: the carrier moves whole into a fresh transfer
+            // envelope; the payment comes first, as the desktop builds it.
+            payments = [
+                Tx.Payment(scriptHex: offer.payScriptHex, sats: price),
+                Tx.Payment(
+                    scriptHex: try Bsv21.transferScript(ownerAddress: key.address, tokenId: id, amount: amt),
+                    sats: 1
+                ),
+            ]
         }
 
         var feeSats = 0
@@ -744,13 +881,9 @@ public actor LocalWalletBackend: WalletBackend {
                 throw WalletError(code: "BAD_PARAM", message: "fee.to must be a valid P2PKH address")
             }
             feeSats = fee.sats
+            payments.append(Tx.Payment(address: fee.to, sats: fee.sats))
         }
         let funding = try await plainFunding()
-        var payments = [
-            Tx.Payment(address: key.address, sats: 1),           // NFT output first: FIFO assigns the inscribed sat here
-            Tx.Payment(scriptHex: offer.payScriptHex, sats: price), // byte-exact payment
-        ]
-        if let fee { payments.append(Tx.Payment(address: fee.to, sats: fee.sats)) }
         let built: Tx.Built
         do {
             built = try Tx.build(
@@ -768,7 +901,7 @@ public actor LocalWalletBackend: WalletBackend {
             origin: origin, amountSats: amount, action: "app-swap",
             context: SpendContext(
                 origin: origin, action: "app-swap", amountSats: amount,
-                label: label, to: "\(offerInputs[1].txid.prefix(8)) listing",
+                label: label, to: "\(carrierShort) listing",
                 description: description
             )
         )
@@ -778,12 +911,15 @@ public actor LocalWalletBackend: WalletBackend {
         let signed = try Tx.sign(
             built: built, privateKey: key.privateKey, publicKey: key.publicKey,
             scopeFor: nil,
-            customUnlock: { index, _ in index < 2 ? preSigned[index] : nil }
+            customUnlock: { index, _ in index < preSigned.count ? preSigned[index] : nil }
         )
         let broadcast = try await broadcast(hex: Hex.encode(signed))
+        let defaultLabel = offer.kind == "bsv21"
+            ? "swap buy \(tokenAmount) \(tokenId.prefix(8)) for \(price) sats"
+            : "swap buy \(price) sats from \(carrierShort)"
         try await ledger.record(LocalTx(
             txid: broadcast.txid,
-            label: label ?? "swap buy \(price) sats from \(offerInputs[1].txid.prefix(8))",
+            label: label ?? defaultLabel,
             status: broadcast.status == .mined ? "mined" : "seen",
             detail: broadcast.detail,
             createdAt: now(),
@@ -1035,6 +1171,21 @@ public actor LocalWalletBackend: WalletBackend {
             code: "BAD_PARAM",
             message: "need a plain 1-sat UTXO as the offer prefix (swap change provides one)"
         )
+    }
+
+    /// The daemon's token-id and amount gates, with its messages.
+    private func requireTokenId(_ raw: String?) throws -> String {
+        guard let id = Bsv21.normalizeTokenId(raw) else {
+            throw WalletError(code: "BAD_PARAM", message: "tokenId must be <64-hex-txid>_<vout>")
+        }
+        return id
+    }
+
+    private func requireTokenAmount(_ raw: String?) throws -> String {
+        guard let amount = Bsv21.parseTokenAmount(raw) else {
+            throw WalletError(code: "BAD_PARAM", message: "tokenAmount must be a positive base-unit integer string")
+        }
+        return amount
     }
 
     /// The daemon's ownership test for a carrier: the P2PKH prefix.
