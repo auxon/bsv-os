@@ -4,6 +4,7 @@
       "entropyHex": "00000000000000000000000000000000",
       "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
       "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "identityKeyHex": "03d902f35f560e0470c63313c7369168d9d7df2d49bf295fd9fb7cb109ccee0494",
       "privateKeyHex": "1db589435fc2e15100af30965d58e0aaa8101e1dfc559735c34c75d5a1bd7e56",
       "publicKeyHex": "027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62",
       "address": "13iX7DteNj1gV7zhe4t6o9FX9CArR5wZxz"
@@ -12,6 +13,7 @@
       "entropyHex": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
       "phrase": "legal winner thank year wave sausage worth useful legal winner thank yellow",
       "seedHex": "878386efb78845b3355bd15ea4d39ef97d179cb712b77d5c12b6be415fffeffe5f377ba02bf3f8544ab800b955e51fbff09828f682052a20faa6addbbddfb096",
+      "identityKeyHex": "02c4c9a1e37f5601ed4c7d0eb202e0b55e7891c4787853bef6c3b96a187de12d83",
       "privateKeyHex": "18297bb1fb6b51eb05210aafc622eb1024e429d9691603783b36f998d99f588a",
       "publicKeyHex": "0395093f8bce6d4fbeb888c9504de513f1de060da21d0f68e1fa1c465189f84739",
       "address": "14PXLD1Yyh5Sfim1c83nCfmnPeSAKjtGsJ"
@@ -20,6 +22,7 @@
       "entropyHex": "80808080808080808080808080808080",
       "phrase": "letter advice cage absurd amount doctor acoustic avoid letter advice cage above",
       "seedHex": "77d6be9708c8218738934f84bbbb78a2e048ca007746cb764f0673e4b1812d176bbb173e1a291f31cf633f1d0bad7d3cf071c30e98cd0688b5bcce65ecaceb36",
+      "identityKeyHex": "03d0acccbf665352357dce900e19d75a387369b1c331eb3be605a9719324911371",
       "privateKeyHex": "9ab6dfa9e65e74368d34287f7f2a083af3bbb45474b4d85f26a618e567d613dc",
       "publicKeyHex": "03676da7a78fb9ebae700ee293c3505aa516f4b34c13b4da7fae1bbc7fa64c49ec",
       "address": "1KsRPmWK1ceSAVFBfBHiyFu4i4x6TNnLo9"
@@ -28,6 +31,7 @@
       "entropyHex": "ffffffffffffffffffffffffffffffff",
       "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
       "seedHex": "b6a6d8921942dd9806607ebc2750416b289adea669198769f2e15ed926c3aa92bf88ece232317b4ea463e84b0fcd3b53577812ee449ccc448eb45e6f544e25b6",
+      "identityKeyHex": "02e01aa32243f6744a2607466304e326adc7cb77e67363341967bf4700be45391d",
       "privateKeyHex": "21739b2adbec5d4d02282eb20d4111e08ac7b850b5c3c5dd1a54220cc683f2e1",
       "publicKeyHex": "02df61d0e0ca2d1f02670cd94941d1f3299e10a01f0cc008b695e73006e4b28bfc",
       "address": "13chpyELfuN926nNxpCxPJp6snQb7KLakT"
@@ -36,6 +40,7 @@
       "entropyHex": "000102030405060708090a0b0c0d0e0f",
       "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum buyer",
       "seedHex": "3779b041fab425e9c0fd55846b2a03e9a388fb12784067bd8ebdb464c2574a05bcc7a8eb54d7b2a2c8420ff60f630722ea5132d28605dbc996c8ca7d7a8311c0",
+      "identityKeyHex": "0392030131e97b2a396691a7c1d91f6b5541649b75bda14d056797ab3cadcaf2f5",
       "privateKeyHex": "a783429f6b40ed8098423223e3e3433450ea4ef8b9d90b351d77cbc73aec7956",
       "publicKeyHex": "027e093fabac4d5e624b56a49c892a0e8a1c49032ec2590912838dfb8007b0d2e3",
       "address": "125wydPD1UXCex7LCFyyDqVuNUPa19zcCX"
@@ -44,6 +49,7 @@
       "entropyHex": "9e885d952ad362caeb4efe34a8e91bd2",
       "phrase": "ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic",
       "seedHex": "e2f88a043776c828063d4c3c97173944d32cf847a925b6e40b0b8bd0b4bead3ba734bdda5250d4698b310a71c9934e1a48e562315ce22bf85f89459df0e73a6c",
+      "identityKeyHex": "038b0f29a60fa8d7e1aeafbe512288a6c6bc696547bbf8247db23c95e83014513c",
       "privateKeyHex": "023faae543bed109c56e9f7b3f6996ea7997b3609a824d1c94996b44903a0847",
       "publicKeyHex": "0203526554597aa498dfa6a9f43feecce3d403bc372be11efcdfa74cc64e2d5e5a",
       "address": "1GteLfwLedqeX3UyTGRVPBFmdgDkguecTC"

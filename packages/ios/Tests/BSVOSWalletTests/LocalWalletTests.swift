@@ -13,6 +13,7 @@ final class LocalWalletTests: XCTestCase {
             let entropyHex: String
             let phrase: String
             let seedHex: String
+            let identityKeyHex: String
             let privateKeyHex: String
             let publicKeyHex: String
             let address: String
@@ -43,6 +44,15 @@ final class LocalWalletTests: XCTestCase {
 
             let seed = try BIP39.seed(fromValidated: vector.phrase)
             XCTAssertEqual(Hex.encode(seed), vector.seedHex, "seed for \(vector.entropyHex)")
+
+            // The daemon's identity key is the master public key — pinned here
+            // because hosted apps see it, and it must be the same on both ends.
+            let master = try BIP32.master(fromSeed: seed)
+            XCTAssertEqual(
+                Hex.encode(try Secp256k1.publicKey(fromPrivateKey: master.privateKey)),
+                vector.identityKeyHex,
+                "identity key for \(vector.entropyHex)"
+            )
 
             let key = try BIP32.derive("m/0/0", from: BIP32.master(fromSeed: seed))
             XCTAssertEqual(Hex.encode(key.privateKey), vector.privateKeyHex, "private key for \(vector.entropyHex)")

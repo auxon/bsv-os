@@ -29,10 +29,15 @@ const vectors = ENTROPIES.map((entropyHex) => {
   if (!Mnemonic.isValid(phrase)) throw new Error(`generated an invalid phrase: ${phrase}`);
   const seed = new Mnemonic(phrase).toSeed();
   const priv = HD.fromSeed(seed).derive("m/0/0").privKey;
+  // The daemon's identity key is the *master* public key (custody.identityOf),
+  // not a derived path — so the same phrase produces the same identity on the
+  // phone, which is what lets an app see one identity across both front ends.
+  const master = HD.fromSeed(seed);
   return {
     entropyHex,
     phrase,
     seedHex: Buffer.from(seed).toString("hex"),
+    identityKeyHex: master.privKey.toPublicKey().toString(),
     privateKeyHex: priv.toHex(),
     publicKeyHex: priv.toPublicKey().toString(),
     address: priv.toPublicKey().toAddress(),

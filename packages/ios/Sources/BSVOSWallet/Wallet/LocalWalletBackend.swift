@@ -59,6 +59,15 @@ public actor LocalWalletBackend: WalletBackend {
         vault.hasPhrase
     }
 
+    /// The daemon's identity key: the *master* public key of the same phrase
+    /// (`custody.identityOf`), not a derived path — so a hosted app sees one
+    /// identity across the phone and the desktop.
+    public func identityKey() throws -> String? {
+        guard let phrase = try vault.loadPhrase() else { return nil }
+        let master = try BIP32.master(fromSeed: BIP39.seed(fromValidated: phrase))
+        return Hex.encode(try Secp256k1.publicKey(fromPrivateKey: master.privateKey))
+    }
+
     // MARK: - WalletBackend
 
     public func isAuthenticated() async throws -> WalletStatus {
@@ -100,6 +109,49 @@ public actor LocalWalletBackend: WalletBackend {
 
     public func send(to address: String, sats: Int) async throws -> SendResponse {
         try requireUnlocked()
+        return try await spend(payments: [Tx.Payment(address: address, sats: sats)], label: "send \(sats) sats")
+    }
+
+    /// One payment to an app intent's list.
+    public struct AppPayment: Sendable, Equatable {
+        public let to: String
+        public let sats: Int
+
+        public init(to: String, sats: Int) {
+            self.to = to
+            self.sats = sats
+        }
+    }
+
+    /// An app-originated spend. Same builder and signer as `send`; the
+    /// difference is the gate: the app's own origin must pass policy first,
+    /// with the memo's first entry as the action, exactly as the daemon's
+    /// `spendTo` does. A refusal is POLICY_DENY carrying the pending reason, so
+    /// the page can show the human what to approve.
+    public func appSpend(
+        origin: String,
+        payments: [AppPayment],
+        memo: [String]? = nil,
+        label: String? = nil
+    ) async throws -> SendResponse {
+        try requireUnlocked()
+        guard !payments.isEmpty else {
+            throw WalletError(code: "BAD_PARAM", message: "payments required")
+        }
+        let action = (label?.isEmpty == false ? label : nil) ?? memo?.first ?? "spend"
+        let total = payments.reduce(0) { $0 + max(0, $1.sats) }
+        let decision = try await policy.check(origin: origin, amountSats: total, action: action)
+        guard decision.verdict == .allow else {
+            throw WalletError(code: "POLICY_DENY", message: decision.reason)
+        }
+        return try await spend(
+            payments: payments.map { Tx.Payment(address: $0.to, sats: $0.sats) },
+            label: action
+        )
+    }
+
+    /// The single signing path both `send` and `appSpend` use.
+    private func spend(payments: [Tx.Payment], label: String) async throws -> SendResponse {
         let key = try keyMaterial()
         let addressUtxos = try await chain.utxos(address: key.address)
         let inputs = addressUtxos.utxos.map {
@@ -110,7 +162,7 @@ public actor LocalWalletBackend: WalletBackend {
         do {
             built = try Tx.build(
                 inputs: inputs,
-                payments: [Tx.Payment(address: address, sats: sats)],
+                payments: payments,
                 changeScriptHex: key.scriptHex
             )
         } catch Tx.Error.insufficientFunds(let have, let need) {
@@ -127,7 +179,7 @@ public actor LocalWalletBackend: WalletBackend {
         let status = broadcast.status == .mined ? "mined" : "seen"
         try await ledger.record(LocalTx(
             txid: broadcast.txid,
-            label: "send \(sats) sats",
+            label: label,
             status: status,
             detail: broadcast.detail,
             createdAt: now(),
