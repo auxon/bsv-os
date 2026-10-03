@@ -1,0 +1,291 @@
+import Foundation
+
+/// The standalone backend: custody, chain and policy all on the phone.
+///
+/// It implements the same `WalletBackend` the device client does, so every
+/// Phase 1 screen works against it unchanged. What is different is who is
+/// authoritative:
+///
+/// - **Custody** is the Keychain phrase from `SeedVault`, derived to the same
+///   `m/0/0` key the daemon derives (S1's vectors), signed by the Swift signer
+///   (S2), and spent through the same policy engine (S3).
+/// - **Confirmations** are checked while the app is open. A phone cannot run the
+///   daemon's monitor, so `refreshPendingTransactions()` is the whole monitor,
+///   and the ledger hints say so rather than promising a rebroadcast that is not
+///   happening.
+/// - **Locking** is a session flag. The real protection is the device lock plus
+///   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; the biometric gate stays
+///   where it was, in `WalletSession`, in front of spends and approvals.
+public actor LocalWalletBackend: WalletBackend {
+    private let vault: any SeedVault
+    private let chain: any ChainProvider
+    private let policy: PolicyEngine
+    private let ledger: any LedgerStore
+    private let now: @Sendable () -> Int
+    private var locked = true
+
+    public init(
+        vault: any SeedVault,
+        chain: any ChainProvider,
+        policy: PolicyEngine,
+        ledger: any LedgerStore,
+        now: @escaping @Sendable () -> Int = { Int(Date().timeIntervalSince1970 * 1000) }
+    ) {
+        self.vault = vault
+        self.chain = chain
+        self.policy = policy
+        self.ledger = ledger
+        self.now = now
+    }
+
+    // MARK: - wallet lifecycle (beyond the protocol, for the setup screen)
+
+    /// Create a wallet and return the phrase, once, for the human to write
+    /// down. It is not retrievable from anywhere else.
+    @discardableResult
+    public func createWallet(wordCount: Int = 12) throws -> String {
+        let phrase = try BIP39.generate(wordCount: wordCount)
+        try vault.importPhrase(phrase)
+        return phrase
+    }
+
+    /// Import an existing phrase. Throws before touching the Keychain if the
+    /// words (or their checksum) do not validate.
+    public func importWallet(phrase: String) throws {
+        try vault.importPhrase(phrase)
+    }
+
+    public func hasWallet() -> Bool {
+        vault.hasPhrase
+    }
+
+    // MARK: - WalletBackend
+
+    public func isAuthenticated() async throws -> WalletStatus {
+        let hasWallet = vault.hasPhrase
+        return WalletStatus(authenticated: hasWallet, locked: locked || !hasWallet, hasWallet: hasWallet)
+    }
+
+    public func unlock() async throws {
+        guard vault.hasPhrase else {
+            throw WalletError(code: "NO_WALLET", message: "No wallet on this device yet.")
+        }
+        locked = false
+    }
+
+    public func lock() async throws {
+        locked = true
+    }
+
+    public func balance() async throws -> BalanceResponse {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let addressUtxos = try await chain.utxos(address: key.address)
+        return BalanceResponse(
+            address: key.address,
+            confirmed: addressUtxos.confirmed,
+            unconfirmed: addressUtxos.unconfirmed,
+            utxos: addressUtxos.utxos.count
+        )
+    }
+
+    public func addressQr() async throws -> AddressQrResponse {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        guard let png = QRCode.image(from: key.address) else {
+            throw WalletError(code: "QR_FAILED", message: "Could not render the address as a QR code.")
+        }
+        return AddressQrResponse(address: key.address, dataUrl: "data:image/png;base64," + png.base64EncodedString())
+    }
+
+    public func send(to address: String, sats: Int) async throws -> SendResponse {
+        try requireUnlocked()
+        let key = try keyMaterial()
+        let addressUtxos = try await chain.utxos(address: key.address)
+        let inputs = addressUtxos.utxos.map {
+            Tx.Input(txid: $0.txid, vout: UInt32($0.vout), value: $0.value, scriptHex: key.scriptHex)
+        }
+
+        let built: Tx.Built
+        do {
+            built = try Tx.build(
+                inputs: inputs,
+                payments: [Tx.Payment(address: address, sats: sats)],
+                changeScriptHex: key.scriptHex
+            )
+        } catch Tx.Error.insufficientFunds(let have, let need) {
+            throw WalletError(
+                code: "INSUFFICIENT",
+                message: "Insufficient funds: \(have) sats available, \(need) needed including the fee."
+            )
+        } catch Tx.Error.shortForFee(let short) {
+            throw WalletError(code: "INSUFFICIENT", message: "Insufficient funds: short \(short) sats for the fee.")
+        }
+
+        let signed = try Tx.sign(built: built, privateKey: key.privateKey, publicKey: key.publicKey)
+        let broadcast = try await broadcast(hex: Hex.encode(signed))
+        let status = broadcast.status == .mined ? "mined" : "seen"
+        try await ledger.record(LocalTx(
+            txid: broadcast.txid,
+            label: "send \(sats) sats",
+            status: status,
+            detail: broadcast.detail,
+            createdAt: now(),
+            lastCheck: now()
+        ))
+        return SendResponse(txid: broadcast.txid, fee: built.fee)
+    }
+
+    public func policyPending() async throws -> PolicyPendingResponse {
+        let records = try await policy.pendingRequests()
+        return PolicyPendingResponse(requests: records.map { record in
+            PendingRequest(
+                id: record.id,
+                origin: record.origin,
+                amountSats: record.amountSats,
+                action: record.action,
+                createdAt: record.createdAt,
+                jevVerdict: record.score?.verdict.rawValue,
+                jevProb: record.score?.verdictProb,
+                jevRiskLevel: record.score?.riskLevel.rawValue,
+                jevConfidence: record.score?.confidence
+            )
+        })
+    }
+
+    public func policyList() async throws -> PolicyListResponse {
+        let rows = try await policy.listPolicies()
+        return PolicyListResponse(policies: rows.map(\.wireRow))
+    }
+
+    public func policyApprove(origin: String, capSats: Int) async throws -> PolicyApproveResponse {
+        try await policy.setPolicy(origin: origin, mode: .allow, capSats: capSats)
+        return PolicyApproveResponse(origin: origin, mode: PolicyMode.allow.rawValue)
+    }
+
+    public func policyDeny(origin: String) async throws -> PolicyApproveResponse {
+        try await policy.setPolicy(origin: origin, mode: .deny)
+        return PolicyApproveResponse(origin: origin, mode: PolicyMode.deny.rawValue)
+    }
+
+    public func history() async throws -> HistoryResponse {
+        let rows = try await ledger.all().sorted { $0.createdAt > $1.createdAt }
+        let policies = try await policy.listPolicies()
+        let pending = try await policy.pendingRequests()
+        return HistoryResponse(
+            transactions: rows.map {
+                LedgerTransaction(txid: $0.txid, label: $0.label, status: $0.status, createdAt: $0.createdAt, hint: $0.hint)
+            },
+            policies: policies.map(\.wireRow),
+            summary: HistorySummary(
+                inFlight: rows.filter { $0.status == "seen" }.count,
+                mined: rows.filter { $0.status == "mined" }.count,
+                failed: rows.filter { $0.status == "failed" }.count,
+                pendingRequests: pending.count,
+                // The daemon counts allow and deny rows only; auto does not
+                // report as "allowed origins". Matching it matters because the
+                // same number is shown in the same place on both front ends.
+                allowedOrigins: policies.filter { $0.mode == .allow }.count,
+                deniedOrigins: policies.filter { $0.mode == .deny }.count
+            )
+        )
+    }
+
+    // MARK: - the phone-sized monitor
+
+    /// Check every in-flight transaction once. Called when the app comes back
+    /// to the foreground; returns how many changed state. There is no
+    /// background rebroadcast on a phone, and pretending otherwise would be a
+    /// different lie in the same hint text.
+    @discardableResult
+    public func refreshPendingTransactions() async -> Int {
+        var changed = 0
+        let rows = (try? await ledger.all()) ?? []
+        for row in rows where row.status == "seen" {
+            guard let status = try? await chain.status(txid: row.txid) else { continue }
+            var updated = row
+            updated.attempts += 1
+            updated.lastCheck = now()
+            switch status.status {
+            case .mined:
+                updated.status = "mined"
+                updated.detail = nil
+                changed += 1
+            case .rejected:
+                updated.status = "failed"
+                updated.detail = status.detail ?? "rejected by the network"
+                changed += 1
+            case .seen, .unknown:
+                updated.detail = status.detail
+            }
+            try? await ledger.update(updated)
+        }
+        return changed
+    }
+
+    // MARK: - internals
+
+    private struct KeyMaterial {
+        var privateKey: [UInt8]
+        var publicKey: [UInt8]
+        var address: String
+        var scriptHex: String
+    }
+
+    private func requireUnlocked() throws {
+        guard vault.hasPhrase else {
+            throw WalletError(code: "NO_WALLET", message: "No wallet on this device yet.")
+        }
+        guard !locked else {
+            throw WalletError(code: "WALLET_LOCKED", message: "Unlock the wallet first.")
+        }
+    }
+
+    /// The daemon's custody path, on the phone: the phrase becomes a seed
+    /// becomes `m/0/0`. The key bytes live only in this tuple and in the call
+    /// that signs.
+    private func keyMaterial() throws -> KeyMaterial {
+        guard let phrase = try vault.loadPhrase() else {
+            throw WalletError(code: "NO_WALLET", message: "No wallet on this device yet.")
+        }
+        do {
+            let master = try BIP32.master(fromSeed: BIP39.seed(fromValidated: phrase))
+            let key = try BIP32.derive("m/0/0", from: master)
+            let publicKey = try Secp256k1.publicKey(fromPrivateKey: key.privateKey)
+            let address = Address.from(publicKey: publicKey)
+            return KeyMaterial(
+                privateKey: key.privateKey,
+                publicKey: publicKey,
+                address: address,
+                scriptHex: Hex.encode(try Address.lockingScript(for: address))
+            )
+        } catch {
+            throw WalletError(code: "BAD_SEED", message: "The stored recovery phrase could not be used: \(error)")
+        }
+    }
+
+    private func broadcast(hex: String) async throws -> BroadcastResult {
+        do {
+            let result = try await chain.broadcast(txHex: hex)
+            if result.status == .rejected {
+                throw WalletError(
+                    code: "BROADCAST_REJECTED",
+                    message: result.detail ?? "the network rejected the transaction"
+                )
+            }
+            return result
+        } catch let error as WalletError {
+            throw error
+        } catch let ChainError.broadcastRejected(detail) {
+            throw WalletError(code: "BROADCAST_REJECTED", message: detail)
+        } catch {
+            throw WalletError(code: "BROADCAST_FAILED", message: String(describing: error))
+        }
+    }
+}
+
+private extension PolicyRowRecord {
+    var wireRow: PolicyRow {
+        PolicyRow(origin: origin, mode: mode.rawValue, spendCapSats: spendCapSats, updatedAt: updatedAt)
+    }
+}

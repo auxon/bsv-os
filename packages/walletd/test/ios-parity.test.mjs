@@ -191,12 +191,16 @@ test("key material stays in the custody core and never reaches a page", () => {
       .map((line) => line.replace(/\/\/.*$/, ""))
       .join("\n");
 
-  // The custody core: seed derivation, the curve, and the transaction signer
-  // that takes key bytes for the moment of signing.
+  // The custody core: seed generation and derivation, the curve, the signer,
+  // and the standalone backend that owns the phrase at rest. Each addition here
+  // is a deliberate widening of the boundary, not an accident of naming.
   const custody = new Set([
+    "BSVOSWallet/Core/Mnemonic.swift",
     "BSVOSWallet/Core/BIP32.swift",
     "BSVOSWallet/Core/Secp256k1.swift",
     "BSVOSWallet/Core/Tx.swift",
+    "BSVOSWallet/Wallet/SeedVault.swift",
+    "BSVOSWallet/Wallet/LocalWalletBackend.swift",
   ]);
 
   const forbidden = /secp256k1|fromWif|privateKey|mnemonic|seed phrase|bip39|beginPrivateKey/i;
