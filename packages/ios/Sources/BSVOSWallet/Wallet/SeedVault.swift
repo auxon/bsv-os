@@ -25,6 +25,13 @@ public extension SeedVault {
         try BIP39.validate(phrase)
         try savePhrase(BIP39.normalize(phrase))
     }
+
+    /// A fresh phrase, generated here so setup screens do not reach for the
+    /// wordlist themselves — and so the custody guard can keep saying that key
+    /// material exists only in the vault and the crypto core.
+    func generatePhrase(wordCount: Int = 12) throws -> String {
+        try BIP39.generate(wordCount: wordCount)
+    }
 }
 
 public enum SeedVaultError: Error, Equatable {

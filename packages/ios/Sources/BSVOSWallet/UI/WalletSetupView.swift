@@ -66,7 +66,7 @@ public struct WalletSetupView: View {
                     Button {
                         error = nil
                         do {
-                            phraseToBackUp = try BIP39.generate()
+                            phraseToBackUp = try seedVault.generatePhrase()
                             step = .backup
                         } catch {
                             self.error = "Could not generate a recovery phrase: \(error)"
@@ -199,7 +199,6 @@ public struct WalletSetupView: View {
     private func restoreWallet() {
         error = nil
         do {
-            try BIP39.validate(restoreInput)
             try seedVault.importPhrase(restoreInput)
             restoreInput = ""
             onReady()
