@@ -134,7 +134,18 @@ public struct BSVOSAppView: View {
             ?? InMemoryLedgerStore()
         let chain = CombinedProvider()
         let policy = PolicyEngine(store: policyStore)
-        let backend = LocalWalletBackend(vault: seedVault, chain: chain, policy: policy, ledger: ledger)
+        let castStore: any CastStore = (try? FileCastStore(url: FileCastStore.defaultURL()))
+            ?? InMemoryCastStore()
+        let backend = LocalWalletBackend(
+            vault: seedVault, chain: chain, policy: policy, ledger: ledger, cast: castStore
+        )
+        // Cast media: recordings and live segments live in the app container
+        // and are served by the same loopback origin the pages load from.
+        if let mediaRoot = try? CastMediaStore.defaultRoot() {
+            BundleAssetServer.shared.setCastMediaHandler(
+                CastMediaHandler(media: CastMediaStore(root: mediaRoot), cast: castStore)
+            )
+        }
         let registryStore: any AppRegistryStore = (try? FileAppRegistryStore(url: FileAppRegistryStore.defaultURL()))
             ?? InMemoryAppRegistryStore()
         let registry = LocalAppRegistry(store: registryStore, transport: URLSessionTransport(), policy: policy)

@@ -311,6 +311,76 @@ final class LocalRpcBridgeTests: XCTestCase {
         XCTAssertEqual(failed.errorMessage, "twetch api 503: boom")
     }
 
+    func testCastLifecycleOverTheBridge() async throws {
+        let (bridge, wallet, _, _) = harness()
+        try await wallet.unlock()
+        let dest = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
+
+        var reply = await bridge.call(id: 1, method: "castAdd", params: [
+            "title": .string("Demo"), "splits": .string("\(dest):100"),
+        ])
+        XCTAssertTrue(reply.ok, reply.errorMessage ?? "")
+        guard case .object(let episode)? = try? value(reply),
+              case .string(let episodeId)? = episode["id"] else {
+            return XCTFail("castAdd shape")
+        }
+
+        reply = await bridge.call(id: 2, method: "castEpisodes", params: [:])
+        guard case .object(let list)? = try? value(reply),
+              case .array(let episodes)? = list["episodes"] else {
+            return XCTFail("castEpisodes shape")
+        }
+        XCTAssertEqual(episodes.count, 1)
+
+        reply = await bridge.call(id: 3, method: "castPlay", params: [
+            "episode": .string(episodeId), "rate": .int(1200), "max": .int(6000),
+        ])
+        guard case .object(let play)? = try? value(reply),
+              case .string(let sessionId)? = play["id"],
+              case .array(let streamIds)? = play["streamIds"],
+              case .string(let streamId)? = streamIds.first else {
+            return XCTFail("castPlay shape")
+        }
+        XCTAssertEqual(play["board"], .string("cast"))
+        XCTAssertEqual(play["approve"], .string("bsv allow stream <cap sats>"))
+
+        reply = await bridge.call(id: 4, method: "streamTicks", params: ["id": .string(streamId)])
+        guard case .object(let ticks)? = try? value(reply),
+              case .array(let tickList)? = ticks["ticks"] else {
+            return XCTFail("streamTicks shape")
+        }
+        XCTAssertTrue(tickList.isEmpty)
+
+        reply = await bridge.call(id: 5, method: "streamPause", params: ["id": .string(streamId)])
+        guard case .object(let paused)? = try? value(reply) else { return XCTFail("streamPause shape") }
+        XCTAssertEqual(paused["status"], .string("paused"))
+        _ = await bridge.call(id: 6, method: "streamResume", params: ["id": .string(streamId)])
+
+        reply = await bridge.call(id: 7, method: "castStop", params: ["id": .string(sessionId)])
+        guard case .object(let stopped)? = try? value(reply) else { return XCTFail("castStop shape") }
+        XCTAssertEqual(stopped["status"], .string("stopped"))
+
+        reply = await bridge.call(id: 8, method: "castLiveStart", params: ["episode": .string(episodeId)])
+        guard case .object(let live)? = try? value(reply),
+              case .string(let playlist)? = live["playlist"],
+              case .string(let liveId)? = live["id"] else {
+            return XCTFail("castLiveStart shape")
+        }
+        XCTAssertEqual(playlist, "/cast/live/\(liveId)/index.m3u8")
+
+        reply = await bridge.call(id: 9, method: "castLiveGet", params: ["id": .string(liveId)])
+        XCTAssertTrue(reply.ok)
+        reply = await bridge.call(id: 10, method: "castLiveStop", params: ["id": .string(liveId)])
+        guard case .object(let endedLive)? = try? value(reply) else { return XCTFail("castLiveStop shape") }
+        XCTAssertEqual(endedLive["status"], .string("ended"))
+
+        reply = await bridge.call(id: 11, method: "castSetMedia", params: [
+            "episode": .string(episodeId), "mediaUrl": .string("/cast/media/abcdefghijkl.mp4"),
+        ])
+        guard case .object(let media)? = try? value(reply) else { return XCTFail("castSetMedia shape") }
+        XCTAssertEqual(media["mediaUrl"], .string("/cast/media/abcdefghijkl.mp4"))
+    }
+
     func testDoctorReportsTheChecksAPhoneCanAnswer() async throws {
         let (bridge, _, _, _) = harness()
         let reply = await bridge.call(id: 1, method: "doctor", params: [:])

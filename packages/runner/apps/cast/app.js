@@ -288,7 +288,21 @@ function loadMedia(url) {
   // clusters, which is precisely the failure class hls.js keeps tripping on
   // (fragParsingError, bufferSeekOverHole). Third-party .m3u8s keep hls.js.
   if (isHls && /\/cast\/live\/[a-z0-9]{6,16}\//.test(url)) {
-    void msePlay(url);
+    // Our own ingest URLs prefer MSE: sequential append of the exact chunks
+    // the recorder produced can never have holes or mid-stream clusters,
+    // which is precisely the failure class hls.js keeps tripping on
+    // (fragParsingError, bufferSeekOverHole). iPhones do not expose
+    // MediaSource, but they play the fMP4 HLS playlist natively — the same
+    // bytes, without the append loop.
+    if (window.MediaSource) {
+      void msePlay(url);
+      return;
+    }
+    if (player.canPlayType("application/vnd.apple.mpegurl")) {
+      player.src = url;
+      return;
+    }
+    hintEl.textContent = "live playback is not supported in this browser build";
     return;
   }
   if (isHls && window.Hls && window.Hls.isSupported()) {

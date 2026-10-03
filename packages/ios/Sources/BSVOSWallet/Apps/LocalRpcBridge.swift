@@ -221,6 +221,95 @@ public struct LocalRpcBridge: RpcCalling {
             )
             return .object(["txid": .string(sent.txid), "fee": .int(sent.fee)])
 
+        case "castEpisodes":
+            return .object(["episodes": try encode(await wallet.castEpisodes())])
+
+        case "castAdd":
+            let episode = try await wallet.castAdd(
+                title: params["title"]?.stringValue ?? "",
+                feed: params["feed"]?.stringValue,
+                media: params["media"]?.stringValue,
+                live: params["live"] == .bool(true),
+                splits: params["splits"]?.stringValue
+            )
+            return try encode(episode)
+
+        case "castPlay":
+            guard let episode = params["episode"]?.stringValue, !episode.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "episode required")
+            }
+            let session = try await wallet.castPlay(
+                episode: episode,
+                rate: params["rate"]?.intValue ?? 0,
+                every: params["every"]?.stringValue,
+                maxTotal: params["max"]?.intValue ?? 0
+            )
+            var playBody = try encode(session)
+            if case .object(var object) = playBody {
+                object["board"] = .string(CastRules.board)
+                object["approve"] = .string("bsv allow stream <cap sats>")
+                playBody = .object(object)
+            }
+            return playBody
+
+        case "castStop":
+            guard let id = params["id"]?.stringValue, !id.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "id required")
+            }
+            return try encode(await wallet.castStop(id: id))
+
+        case "streamPause":
+            guard let id = params["id"]?.stringValue, !id.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "id required")
+            }
+            return try encode(await wallet.streamPause(id: id))
+
+        case "streamResume":
+            guard let id = params["id"]?.stringValue, !id.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "id required")
+            }
+            return try encode(await wallet.streamResume(id: id))
+
+        case "streamTicks":
+            guard let id = params["id"]?.stringValue, !id.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "id required")
+            }
+            let ticks = try await wallet.streamTicks(id: id, limit: params["limit"]?.intValue ?? 50)
+            return .object(["ticks": try encode(ticks)])
+
+        case "castSetMedia":
+            guard let episode = params["episode"]?.stringValue, !episode.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "episode required")
+            }
+            let updated = try await wallet.castSetMedia(
+                episode: episode, mediaUrl: params["mediaUrl"]?.stringValue ?? ""
+            )
+            return .object(["episode": .string(updated.episode), "mediaUrl": .string(updated.mediaUrl)])
+
+        case "castLiveStart":
+            guard let episode = params["episode"]?.stringValue, !episode.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "episode required")
+            }
+            let started = try await wallet.castLiveStart(episode: episode)
+            var liveBody = try encode(started.live)
+            if case .object(var object) = liveBody {
+                object["playlist"] = .string(started.playlist)
+                liveBody = .object(object)
+            }
+            return liveBody
+
+        case "castLiveStop":
+            guard let id = params["id"]?.stringValue, !id.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "id required")
+            }
+            return try encode(await wallet.castLiveStop(id: id))
+
+        case "castLiveGet":
+            guard let id = params["id"]?.stringValue, !id.isEmpty else {
+                throw WalletError(code: "BAD_PARAM", message: "id required")
+            }
+            return try encode(await wallet.castLiveGet(id: id))
+
         case "unlock", "lock":
             throw WalletError(
                 code: "NOT_ALLOWED",

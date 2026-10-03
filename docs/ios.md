@@ -594,6 +594,22 @@ search is the public Dank Rares read, answered on-device by
 `TwetchMemeLibrary`; posting and vision remain account/desktop features, and
 `twetchStatus` answers honestly that no posting key is imported.
 
+**Cast, on the phone.** The Cast app's RPC and media surface are ported
+rather than proxied. Episodes, sessions and streams live in `CastStore` (a
+JSON document beside the ledger); `castPlay` creates one stream per value
+split with the daemon's math (`CastRules`, vector-pinned), and a foreground
+ticker posts a liveness beat each minute and pays what a fresh beat earns
+through the daemon's own commitment ladder (`Commitment`) and gate —
+`origin: stream`, action `app-spend`, amount including the fee — so a locked
+wallet produces skipped ticks, not silent money. The app's plain-HTTP media
+calls (`/cast/media`, `/cast/live/…`) are answered by the loopback server's
+cast routes (`CastMediaHandler`) writing into the app container: uploads cap
+at 256 MiB, segments at 8 MiB with an mp4/webm init check, playlists are
+generated exactly like the daemon's (windowed while live, ENDLIST after), and
+recordings serve byte ranges for seeking. iPhones do not expose
+`MediaSource`, so the app falls back to native HLS for its own live
+playlists.
+
 ## Physical-device checklist
 
 The simulator proves compilation, `Bundle.module` and the WebKit host. These
@@ -616,10 +632,15 @@ are the items that only a device can prove, in the order worth walking them:
 5. **Camera and microphone.** Cast's preview must raise the system consent
    sheet (not `undefined is not an object`), and the recording flow must
    capture after granting.
-6. **Cellular chain access.** ARC broadcast and WoC reads from a non-Wi-Fi
+6. **Cast end to end.** Record a clip (through the camera path above), upload
+   it, add an episode with splits, play it, and watch stream ticks land in the
+   meter and in the ledger; then go live, watch the episode while broadcasting,
+   and stop — the playlist must end and replay. A recorder that goes silent
+   must be reaped after the silence window.
+7. **Cellular chain access.** ARC broadcast and WoC reads from a non-Wi-Fi
    network; a rejected broadcast must surface `BROADCAST_REJECTED` with the
    node's detail.
-7. **Background behaviour.** Backgrounding with an in-flight transaction and
+8. **Background behaviour.** Backgrounding with an in-flight transaction and
    returning must refresh it (`refreshPendingTransactions`). A
    `BGAppRefreshTask` is deliberately absent until push/APNs is funded.
 
