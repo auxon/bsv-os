@@ -174,7 +174,14 @@ public actor LocalWalletBackend: WalletBackend {
         let key = try keyMaterial()
         let to = recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? key.address : recipient
         _ = try Address.lockingScript(for: to)                     // valid P2PKH or BAD_PARAM
-        let script = try Inscription.script(ownerAddress: to, contentType: contentType, dataHex: dataHex)
+        let script: String
+        do {
+            script = try Inscription.script(ownerAddress: to, contentType: contentType, dataHex: dataHex)
+        } catch Inscription.Error.badContentType {
+            throw WalletError(code: "BAD_PARAM", message: "contentType must be 1-128 printable ASCII chars without spaces")
+        } catch {
+            throw WalletError(code: "BAD_PARAM", message: "dataHex must be hex, 1B-256KB")
+        }
 
         // Funding: plain outputs only. The daemon fetches each candidate's
         // script and skips carriers; so does this.

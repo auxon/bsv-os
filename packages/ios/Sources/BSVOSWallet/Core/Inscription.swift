@@ -17,6 +17,14 @@ public enum Inscription {
         case badContentType
     }
 
+    /// The daemon's `MAX_INSCRIPTION_BYTES` (engine.ts): 256 KB of data.
+    ///
+    /// Known shared limitation: the push encoding for a payload over 65,535
+    /// bytes truncates its length in both implementations identically (neither
+    /// has a PUSHDATA4 branch). The gate is mirrored for parity; the encoding
+    /// is a daemon-side fix before either side should carry a payload that big.
+    public static let maxDataBytes = 256 * 1024
+
     public static func script(ownerAddress: String, contentType: String, dataHex: String) throws -> String {
         // The daemon's rule: 1-128 printable ASCII, no spaces.
         let contentBytes = Array(contentType.utf8)
@@ -30,7 +38,7 @@ public enum Inscription {
         } catch {
             throw Error.badData
         }
-        guard !data.isEmpty else { throw Error.badData }
+        guard !data.isEmpty, data.count <= maxDataBytes else { throw Error.badData }
 
         var out = try Address.lockingScript(for: ownerAddress)
         out += [0x00, 0x63]                       // OP_0 OP_IF

@@ -68,6 +68,15 @@ final class InscriptionTests: XCTestCase {
         XCTAssertTrue(Hex.encode(Array(bytes.dropFirst(prefix.count))).hasPrefix("0063"), "OP_0 OP_IF follows")
     }
 
+    func testTheSizeLimitMatchesTheDaemonsGate() throws {
+        let owner = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
+        XCTAssertEqual(Inscription.maxDataBytes, 256 * 1024)
+        let atLimit = String(repeating: "ab", count: Inscription.maxDataBytes)
+        XCTAssertNoThrow(try Inscription.script(ownerAddress: owner, contentType: "application/octet-stream", dataHex: atLimit))
+        let overLimit = String(repeating: "ab", count: Inscription.maxDataBytes + 1)
+        XCTAssertThrowsError(try Inscription.script(ownerAddress: owner, contentType: "application/octet-stream", dataHex: overLimit))
+    }
+
     func testItRefusesWhatTheDaemonRefuses() throws {
         let owner = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA"
         XCTAssertThrowsError(try Inscription.script(ownerAddress: owner, contentType: "", dataHex: "00"))
