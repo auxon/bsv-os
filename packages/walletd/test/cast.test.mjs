@@ -166,7 +166,10 @@ test("player app bundle: served files, no remote code", async () => {
   // The recorder reports its wall-clock length so the server can repair the
   // file too, and the panel says which pass applied.
   assert.ok(js.includes("x-cast-duration-ms"), "upload reports the reported duration");
-  assert.ok(js.includes('"NOT written"'), "recorder panel shows whether the repair ran");
+  assert.ok(js.includes("inspectMp4"), "recorder panel inspects the recording's boxes");
+  assert.ok(js.includes("platformHandlesDuration"), "the repair only runs when the platform needs it");
+  assert.ok(js.includes("preview duration"), "the panel reports what the player measures");
+  assert.ok(js.includes("no media data"), "an empty recording is called out, not implied successful");
   assert.ok(js.includes("video/mp4;codecs=avc1"), "mime probing prefers spellable mp4 first");
   assert.ok(js.includes("initFacts"), "init sniffing decides kind+container");
   assert.ok(js.includes("bytesHave"), "track bytes are scanned for video codecs");

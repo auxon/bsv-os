@@ -119,5 +119,57 @@
     return String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]) === "ftyp";
   }
 
-  global.CastMp4 = Object.freeze({ fixMp4Duration, looksLikeMp4 });
+  /**
+   * What the recording actually contains, so the recorder panel can state
+   * facts instead of implying success: fragment count, media bytes, and which
+   * duration fields were left at zero. Never throws; unreadable input reports
+   * itself as such.
+   */
+  function inspectMp4(input) {
+    const facts = { readable: false, fragments: 0, mediaBytes: 0, mvhdZero: null, tkhdZero: null, mdhdZero: null, hasMehd: null };
+    try {
+      const source = input instanceof Uint8Array ? input : new Uint8Array(input);
+      const bytes = new Uint8Array(source);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      facts.readable = looksLikeMp4(bytes);
+      if (!facts.readable) return facts;
+      const moov = findBox(bytes, view, 0, bytes.length, "moov");
+      if (moov) {
+        const mvhd = findBox(bytes, view, moov.payloadStart, moov.end, "mvhd");
+        if (mvhd) {
+          const version = bytes[mvhd.start + 8];
+          facts.mvhdZero = (version === 1 ? u64(view, mvhd.start + 32) : u32(view, mvhd.start + 24)) === 0;
+        }
+        for (const box of boxes(bytes, view, moov.payloadStart, moov.end)) {
+          if (box.type === "trak") {
+            const tkhd = findBox(bytes, view, box.payloadStart, box.end, "tkhd");
+            if (tkhd) {
+              const version = bytes[tkhd.start + 8];
+              const zero = (version === 1 ? u64(view, tkhd.start + 36) : u32(view, tkhd.start + 28)) === 0;
+              facts.tkhdZero = facts.tkhdZero === null ? zero : facts.tkhdZero && zero;
+            }
+            const mdia = findBox(bytes, view, box.payloadStart, box.end, "mdia");
+            const mdhd = mdia ? findBox(bytes, view, mdia.payloadStart, mdia.end, "mdhd") : null;
+            if (mdhd) {
+              const version = bytes[mdhd.start + 8];
+              const zero = (version === 1 ? u64(view, mdhd.start + 32) : u32(view, mdhd.start + 24)) === 0;
+              facts.mdhdZero = facts.mdhdZero === null ? zero : facts.mdhdZero && zero;
+            }
+          }
+          if (box.type === "mvex") {
+            facts.hasMehd = !!findBox(bytes, view, box.payloadStart, box.end, "mehd");
+          }
+        }
+      }
+      for (const box of boxes(bytes, view, 0, bytes.length)) {
+        if (box.type === "moof") facts.fragments += 1;
+        if (box.type === "mdat") facts.mediaBytes += box.end - box.payloadStart;
+      }
+      return facts;
+    } catch {
+      return facts;
+    }
+  }
+
+  global.CastMp4 = Object.freeze({ fixMp4Duration, looksLikeMp4, inspectMp4 });
 })(typeof window !== "undefined" ? window : globalThis);

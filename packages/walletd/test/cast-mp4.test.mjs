@@ -49,6 +49,28 @@ test("a file that already has a duration is left alone", () => {
   assert.deepEqual(Array.from(fixed), Array.from(original), "not a byte changes");
 });
 
+test("inspection reports the boxes the recorder panel shows", () => {
+  const { inspectMp4 } = helperContext.CastMp4;
+  const zero = inspectMp4(sampleFile());
+  assert.equal(zero.readable, true);
+  assert.equal(zero.fragments, 1);
+  assert.ok(zero.mediaBytes >= 16, "the mdat body counts");
+  assert.equal(zero.mvhdZero, true);
+  assert.equal(zero.tkhdZero, true);
+  assert.equal(zero.mdhdZero, true);
+  assert.equal(zero.hasMehd, true, "the synthetic layout includes mehd");
+
+  const dated = inspectMp4(sampleFile({ movieDuration: 3_000, trackDuration: 3_000, mediaDuration: 240_000, fragmentDuration: 3_000 }));
+  assert.equal(dated.mvhdZero, false);
+  assert.equal(dated.tkhdZero, false);
+  assert.equal(dated.mdhdZero, false);
+
+  const noMoov = inspectMp4(sampleFile({ withMoov: false }));
+  assert.equal(noMoov.fragments, 1);
+  assert.equal(noMoov.mvhdZero, null, "nothing to read, nothing claimed");
+  assert.equal(inspectMp4(new Uint8Array([1, 2, 3])).readable, false);
+});
+
 test("nonsense input is returned unchanged", () => {
   const noMoov = sampleFile({ withMoov: false });
   assert.deepEqual(Array.from(fixMp4Duration(noMoov, 5_000)), Array.from(noMoov));

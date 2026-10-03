@@ -608,13 +608,17 @@ at 256 MiB, segments at 8 MiB with an mp4/webm init check, playlists are
 generated exactly like the daemon's (windowed while live, ENDLIST after), and
 recordings serve byte ranges for seeking. iPhones do not expose
 `MediaSource`, so the app falls back to native HLS for its own live
-playlists. Recordings also get their fragmented-MP4 duration fields repaired
-in the browser before preview and upload — and again by the server on upload,
-using the wall-clock length the recorder reports — because MediaRecorder
-writes zero durations (WebKit 216832) and players show exactly the reported
-0:00 / no-playback symptom until that length is filled in. The recorder panel
-states the mime and whether each repair pass ran, so a device that behaves
-differently is diagnosable in one glance.
+playlists. Recordings also get their fragmented-MP4 duration fields repaired — but only
+when the platform cannot read a duration from the fragments itself. MediaRecorder
+writes zero durations (WebKit 216832); Safari 26 derives the real length from
+the fragment chain and adding one to the header doubles the timeline, while
+older/iOS stacks show the reported 0:00 until the boxes carry it. So the page
+probes the raw blob, patches only when the player reports no duration, and
+sends the wall-clock length for the server to apply the same repair on upload
+only in that case. The recorder panel states the mime, the box facts
+(fragments, media bytes, which duration fields were zero) and what the player
+measured (duration, error, playing), so a device that behaves differently is
+diagnosable in one glance.
 
 ## Physical-device checklist
 

@@ -50,6 +50,31 @@ function policyHint(err) {
     : (err instanceof Error ? err.message : String(err));
 }
 
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** What this platform makes of the raw recording's duration. */
+function platformHandlesDuration(blob) {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.preload = "metadata";
+    v.src = URL.createObjectURL(blob);
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    v.addEventListener("loadedmetadata", () => settle(Number.isFinite(v.duration) && v.duration > 0), { once: true });
+    v.addEventListener("error", () => settle(false), { once: true });
+    setTimeout(() => settle(false), 1200);
+  });
+}
+
 function setStatus(text, cls = "") {
   statusEl.textContent = text;
   statusEl.className = `status ${cls}`;
@@ -587,6 +612,7 @@ const rec = {
   blobUrl: "",
   uploadedUrl: "",
   durationMs: 0,
+  patchedDuration: false,
   liveId: null,
   liveEpisode: null,
   liveCount: 0,
@@ -768,8 +794,9 @@ function recStart(live) {
       // the wall-clock length, so fill it in before preview, download, upload.
       // The upload also reports it, so the server can repair the file if this
       // pass was skipped. The panel says which of the two applied.
-      const finish = (blob, patched) => {
+      const finish = (blob, note) => {
         rec.blob = blob;
+        rec.patchedDuration = Boolean(note.patched);
         if (rec.blobUrl) URL.revokeObjectURL(rec.blobUrl);
         rec.blobUrl = URL.createObjectURL(blob);
         const pb = $("r-playback");
@@ -780,19 +807,63 @@ function recStart(live) {
         const mb = (blob.size / (1024 * 1024)).toFixed(1);
         const st = $("r-up-status");
         st.className = "status";
-        st.textContent = `recorded ${mb} MB · ${rec.mime} · duration ${patched ? "written" : "NOT written"}`;
+        st.textContent = `recorded ${mb} MB · ${rec.mime} · ${note.text}`;
+        const diagEl = $("r-diag");
+        const facts = note.facts;
+        diagEl.textContent = facts
+          ? `Diagnostics: fragments ${facts.fragments} · media ${(facts.mediaBytes / (1024 * 1024)).toFixed(1)} MB · ` +
+            `mvhd ${facts.mvhdZero === null ? "?" : facts.mvhdZero ? "0" : "set"} · ` +
+            `tkhd ${facts.tkhdZero === null ? "?" : facts.tkhdZero ? "0" : "set"} · ` +
+            `mdhd ${facts.mdhdZero === null ? "?" : facts.mdhdZero ? "0" : "set"} · mehd ${facts.hasMehd ? "yes" : "no"}`
+          : "";
         $("r-done").classList.remove("hidden");
+        // Watch what the player makes of it, so a bad file is visible here.
+        pb.addEventListener("error", () => {
+          diagEl.textContent += ` · preview error ${pb.error ? pb.error.code : "?"}`;
+        }, { once: true });
+        pb.addEventListener("loadedmetadata", () => {
+          const d = Number.isFinite(pb.duration) ? pb.duration.toFixed(2) : String(pb.duration);
+          diagEl.textContent += ` · preview duration ${d}s`;
+        }, { once: true });
+        pb.addEventListener("playing", () => {
+          diagEl.textContent += " · playing";
+        }, { once: true });
       };
-      const fix = window.CastMp4 && window.CastMp4.fixMp4Duration;
-      if (rec.mime.includes("mp4") && fix) {
+      const castMp4 = window.CastMp4 || null;
+      if (rec.mime.includes("mp4") && castMp4) {
         try {
           const buf = await raw.arrayBuffer();
-          finish(new Blob([fix(buf, durationMs)], { type: rec.mime }), true);
-        } catch {
-          finish(raw, false);
+          const facts = castMp4.inspectMp4(buf);
+          if (facts.fragments === 0) {
+            finish(raw, { text: "no media data — check the camera", patched: false, facts });
+          } else if (facts.mvhdZero || facts.tkhdZero || facts.mdhdZero) {
+            // Patch only when this platform cannot read a duration from the
+            // fragments: Safari 26 derives it and adding one doubles the
+            // timeline; older/iOS stacks show 0:00 until the boxes carry it.
+            const platformOk = await platformHandlesDuration(raw);
+            if (platformOk) {
+              finish(raw, { text: "duration already available", patched: false, facts });
+            } else {
+              const fixed = castMp4.fixMp4Duration(buf, durationMs);
+              const changed = !sameBytes(new Uint8Array(buf), fixed);
+              finish(new Blob([fixed], { type: rec.mime }), {
+                text: changed ? "duration written" : "duration left unchanged",
+                patched: changed,
+                facts,
+              });
+            }
+          } else {
+            finish(raw, { text: "duration already present", patched: false, facts });
+          }
+        } catch (e) {
+          finish(raw, { text: `duration repair failed: ${e}`, patched: false, facts: null });
         }
       } else {
-        finish(raw, false);
+        finish(raw, {
+          text: rec.mime.includes("mp4") ? "duration helper missing (stale bundle?)" : "not mp4 — no repair",
+          patched: false,
+          facts: null,
+        });
       }
     }
     clearInterval(rec.clockTimer);
@@ -830,7 +901,7 @@ $("r-upload").addEventListener("click", async () => {
       method: "POST",
       headers: {
         "content-type": rec.blob.type || "video/webm",
-        ...(rec.durationMs ? { "x-cast-duration-ms": String(rec.durationMs) } : {}),
+        ...(rec.patchedDuration && rec.durationMs ? { "x-cast-duration-ms": String(rec.durationMs) } : {}),
       },
       body: rec.blob,
     });
