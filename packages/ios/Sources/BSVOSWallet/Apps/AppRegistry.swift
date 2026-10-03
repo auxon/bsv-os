@@ -190,7 +190,7 @@ public struct LocalAppRegistry: AppRegistry {
             startUrl: validated.startUrl,
             icon: validated.icon,
             spendCapSats: existing?.spendCapSats ?? validated.spendCapSats,
-            manifestSha256: Self.sha256Hex(body),
+            manifestSha256: AppManifestValidator.manifestSha256(manifest),
             intents: validated.intents
         )
         try await store.save(app)
@@ -218,14 +218,6 @@ public struct LocalAppRegistry: AppRegistry {
             throw AppRegistryError.badDomain
         }
         return clean
-    }
-
-    /// The raw-body hash. The daemon hashes a canonical re-serialisation
-    /// (`stableStringify`); this differs if key order ever changes between two
-    /// fetches of the same bytes. It is a change detector, and both are honest
-    /// detectors — worth reconciling only if the value ever leaves the phone.
-    static func sha256Hex(_ data: Data) -> String {
-        Hex.encode(Array(SHA256.hash(data: data)))
     }
 }
 
@@ -327,6 +319,68 @@ public enum AppManifestValidator {
             intents.append(DeclaredIntent(action: action, label: label, description: description, typicalSats: typicalSats))
         }
         return intents
+    }
+
+    // MARK: - canonical manifest hashing
+
+    /// The daemon's `manifestSha256` (apps.ts): SHA-256 over the canonical
+    /// re-serialization of the parsed manifest, not over the raw body.
+    ///
+    /// The two hosts must compute the same value for the same manifest. The
+    /// phone stores it beside an installed app; the daemon stores its own in
+    /// `apps.manifest_sha256`, and a formatting difference between two servers
+    /// must not look like a changed manifest.
+    public static func manifestSha256(_ manifest: Any) -> String {
+        Hex.encode(Array(SHA256.hash(data: Data(stableStringify(manifest).utf8))))
+    }
+
+    /// The daemon's `stableStringify`: keys sorted by UTF-16 code unit (JS
+    /// string order), arrays in order, and the escaping `JSON.stringify` uses.
+    public static func stableStringify(_ value: Any) -> String {
+        if value is NSNull { return "null" }
+        if let dictionary = value as? [String: Any] {
+            let entries = dictionary.keys
+                .sorted { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+                .map { "\(jsonString($0)):\(stableStringify(dictionary[$0]!))" }
+            return "{" + entries.joined(separator: ",") + "}"
+        }
+        if let array = value as? [Any] {
+            return "[" + array.map(stableStringify).joined(separator: ",") + "]"
+        }
+        if let string = value as? String { return jsonString(string) }
+        if let number = value as? NSNumber {
+            // JSONSerialization hands booleans back as NSNumbers whose
+            // objCType is 'c' — the same trick every JSON bridge needs.
+            if String(cString: number.objCType) == "c" {
+                return number.boolValue ? "true" : "false"
+            }
+            let double = number.doubleValue
+            if double.rounded() == double, abs(double) < 9_007_199_254_740_992 {
+                return String(Int64(double))
+            }
+            return String(double)
+        }
+        return "null"
+    }
+
+    /// `JSON.stringify` for one string: quotes, backslashes and control
+    /// characters are escaped; `/` and non-ASCII stay raw.
+    static func jsonString(_ value: String) -> String {
+        var out = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case let other where other.value < 0x20:
+                out += String(format: "\\u%04x", other.value)
+            default:
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out + "\""
     }
 }
 

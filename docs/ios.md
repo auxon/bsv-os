@@ -562,6 +562,43 @@ phone, and a test asserts the shim contains no `Bearer`, no `Authorization`, no
 The shim also carries `window.bsv` unchanged, so a bundled app that uses the
 bridge and one that uses same-origin RPC both work in the same host.
 
+**Standalone.** When the assets ride in the bundle there is no daemon to
+forward to, so the shim is answered in-process by `LocalRpcBridge`. It covers
+the wallet-core methods the shell actually loads — status/balance/address QR,
+history and pending in the daemon's field names, the policy list/approve/deny
+queue, `ordList` (a chain scan using the same envelope-or-ORDFS rule the lock
+paths use) and a local `doctor` — each still policy-gated under the app's own
+origin. Three families refuse by name instead of half-working: the session lock
+(the app owns it, so a page cannot open the wallet), `sweepOut` (terminal-only
+by design) and app management (the Apps tab owns the registry on this device).
+Everything else the desktop shell calls answers `NOT_ALLOWED`, which the shell
+renders as a plain-language error.
+
+## Physical-device checklist
+
+The simulator proves compilation, `Bundle.module` and the WebKit host. These
+are the items that only a device can prove, in the order worth walking them:
+
+1. **Keychain at rest.** Create a wallet, force-quit, reopen: the phrase must
+   load with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and must not
+   migrate through a keychain restore onto another device.
+2. **The biometric gate.** A spend and a policy approval must each prompt once
+   (`.authenticationRequired`); a cancelled prompt must not spend. Notification
+   actions must not prompt a second time.
+3. **File-backed stores.** `FileLedgerStore`, `FilePolicyStore` and
+   `FileAppRegistryStore` must survive a restart in the app container, and a
+   fresh install must fall back to the in-memory stores without crashing.
+4. **The bundled apps.** With `scripts/sync-apps.mjs` run before the build,
+   the Apps tab must list the synced names, open each from `loadFileURL`, and
+   the shell's Money view must show balance and history through
+   `LocalRpcBridge`.
+5. **Cellular chain access.** ARC broadcast and WoC reads from a non-Wi-Fi
+   network; a rejected broadcast must surface `BROADCAST_REJECTED` with the
+   node's detail.
+6. **Background behaviour.** Backgrounding with an in-flight transaction and
+   returning must refresh it (`refreshPendingTransactions`). A
+   `BGAppRefreshTask` is deliberately absent until push/APNs is funded.
+
 ## Open questions
 
 1. **Where does the iOS code live?** A new repo (`auxon/bsv-os-ios`) keeps a

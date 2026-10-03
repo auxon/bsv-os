@@ -71,3 +71,85 @@ test("the vectors include the branches that matter", () => {
   assert.ok(vectors.some((v) => v.opReturn !== null), "an OP_RETURN output");
   assert.ok(vectors.some((v) => v.utxos.length >= 12), "a candidate set larger than the spend");
 });
+
+// P1's half of the same claim. The ordlock vectors compare byte for byte in
+// Swift; here the daemon's interpreter runs the real scripts those bytes are
+// for. Three of them are more than P2PKH: the carrier output's script is an ord
+// envelope, and the cancel and purchase inputs execute the OrdLock covenant
+// itself — the cancel path with a signature + OP_1, the purchase path with the
+// preimage the phone built. If the preimage were wrong, the covenant would take
+// a different branch or push false, and this test would fail even though the
+// bytes matched some other reference.
+const ordlock = JSON.parse(readFileSync(new URL("./vectors/ordlock-vectors.json", import.meta.url), "utf8"));
+
+test("the daemon's interpreter accepts the envelope and covenant spends", () => {
+  const cases = [
+    {
+      name: "lock",
+      txHex: ordlock.lock.signedHex,
+      sources: [
+        { scriptHex: ordlock.lock.carrier.scriptHex, value: 1 },
+        { scriptHex: ordlock.lock.funding.scriptHex, value: ordlock.lock.funding.value },
+      ],
+    },
+    {
+      name: "cancel",
+      txHex: ordlock.cancel.signedHex,
+      sources: [
+        { scriptHex: ordlock.cancel.lockScriptHex, value: 1 },
+        { scriptHex: ordlock.cancel.funding.scriptHex, value: ordlock.cancel.funding.value },
+      ],
+    },
+    {
+      name: "buy",
+      txHex: ordlock.buy.signedHex,
+      sources: [
+        { scriptHex: ordlock.buy.lockScriptHex, value: 1 },
+        { scriptHex: ordlock.buy.funding.scriptHex, value: ordlock.buy.funding.value },
+      ],
+    },
+    {
+      name: "complete",
+      txHex: ordlock.complete.signedHex,
+      sources: [
+        { scriptHex: ordlock.offer.inputs[0].scriptHex, value: 1 },
+        { scriptHex: ordlock.offer.inputs[1].scriptHex, value: 1 },
+        { scriptHex: ordlock.complete.funding.scriptHex, value: ordlock.complete.funding.value },
+      ],
+    },
+  ];
+
+  for (const c of cases) {
+    const tx = Transaction.fromHex(c.txHex);
+    assert.equal(tx.inputs.length, c.sources.length, `${c.name}: every input has a source`);
+    for (let index = 0; index < tx.inputs.length; index++) {
+      const input = tx.inputs[index];
+      const source = c.sources[index];
+      const valid = new Spend({
+        sourceTXID: input.sourceTXID,
+        sourceOutputIndex: input.sourceOutputIndex,
+        lockingScript: Script.fromHex(source.scriptHex),
+        sourceSatoshis: source.value,
+        transactionVersion: tx.version,
+        otherInputs: [],
+        allInputs: tx.inputs,
+        unlockingScript: input.unlockingScript,
+        inputSequence: input.sequence ?? 0xffffffff,
+        inputIndex: index,
+        outputs: tx.outputs,
+        lockTime: tx.lockTime,
+      }).validateJavaScript();
+      assert.equal(valid, true, `${c.name} input ${index} is accepted`);
+    }
+  }
+
+  // The carrier really is an envelope (not plain dust) and the lock cases
+  // share one covenant script, so the acceptance above is about the template.
+  assert.ok(ordlock.lock.carrier.scriptHex.includes("0063036f7264"), "the carrier carries an ord envelope");
+  assert.equal(ordlock.lock.lockScriptHex, ordlock.cancel.lockScriptHex);
+  assert.equal(ordlock.buy.lockScriptHex, ordlock.cancel.lockScriptHex);
+  // The purchase input pushes no signature: it is the preimage the covenant
+  // checks. A DER signature would start with 0x30.
+  const buyTx = Transaction.fromHex(ordlock.buy.signedHex);
+  assert.notEqual(buyTx.inputs[0].unlockingScript.chunks[0].data[0], 0x30, "purchase unlock is not a signature");
+});

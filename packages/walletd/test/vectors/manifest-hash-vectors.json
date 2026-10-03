@@ -1,0 +1,32 @@
+[
+  {
+    "name": "minimal",
+    "manifestJson": "{\"name\":\"Meme Studio\",\"startUrl\":\"https://memestudio.example/\",\"intents\":[]}",
+    "stable": "{\"intents\":[],\"name\":\"Meme Studio\",\"startUrl\":\"https://memestudio.example/\"}",
+    "sha256": "858d6ec7d728d3adc542f62f3275f95cd1f7b8bcb621fca37f5bd19b07283a3b"
+  },
+  {
+    "name": "keys must sort",
+    "manifestJson": "{\"zeta\":1,\"alpha\":2,\"middle\":{\"b\":true,\"a\":null}}",
+    "stable": "{\"alpha\":2,\"middle\":{\"a\":null,\"b\":true},\"zeta\":1}",
+    "sha256": "214d0206363e02fa57ef061529f51cf5b312ff43e6fcd1abcfa7180486b099ff"
+  },
+  {
+    "name": "numbers, booleans, null",
+    "manifestJson": "{\"int\":25,\"float\":1.5,\"big\":1000000,\"yes\":true,\"no\":false,\"nothing\":null}",
+    "stable": "{\"big\":1000000,\"float\":1.5,\"int\":25,\"no\":false,\"nothing\":null,\"yes\":true}",
+    "sha256": "94b3cf4daf0c951565696c70ac761c01c3e2ab67540c716390df0bd38f3ffe31"
+  },
+  {
+    "name": "unicode, quotes and slashes",
+    "manifestJson": "{\"name\":\"Café ☕\",\"url\":\"https://example.com/a/b?c=d&e=f\",\"quote\":\"say \\\"hi\\\"\",\"newline\":\"a\\nb\"}",
+    "stable": "{\"name\":\"Café ☕\",\"newline\":\"a\\nb\",\"quote\":\"say \\\"hi\\\"\",\"url\":\"https://example.com/a/b?c=d&e=f\"}",
+    "sha256": "3a13d64d7c054c73887016b9cf1ef9f0c635e059b52f00598166afde6aa18341"
+  },
+  {
+    "name": "arrays keep order, objects do not",
+    "manifestJson": "{\"items\":[1,\"two\",false,null,{\"k\":\"v\"}],\"empty\":[],\"obj\":{},\"nested\":[{\"z\":1,\"a\":2}]}",
+    "stable": "{\"empty\":[],\"items\":[1,\"two\",false,null,{\"k\":\"v\"}],\"nested\":[{\"a\":2,\"z\":1}],\"obj\":{}}",
+    "sha256": "2acc0162268b6713c15cefcec66f34e568400cc9a0a5525f6836719679fbc35f"
+  }
+]
