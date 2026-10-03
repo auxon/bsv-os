@@ -335,9 +335,21 @@ public enum AppManifestValidator {
 public struct AppsContext: Sendable {
     public let registry: any AppRegistry
     public let makeBridge: @Sendable (InstalledApp) -> AppBridge
+    /// Names of the apps that ride in the bundle, served without a daemon.
+    public let bundledApps: [String]
+    /// Builds a host for one bundled app. Nil when this launch has none —
+    /// the daemon serves the stock apps instead.
+    public let makeBundledHost: (@MainActor (String) -> BundledAppHost)?
 
-    public init(registry: any AppRegistry, makeBridge: @escaping @Sendable (InstalledApp) -> AppBridge) {
+    public init(
+        registry: any AppRegistry,
+        bundledApps: [String] = [],
+        makeBundledHost: (@MainActor (String) -> BundledAppHost)? = nil,
+        makeBridge: @escaping @Sendable (InstalledApp) -> AppBridge
+    ) {
         self.registry = registry
+        self.bundledApps = bundledApps
+        self.makeBundledHost = makeBundledHost
         self.makeBridge = makeBridge
     }
 }

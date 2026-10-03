@@ -60,6 +60,23 @@ public struct AppsView: View {
                 }
             }
 
+            if let makeHost = context.makeBundledHost, !context.bundledApps.isEmpty {
+                #if canImport(UIKit)
+                Section {
+                    ForEach(context.bundledApps, id: \.self) { name in
+                        NavigationLink(name) {
+                            BundledAppScreen(host: makeHost(name))
+                        }
+                    }
+                } header: {
+                    Text("Included apps")
+                } footer: {
+                    Text("These ride in the app and run without a server. Their spends still need approval.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                #endif
+            }
+
             Section("Install") {
                 TextField("example.com", text: $installDomain)
                     .autocorrectionDisabled()

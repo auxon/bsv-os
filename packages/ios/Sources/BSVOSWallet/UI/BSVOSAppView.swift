@@ -138,9 +138,29 @@ public struct BSVOSAppView: View {
         let registryStore: any AppRegistryStore = (try? FileAppRegistryStore(url: FileAppRegistryStore.defaultURL()))
             ?? InMemoryAppRegistryStore()
         let registry = LocalAppRegistry(store: registryStore, transport: URLSessionTransport(), policy: policy)
+        let assets = DirectoryAppAssetSource()
+        var bundledApps: [String] = []
+        var hostFactory: (@MainActor (String) -> BundledAppHost)? = nil
+        if let assets {
+            bundledApps = assets.appNames()
+            hostFactory = { name in
+                BundledAppHost(
+                    app: name,
+                    title: name.capitalized,
+                    baseURL: baseURL,
+                    credential: DeviceCredential(deviceID: "local", token: ""),
+                    rpc: LocalRpcBridge(origin: name, wallet: backend, chain: chain),
+                    assetRoot: assets.root
+                )
+            }
+        }
         return StandaloneStack(
             backend: backend,
-            apps: AppsContext(registry: registry) { app in
+            apps: AppsContext(
+                registry: registry,
+                bundledApps: bundledApps,
+                makeBundledHost: hostFactory
+            ) { app in
                 AppBridge(app: app, backend: LocalAppBridgeBackend(wallet: backend, chain: chain))
             }
         )

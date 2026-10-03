@@ -190,6 +190,38 @@ public final class BundledAppHost: NSObject, ObservableObject {
     private nonisolated static var appHostShim: String { AppHostController.injectedScript }
 }
 
+#if canImport(UIKit)
+import SwiftUI
+
+/// One bundled app, opened from the Apps list.
+public struct BundledAppScreen: View {
+    @StateObject private var host: BundledAppHost
+
+    public init(host: BundledAppHost) {
+        _host = StateObject(wrappedValue: host)
+    }
+
+    public var body: some View {
+        BundledWebContainer(host: host)
+            .navigationTitle(host.title)
+            .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct BundledWebContainer: UIViewRepresentable {
+    let host: BundledAppHost
+
+    // SwiftUI calls these on the main thread; `assumeIsolated` tells the
+    // compiler what the framework guarantees, since the protocol witness is
+    // not annotated and the host is main-actor bound.
+    nonisolated func makeUIView(context: Context) -> WKWebView {
+        MainActor.assumeIsolated { host.makeWebView() }
+    }
+
+    nonisolated func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
+#endif
+
 /// Forwards RPC calls to the daemon's authenticated device surface.
 ///
 /// The allowlist check happens here, natively, before anything is sent: a
