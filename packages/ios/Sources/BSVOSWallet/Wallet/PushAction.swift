@@ -1,4 +1,58 @@
 import Foundation
+/// Carries "push is not working, and why" from the app delegate to the UI.
+///
+/// A tiny observable box rather than a global: the delegate is not part of the
+/// SwiftUI tree, so it cannot pass a binding, and the note has to reach the
+/// approvals screen from there. Annotated to the main actor because both ends
+/// are, and a shared instance because an app has exactly one push status.
+@MainActor
+public final class PushStatusBox: ObservableObject {
+    /// Nil when push is working (or not yet known). Non-nil is shown to the user.
+    @Published public private(set) var note: String?
+
+    public init(note: String? = nil) {
+        self.note = note
+    }
+
+    public func set(_ note: String?) {
+        self.note = note
+    }
+}
+
+/// What the app tells the user when push is not working.
+///
+/// This matters more than it looks: with push off, an approval only appears when
+/// the app is opened, so a spend request can sit unseen. Saying so is the
+/// difference between "nothing needs me" and "I would not be told".
+///
+/// Copy lives here, in the package, so it can be tested rather than buried in a
+/// delegate.
+public enum PushCopy {
+    public static let denied =
+        "Notifications are off, so approvals only appear when you open the app."
+    public static let noEntitlement =
+        "This build cannot receive push (no push entitlement), so approvals only appear when you open the app."
+    public static let notRegistered =
+        "Push is not registered yet, so approvals only appear when you open the app."
+
+    /// Turn an APNs registration failure into something a person can act on.
+    ///
+    /// The no-entitlement case is the common one and has a specific cause worth
+    /// naming: a personal (free) Apple development team cannot use the Push
+    /// Notifications capability, so the app is built without it and APNs refuses
+    /// the registration.
+    public static func forRegistrationFailure(_ message: String) -> String {
+        let lowered = message.lowercased()
+        if lowered.contains("entitlement") || lowered.contains("aps-environment") {
+            return noEntitlement
+        }
+        if lowered.contains("no valid") || lowered.contains("not supported") {
+            return noEntitlement
+        }
+        return "Push could not be registered (\(message)), so approvals only appear when you open the app."
+    }
+}
+
 #if canImport(UserNotifications)
 import UserNotifications
 #endif

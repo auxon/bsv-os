@@ -13,15 +13,21 @@ public struct BSVOSAppView: View {
 
     @State private var credential: DeviceCredential?
     @State private var checking = true
+    /// Set when push is unavailable, so the approvals screen can say so.
+    @State private var pushNote: String?
+
+    private let pushStatus: PushStatusBox?
 
     public init(
         baseURL: URL,
         store: CredentialStore = KeychainCredentialStore(),
-        biometrics: BiometricGate = LocalAuthenticationGate()
+        biometrics: BiometricGate = LocalAuthenticationGate(),
+        pushStatus: PushStatusBox? = nil
     ) {
         self.baseURL = baseURL
         self.store = store
         self.biometrics = biometrics
+        self.pushStatus = pushStatus
     }
 
     public var body: some View {
@@ -29,10 +35,18 @@ public struct BSVOSAppView: View {
             if checking {
                 ProgressView().task { load() }
             } else if let credential {
-                RootView(session: WalletSession(
-                    backend: DeviceWalletBackend(baseURL: baseURL, credential: credential),
-                    biometrics: biometrics
-                ))
+                RootView(
+                    session: WalletSession(
+                        backend: DeviceWalletBackend(baseURL: baseURL, credential: credential),
+                        biometrics: biometrics
+                    ),
+                    pushNote: pushNote ?? pushStatus?.note
+                )
+                .task {
+                    // Asked for only once paired: a notification permission
+                    // prompt before there is anything to notify about is noise.
+                    await requestPushIfNeeded()
+                }
             } else {
                 PairingView(baseURL: baseURL, store: store) { paired in
                     credential = paired
@@ -44,6 +58,24 @@ public struct BSVOSAppView: View {
     private func load() {
         credential = try? store.load()
         checking = false
+    }
+
+    private func requestPushIfNeeded() async {
+        #if canImport(UserNotifications)
+        guard credential != nil else { return }
+        let registrar = PushRegistrar()
+        await registrar.requestAuthorization()
+        switch registrar.state {
+        case .denied:
+            pushNote = PushCopy.denied
+        case .failed(let why):
+            pushNote = PushCopy.forRegistrationFailure(why)
+        default:
+            // Registered, or still waiting on APNs. The delegate reports a
+            // registration failure through PushStatusBox when it arrives.
+            pushNote = pushStatus?.note
+        }
+        #endif
     }
 }
 

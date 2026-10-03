@@ -4,6 +4,12 @@ import SwiftUI
 /// is worth having — a spend request arrives while you are away from the desk.
 public struct ApprovalsView: View {
     let session: WalletSession
+    let pushNote: String?
+
+    public init(session: WalletSession, pushNote: String? = nil) {
+        self.session = session
+        self.pushNote = pushNote
+    }
 
     public var body: some View {
         List {
@@ -16,6 +22,15 @@ public struct ApprovalsView: View {
             }
             if let notice = session.notice {
                 NoticeBanner(text: notice) { session.clearNotice() }
+            }
+            if let pushNote {
+                // Not an error: the wallet works, it just cannot tell you while
+                // you are away. Worded so it reads as a limitation, not a fault.
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "bell.slash").foregroundStyle(.secondary)
+                    Text(pushNote).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
             }
 
             if session.pending.isEmpty {

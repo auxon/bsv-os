@@ -82,6 +82,40 @@ final class PushActionTests: XCTestCase {
         }
     }
 
+    /// With push off, an approval only appears when the app is opened — so the
+    /// app has to say so. Getting this wrong is the difference between "nothing
+    /// needs me" and "I would not be told".
+    func testPushCopyNamesTheRealCauseAndSaysWhatItCosts() {
+        // The common cause, and the one this user hit: a personal (free) Apple
+        // team cannot use the Push Notifications capability, so the build has no
+        // entitlement and APNs refuses.
+        let entitlement = PushCopy.forRegistrationFailure(
+            "no valid 'aps-environment' entitlement string found for application"
+        )
+        XCTAssertEqual(entitlement, PushCopy.noEntitlement)
+        XCTAssertTrue(entitlement.contains("entitlement"))
+        XCTAssertTrue(entitlement.contains("only appear when you open the app"), "says what it costs")
+
+        // An unrecognised failure still explains the consequence.
+        let other = PushCopy.forRegistrationFailure("network unreachable")
+        XCTAssertTrue(other.contains("network unreachable"), "the reason is preserved")
+        XCTAssertTrue(other.contains("only appear when you open the app"))
+
+        // Every message must name the consequence, not just the cause.
+        for copy in [PushCopy.denied, PushCopy.noEntitlement, PushCopy.notRegistered, other] {
+            XCTAssertTrue(copy.contains("open the app"), "each says when approvals will be seen: \(copy)")
+        }
+    }
+
+    func testTheStatusBoxCarriesTheNoteToTheUI() {
+        let box = PushStatusBox()
+        XCTAssertNil(box.note, "nil means push is fine, so nothing is shown")
+        box.set(PushCopy.denied)
+        XCTAssertEqual(box.note, PushCopy.denied)
+        box.set(nil)
+        XCTAssertNil(box.note, "and it clears once registration succeeds")
+    }
+
     func testTheCategoryAndActionIdentifiersMatchTheDaemon() {
         // The daemon sets aps.category to this string; the app registers the
         // same one, or the lock screen would show no buttons at all.

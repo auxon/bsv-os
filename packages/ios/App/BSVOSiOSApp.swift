@@ -8,6 +8,11 @@ import BSVOSWallet
 ///
 /// It deliberately holds no wallet logic: the package is where the tested code
 /// is, and a thinner shell is less to get wrong.
+/// One push status for the app; the delegate writes it, the approvals screen
+/// reads it. Shared because an app has exactly one.
+@MainActor
+let appPushStatus = PushStatusBox()
+
 @main
 struct BSVOSiOSApp: App {
     // The delegate is needed for two things SwiftUI cannot do: receiving the
@@ -17,7 +22,7 @@ struct BSVOSiOSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            BSVOSAppView(baseURL: AppConfig.daemonURL)
+            BSVOSAppView(baseURL: AppConfig.daemonURL, pushStatus: appPushStatus)
         }
     }
 }
@@ -68,12 +73,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUser
         }
         Task {
             await PushRegistrar().sendTokenToDaemon(deviceToken, baseURL: AppConfig.daemonURL, credential: credential)
+            // Registered: nothing to warn the user about.
+            appPushStatus.set(nil)
         }
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        // Not fatal: the wallet works without push, and a simulator has no APNs.
+        // Not fatal: the wallet works without push. But it is not nothing
+        // either — with push off, an approval only appears when the app is
+        // opened — so the reason reaches the approvals screen rather than only
+        // the log. The common cause is a build without the push entitlement,
+        // which is the default here because a personal (free) Apple development
+        // team cannot use the Push Notifications capability.
         NSLog("bsvOS: APNs registration failed — \(error.localizedDescription)")
+        appPushStatus.set(PushCopy.forRegistrationFailure(error.localizedDescription))
     }
 
     // MARK: - Notification actions

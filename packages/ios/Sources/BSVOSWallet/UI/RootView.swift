@@ -9,15 +9,19 @@ import SwiftUI
 /// of rewriting it in SwiftUI.
 public struct RootView: View {
     @State private var session: WalletSession
+    /// Shown on Approvals when push is not working, because an unseen approval
+    /// is the failure mode that matters.
+    private let pushNote: String?
 
-    public init(session: WalletSession) {
+    public init(session: WalletSession, pushNote: String? = nil) {
         _session = State(initialValue: session)
+        self.pushNote = pushNote
     }
 
     public var body: some View {
         TabView {
             NavigationStack {
-                ApprovalsView(session: session)
+                ApprovalsView(session: session, pushNote: pushNote)
             }
             .tabItem { Label("Approvals", systemImage: "checkmark.shield") }
             .badge(session.pending.count)
