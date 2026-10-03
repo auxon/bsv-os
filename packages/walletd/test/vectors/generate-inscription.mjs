@@ -5,7 +5,8 @@
 // encoding at the 75/255 byte boundaries, which is exactly where a hand-written
 // port goes wrong.
 import { writeFileSync } from "node:fs";
-import { inscriptionScript } from "../../src/tokens.ts";
+import { hasOrdEnvelope, inscriptionScript } from "../../src/tokens.ts";
+import { p2pkhScript } from "../../src/tx.ts";
 
 const OWNER = "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA";
 
@@ -26,9 +27,40 @@ const vectors = cases.map((testCase) => ({
   scriptHex: inscriptionScript(OWNER, testCase.contentType, testCase.dataHex),
 }));
 
+// The carrier check the funding selector uses. Its own edge cases: a plain
+// P2PKH is not a carrier, a mutated tag is not a carrier, and a mutated OP_1
+// after the tag is not either.
+const plain = inscriptionScript(OWNER, "text/plain", "6869");
+const mutatedTag = plain.replace("6f7264", "78797a"); // "ord" -> "xyz"
+const seed = inscriptionScript(OWNER, "text/plain", "6869");
+const opIndex = seed.indexOf("51", seed.indexOf("6f7264") + 6);
+const mutatedOp = seed.slice(0, opIndex) + "52" + seed.slice(opIndex + 2);
+const envelopeCases = [
+  { name: "each inscription script is a carrier", scriptHex: null, check: "each" },
+  { name: "plain P2PKH is not", scriptHex: p2pkhScript(OWNER).toHex() },
+  { name: "empty is not", scriptHex: "" },
+  { name: "garbage is not", scriptHex: "zz" },
+  { name: "a mutated tag is not", scriptHex: mutatedTag },
+  { name: "a mutated OP_1 is not", scriptHex: mutatedOp },
+  { name: "a truncated carrier is not", scriptHex: plain.slice(0, 20) },
+];
+const resolved = [];
+for (const vector of vectors) {
+  resolved.push({ name: `carrier: ${vector.name}`, scriptHex: vector.scriptHex, hasEnvelope: hasOrdEnvelope(vector.scriptHex) });
+}
+let each = true;
+for (const vector of vectors) each = each && hasOrdEnvelope(vector.scriptHex);
+for (const testCase of envelopeCases) {
+  if (testCase.check === "each") {
+    resolved.push({ name: testCase.name, scriptHex: vectors[0].scriptHex, hasEnvelope: each });
+    continue;
+  }
+  resolved.push({ name: testCase.name, scriptHex: testCase.scriptHex, hasEnvelope: hasOrdEnvelope(testCase.scriptHex) });
+}
+
 writeFileSync(
   new URL("./inscription-vectors.json", import.meta.url),
-  JSON.stringify({ generatedBy: "generate-inscription.mjs", vectors }, null, 2) + "\n",
+  JSON.stringify({ generatedBy: "generate-inscription.mjs", vectors, envelopeCases: resolved }, null, 2) + "\n",
 );
 for (const vector of vectors) {
   console.log(`  ${vector.name.padEnd(30)} ${vector.scriptHex.length / 2} bytes`);

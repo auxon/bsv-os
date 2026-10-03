@@ -13,9 +13,16 @@ final class InscriptionTests: XCTestCase {
             let scriptHex: String
         }
         let vectors: [Vector]
+        let envelopeCases: [EnvelopeCase]?
+
+        struct EnvelopeCase: Decodable {
+            let name: String
+            let scriptHex: String
+            let hasEnvelope: Bool
+        }
     }
 
-    func testEnvelopeMatchesTheDaemonsBytes() throws {
+    private func loadVectors() throws -> Vectors {
         let here = URL(fileURLWithPath: #filePath)
         let repoRoot = here
             .deletingLastPathComponent()
@@ -23,7 +30,23 @@ final class InscriptionTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let url = repoRoot.appendingPathComponent("walletd/test/vectors/inscription-vectors.json")
-        let vectors = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url))
+        return try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url))
+    }
+
+    func testTheCarrierCheckMatchesTheDaemon() throws {
+        let cases = try loadVectors().envelopeCases ?? []
+        XCTAssertEqual(cases.count, 12)
+        for testCase in cases {
+            XCTAssertEqual(
+                Inscription.hasOrdEnvelope(testCase.scriptHex),
+                testCase.hasEnvelope,
+                testCase.name
+            )
+        }
+    }
+
+    func testEnvelopeMatchesTheDaemonsBytes() throws {
+        let vectors = try loadVectors()
         XCTAssertEqual(vectors.vectors.count, 5)
 
         for vector in vectors.vectors {
