@@ -1,0 +1,996 @@
+{
+  "generatedBy": "generate-policy.mjs",
+  "scenarios": [
+    {
+      "name": "an unknown origin asks once, then reuses the stored score",
+      "scores": {
+        "app.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "check",
+          "origin": "app.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow app.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "check",
+          "origin": "app.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow app.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 0
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "app.example",
+              "amount_sats": 250,
+              "action": "send",
+              "created_at": 1790988429849,
+              "jev_verdict": "allow",
+              "jev_prob": 0.93,
+              "jev_risk": 0.1,
+              "jev_risk_level": "routine",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-allow",
+              "jev_checked_at": 1790988429850
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a different action is a different request",
+      "scores": {
+        "two.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        },
+        "two.example|anchor|300": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "check",
+          "origin": "two.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow two.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "check",
+          "origin": "two.example",
+          "amountSats": 300,
+          "action": "anchor",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow two.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "two.example",
+              "amount_sats": 250,
+              "action": "send",
+              "created_at": 1790988429870,
+              "jev_verdict": "allow",
+              "jev_prob": 0.93,
+              "jev_risk": 0.1,
+              "jev_risk_level": "routine",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-allow",
+              "jev_checked_at": 1790988429870
+            },
+            {
+              "id": 2,
+              "origin": "two.example",
+              "amount_sats": 300,
+              "action": "anchor",
+              "created_at": 1790988429870,
+              "jev_verdict": "allow",
+              "jev_prob": 0.93,
+              "jev_risk": 0.1,
+              "jev_risk_level": "routine",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-allow",
+              "jev_checked_at": 1790988429870
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "allow within the cap spends without asking",
+      "scores": {},
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "allow.example",
+          "mode": "allow",
+          "capSats": 5000
+        },
+        {
+          "call": "check",
+          "origin": "allow.example",
+          "amountSats": 1000,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "allow",
+            "reason": "allowed by policy",
+            "pending": false,
+            "mode": "allow",
+            "capSats": 5000,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "allow over the cap denies flat, before the advisor is consulted",
+      "scores": {},
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "cap.example",
+          "mode": "allow",
+          "capSats": 500
+        },
+        {
+          "call": "check",
+          "origin": "cap.example",
+          "amountSats": 501,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "deny",
+            "reason": "over spend cap (500 sats)",
+            "pending": false,
+            "mode": "allow",
+            "capSats": 500,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "a cap of zero is uncapped",
+      "scores": {},
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "uncapped.example",
+          "mode": "allow",
+          "capSats": 0
+        },
+        {
+          "call": "check",
+          "origin": "uncapped.example",
+          "amountSats": 10000000,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "allow",
+            "reason": "allowed by policy",
+            "pending": false,
+            "mode": "allow",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "deny wins over everything, including a confident advisor",
+      "scores": {},
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "deny.example",
+          "mode": "deny"
+        },
+        {
+          "call": "check",
+          "origin": "deny.example",
+          "amountSats": 1,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "deny",
+            "reason": "denied by policy",
+            "pending": false,
+            "mode": "deny",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "an ask-mode cap does not bind — caps only gate allow and auto",
+      "scores": {
+        "askcap.example|send|500": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "askcap.example",
+          "mode": "ask",
+          "capSats": 100
+        },
+        {
+          "call": "check",
+          "origin": "askcap.example",
+          "amountSats": 500,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow askcap.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 100,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "askcap.example",
+              "amount_sats": 500,
+              "action": "send",
+              "created_at": 1790988429941,
+              "jev_verdict": "allow",
+              "jev_prob": 0.93,
+              "jev_risk": 0.1,
+              "jev_risk_level": "routine",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-allow",
+              "jev_checked_at": 1790988429941
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "auto approves a confident allow, and re-scores every time",
+      "scores": {
+        "auto.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "auto.example",
+          "mode": "auto",
+          "capSats": 100000
+        },
+        {
+          "call": "check",
+          "origin": "auto.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "allow",
+            "reason": "allowed by Jev: Jev allow p=0.93 risk=0.10 routine conf=0.90",
+            "pending": false,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "auto",
+            "capSats": 100000,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "check",
+          "origin": "auto.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "allow",
+            "reason": "allowed by Jev: Jev allow p=0.93 risk=0.10 routine conf=0.90",
+            "pending": false,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "auto",
+            "capSats": 100000,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "auto queues a risky spend and keeps one request",
+      "scores": {
+        "risky.example|send|250": {
+          "verdict": "deny",
+          "verdictProb": 0.93,
+          "risk": 0.8,
+          "riskLevel": "unverified",
+          "confidence": 0.9,
+          "model": "vector-deny",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "risky.example",
+          "mode": "auto"
+        },
+        {
+          "call": "check",
+          "origin": "risky.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "Jev deny p=0.93 risk=0.80 unverified conf=0.90 — human approval required: bsv allow risky.example",
+            "pending": true,
+            "jev": {
+              "verdict": "deny",
+              "verdictProb": 0.93,
+              "risk": 0.8,
+              "riskLevel": "unverified",
+              "confidence": 0.9,
+              "model": "vector-deny",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "auto",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "check",
+          "origin": "risky.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "Jev deny p=0.93 risk=0.80 unverified conf=0.90 — human approval required: bsv allow risky.example",
+            "pending": true,
+            "jev": {
+              "verdict": "deny",
+              "verdictProb": 0.93,
+              "risk": 0.8,
+              "riskLevel": "unverified",
+              "confidence": 0.9,
+              "model": "vector-deny",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "auto",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "risky.example",
+              "amount_sats": 250,
+              "action": "send",
+              "created_at": 1790988429974,
+              "jev_verdict": "deny",
+              "jev_prob": 0.93,
+              "jev_risk": 0.8,
+              "jev_risk_level": "unverified",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-deny",
+              "jev_checked_at": 1790988429975
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "auto over the cap denies flat without queuing",
+      "scores": {},
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "autocap.example",
+          "mode": "auto",
+          "capSats": 100
+        },
+        {
+          "call": "check",
+          "origin": "autocap.example",
+          "amountSats": 500,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "deny",
+            "reason": "over spend cap (100 sats)",
+            "pending": false,
+            "mode": "auto",
+            "capSats": 100,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "probe judges in full but records nothing",
+      "scores": {
+        "probe.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "probe",
+          "origin": "probe.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow probe.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        },
+        {
+          "call": "policies",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "probe in auto mode never queues",
+      "scores": {
+        "probeauto.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "probeauto.example",
+          "mode": "auto"
+        },
+        {
+          "call": "probe",
+          "origin": "probeauto.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "allow",
+            "reason": "allowed by Jev: Jev allow p=0.93 risk=0.10 routine conf=0.90",
+            "pending": false,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "auto",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "approving clears the queue and leaves a policy row",
+      "scores": {
+        "approve.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "check",
+          "origin": "approve.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow approve.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "approve.example",
+              "amount_sats": 250,
+              "action": "send",
+              "created_at": 1790988430046,
+              "jev_verdict": "allow",
+              "jev_prob": 0.93,
+              "jev_risk": 0.1,
+              "jev_risk_level": "routine",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-allow",
+              "jev_checked_at": 1790988430046
+            }
+          ]
+        },
+        {
+          "call": "setPolicy",
+          "origin": "approve.example",
+          "mode": "allow",
+          "capSats": 1000
+        },
+        {
+          "call": "pending",
+          "expect": []
+        },
+        {
+          "call": "policies",
+          "expect": [
+            {
+              "origin": "approve.example",
+              "mode": "allow",
+              "spend_cap_sats": 1000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "denying clears the queue too",
+      "scores": {
+        "refuse.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "check",
+          "origin": "refuse.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow refuse.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "setPolicy",
+          "origin": "refuse.example",
+          "mode": "deny"
+        },
+        {
+          "call": "pending",
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "a seeded request is scored in place, not duplicated",
+      "scores": {
+        "seeded.example|send|250": {
+          "verdict": "allow",
+          "verdictProb": 0.93,
+          "risk": 0.1,
+          "riskLevel": "routine",
+          "confidence": 0.9,
+          "model": "vector-allow",
+          "cost": 0,
+          "elapsedMs": 1
+        }
+      },
+      "steps": [
+        {
+          "call": "seedRequest",
+          "origin": "seeded.example",
+          "amountSats": 250,
+          "action": "send"
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "seeded.example",
+              "amount_sats": 250,
+              "action": "send",
+              "created_at": 1790988430084,
+              "jev_verdict": null,
+              "jev_prob": null,
+              "jev_risk": null,
+              "jev_risk_level": null,
+              "jev_confidence": null,
+              "jev_model": null,
+              "jev_checked_at": null
+            }
+          ]
+        },
+        {
+          "call": "check",
+          "origin": "seeded.example",
+          "amountSats": 250,
+          "action": "send",
+          "scorerCalled": true,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — Jev allow p=0.93 risk=0.10 routine conf=0.90; approve with: bsv allow seeded.example",
+            "pending": true,
+            "jev": {
+              "verdict": "allow",
+              "verdictProb": 0.93,
+              "risk": 0.1,
+              "riskLevel": "routine",
+              "confidence": 0.9,
+              "model": "vector-allow",
+              "cost": 0,
+              "elapsedMs": 1
+            },
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "seeded.example",
+              "amount_sats": 250,
+              "action": "send",
+              "created_at": 1790988430084,
+              "jev_verdict": "allow",
+              "jev_prob": 0.93,
+              "jev_risk": 0.1,
+              "jev_risk_level": "routine",
+              "jev_confidence": 0.9,
+              "jev_model": "vector-allow",
+              "jev_checked_at": 1790988430085
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a zero-amount request asks without an advisor call",
+      "scores": {},
+      "steps": [
+        {
+          "call": "check",
+          "origin": "zero.example",
+          "amountSats": 0,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "deny",
+            "reason": "first-run approval required — approve with: bsv allow zero.example",
+            "pending": true,
+            "jev": null,
+            "mode": "ask",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "zero.example",
+              "amount_sats": 0,
+              "action": "send",
+              "created_at": 1790988430103,
+              "jev_verdict": null,
+              "jev_prob": null,
+              "jev_risk": null,
+              "jev_risk_level": null,
+              "jev_confidence": null,
+              "jev_model": null,
+              "jev_checked_at": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "auto without an advisor fails closed",
+      "scores": {},
+      "steps": [
+        {
+          "call": "setPolicy",
+          "origin": "nojev.example",
+          "mode": "auto"
+        },
+        {
+          "call": "check",
+          "origin": "nojev.example",
+          "amountSats": 0,
+          "action": "send",
+          "scorerCalled": false,
+          "expect": {
+            "verdict": "deny",
+            "reason": "Jev unavailable (no answer) — human approval required: bsv allow nojev.example",
+            "pending": true,
+            "jev": null,
+            "mode": "auto",
+            "capSats": 0,
+            "budgetCovered": false
+          }
+        },
+        {
+          "call": "pending",
+          "expect": [
+            {
+              "id": 1,
+              "origin": "nojev.example",
+              "amount_sats": 0,
+              "action": "send",
+              "created_at": 1790988430123,
+              "jev_verdict": null,
+              "jev_prob": null,
+              "jev_risk": null,
+              "jev_risk_level": null,
+              "jev_confidence": null,
+              "jev_model": null,
+              "jev_checked_at": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
