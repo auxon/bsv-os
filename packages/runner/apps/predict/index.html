@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Predict — parimutuel markets</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Predict</h1>
+    <p id="status" class="status">connecting…</p>
+  </header>
+  <main>
+    <section id="markets">
+      <h2>Markets <button id="refresh-btn" type="button">Refresh</button></h2>
+      <div id="market-list"></div>
+    </section>
+    <section id="detail" class="hidden">
+      <h2 id="detail-q"></h2>
+      <div id="detail-body"></div>
+      <button id="back-btn" type="button">← All markets</button>
+    </section>
+    <section id="create">
+      <h2>New market</h2>
+      <form id="create-form">
+        <label>Question <input id="c-q" type="text" maxlength="280" placeholder="Will the rocket launch before Friday?" /></label>
+        <label>Outcomes (comma-separated, 2–8) <input id="c-outcomes" type="text" placeholder="yes,no" /></label>
+        <label>Closes in <input id="c-closes" type="text" placeholder="7d" /></label>
+        <label>Resolution rule <input id="c-evidence" type="text" maxlength="500" placeholder="What evidence decides this?" /></label>
+        <button type="submit">Create market</button>
+      </form>
+      <div id="create-out"></div>
+    </section>
+    <section id="mine">
+      <h2>My positions</h2>
+      <label>Origin <input id="pos-origin" type="text" placeholder="agent or page origin" /></label>
+      <button id="pos-btn" type="button">Show</button>
+      <div id="pos-out"></div>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

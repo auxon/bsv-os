@@ -569,7 +569,7 @@ function originHost(origin: string | undefined): string | null {
 }
 
 /** Bundled runner apps served from the daemon's own origin. */
-const RUNNER_APPS = new Set(["bsvos", "twetch", "explorer", "colosseum", "cast", "memestudio", "askanything"]);
+const RUNNER_APPS = new Set(["bsvos", "twetch", "explorer", "colosseum", "cast", "memestudio", "askanything", "predict"]);
 
 function runnerAppDir(name: string): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));

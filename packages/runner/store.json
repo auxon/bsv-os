@@ -52,6 +52,12 @@
       "url": "https://localhost:2121/askanything/",
       "name": "AskAnything",
       "blurb": "Ask funded questions of your network, answer theirs, and pay accepted answers from the OS wallet. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
+    },
+    {
+      "domain": "localhost",
+      "url": "https://localhost:2121/predict/",
+      "name": "Predict",
+      "blurb": "Parimutuel prediction markets: create pools, bet from the OS wallet, resolve by Jev with one dispute round. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
     }
   ]
 }

@@ -1,0 +1,13 @@
+{
+  "name": "Predict",
+  "short_name": "Predict",
+  "start_url": "https://localhost:2121/predict/",
+  "icons": [],
+  "metanet": {
+    "schemaVersion": "1",
+    "groupPermissions": {
+      "description": "Prediction markets: create parimutuel pools, bet from the OS wallet, resolve by Jev with one dispute round. Bets and settlements move sats on-chain (each confirmed separately).",
+      "spendingAuthorization": { "amount": 1000000, "description": "market bets and settlements (each payment confirmed separately)" }
+    }
+  }
+}

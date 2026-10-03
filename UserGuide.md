@@ -275,6 +275,31 @@ not paid). Asks expire (default 7 days, `--expires=12h`), a lapsed ask is
 not payable, and asking yourself is a no-op (your own outbound asks are
 never payable) — use `bsv send` to move money between your own addresses.
 
+### Prediction markets (parimutuel pools, Jev resolution)
+
+Ask a question with 2–8 outcomes and let sats sort the beliefs. Bettors
+stake an outcome before the close; winners split the pool proportionally
+(minus a 2% fee). At close, Jev grades your resolution rule against the
+evidence — below-confidence verdicts void the market (full refunds, no
+fee). One dispute round re-grades with the disputant's evidence, then
+settlement pays every winner in a single transaction.
+
+```bash
+bsv predict create --question "Will the rocket launch before Friday?" --outcomes yes,no --closes 7d --evidence "official launch stream"
+bsv predict bet pm_XXXX --outcome yes --sats 5000
+bsv predict resolve pm_XXXX          # after close: Jev verdict, dispute window opens
+bsv predict dispute pm_XXXX --outcome no --why "scrubbed, see link"
+bsv predict settle pm_XXXX          # after the window: winners paid
+bsv predict positions --origin <you-or-agent>
+```
+
+Money moves on-chain (bets in, one settlement tx out); the ledger tracks
+positions and a per-market basket cross-checks the pool. Bets and
+settlements are policy-gated like everything else — settling a big pool
+may need a cap raise. Or use the Predict app (store → Predict) for the
+same flow with pool bars and implied odds. Dust rule: payouts under 546
+sats roll into the fee instead of creating unspendable outputs.
+
 ### Boards (agent-to-agent, milliseconds)
 
 Email is too slow for agents. A **board** is a shared, signed, replicated

@@ -1338,6 +1338,88 @@ async function main(): Promise<void> {
       }
       break;
     }
+    case "predict": {
+      // Prediction markets: parimutuel pools, Jev resolution, one dispute.
+      // Money moves on-chain (bets in, one settlement tx out); the SQLite
+      // ledger is the source of truth for positions. Spends are policy-gated
+      // on --origin like everything else; settling big pools may need a cap.
+      const [pSub, ...pRest] = rest;
+      const pOrigin = flag(pRest, "origin");
+      const pParams = pOrigin !== undefined ? { origin: pOrigin } : {};
+      if (pSub === "create") {
+        const question = flag(pRest, "question");
+        const outcomes = flag(pRest, "outcomes");
+        const closes = flag(pRest, "closes") ?? flag(pRest, "closes-at");
+        const evidence = flag(pRest, "evidence");
+        if (!question || !outcomes || !closes || !evidence) {
+          console.error("usage: bsv predict create --question <q> --outcomes a,b[,c] --closes 7d|--closes-at <ms> --evidence <rule> [--fee-bps 200] [--dispute-hours 24] [--origin <o>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("predictCreate", {
+          question,
+          outcomes: outcomes.split(",").map((s) => s.trim()).filter(Boolean),
+          ...(flag(pRest, "closes-at") !== undefined
+            ? { closesAt: Number(flag(pRest, "closes-at")) }
+            : { closesIn: closes }),
+          evidence,
+          ...(flag(pRest, "fee-bps") !== undefined ? { feeBps: Number(flag(pRest, "fee-bps")) } : {}),
+          ...(flag(pRest, "dispute-hours") !== undefined ? { disputeHours: Number(flag(pRest, "dispute-hours")) } : {}),
+          ...pParams,
+        }));
+      } else if (pSub === "list" || pSub === undefined) {
+        print(await call("predictList", {
+          ...(flag(pRest, "status") !== undefined ? { status: flag(pRest, "status") } : {}),
+        }));
+      } else if (pSub === "show" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictShow", { id: pRest.find((a) => !a.startsWith("--")) }));
+      } else if (pSub === "bet" && pRest.find((a) => !a.startsWith("--"))) {
+        const id = pRest.find((a) => !a.startsWith("--"));
+        const outcome = flag(pRest, "outcome");
+        const sats = flag(pRest, "sats") ?? flag(pRest, "amount");
+        if (!outcome || !sats) {
+          console.error("usage: bsv predict bet <id> --outcome <o> --sats <n≥1000> [--to <address>] [--origin <o>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("predictBet", {
+          id, outcome, sats: Number(sats),
+          ...(flag(pRest, "to") !== undefined ? { to: flag(pRest, "to") } : {}),
+          ...pParams,
+        }));
+      } else if (pSub === "resolve" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictResolve", {
+          id: pRest.find((a) => !a.startsWith("--")),
+          ...(flag(pRest, "evidence") !== undefined ? { evidence: flag(pRest, "evidence") } : {}),
+          ...(flag(pRest, "force") !== undefined ? { force: flag(pRest, "force") } : {}),
+        }));
+      } else if (pSub === "dispute" && pRest.find((a) => !a.startsWith("--"))) {
+        const outcome = flag(pRest, "outcome");
+        const why = flag(pRest, "why");
+        if (!outcome || !why) {
+          console.error("usage: bsv predict dispute <id> --outcome <o> --why <evidence> [--origin <o>]");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("predictDispute", { id: pRest.find((a) => !a.startsWith("--")), outcome, why, ...pParams }));
+      } else if (pSub === "settle" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictSettle", { id: pRest.find((a) => !a.startsWith("--")), ...pParams }));
+      } else if (pSub === "cancel" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictCancel", { id: pRest.find((a) => !a.startsWith("--")) }));
+      } else if (pSub === "positions") {
+        const origin = flag(pRest, "origin");
+        if (!origin) {
+          console.error("usage: bsv predict positions --origin <o>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("predictPositions", { origin }));
+      } else {
+        console.error("usage: bsv predict <create|list|show|bet|resolve|dispute|settle|cancel|positions>");
+        process.exitCode = 2;
+      }
+      break;
+    }
     case "ask": {
       // AskAnything: funded questions on the askanything board. Asking and
       // answering are free and off-chain; only the accept payment moves
@@ -1977,7 +2059,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|device|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|ask|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
+      console.error("usage: bsv <status|create|import|unlock|lock|pending|balance|utxos|address|history|anchor|share|send|sweep|device|allow|deny|requests|probe|events|watch|commitments|funds|market|jev|trust|ask|predict|policies|doctor|agent|app|store|cert|basket|ord|bsv21|msg|x402|twetch|recovery|gig|nightshift|overlay|mcp [--agent=NAME]>");
       process.exitCode = 2;
   }
 }

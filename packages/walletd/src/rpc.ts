@@ -21,6 +21,12 @@ import { parseDurationMs } from "./watch.ts";
 import { runDoctor } from "./doctor.ts";
 import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
 import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
+import {
+  createMarket, disputeWindowOpen, getBets, getMarket, gradeEvidence, listMarkets, lockIfPastClose,
+  marketBasket, marketView, PREDICT_CONF_THRESHOLD, PREDICT_MIN_BET_SATS,
+  positionsFor, recordBet, recordDispute, recordSettlement, recordVerdict, splitPool, splitVoid,
+  validateMarket, winnerFromChoice,
+} from "./predict.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
 import { DEVICE_READS, DEVICE_WRITES, deviceOrigin, isDeviceCallable } from "./device.ts";
 import { cancelPairing, listDevices, mintPairingCode, pendingPairingView, renameDevice, revokeDevice } from "./device.ts";
@@ -30,7 +36,7 @@ import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
 import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
 import { bridgeEntryPath } from "./launcher.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
-import { assignUtxo, createBasket, removeBasket, walletBaskets } from "./baskets.ts";
+import { assignUtxo, createBasket, labelOutputs, removeBasket, walletBaskets } from "./baskets.ts";
 import { bsv21For, galleryFor, normalizeTokenId, splitOutpoint, tokenHoldings } from "./tokens.ts";
 import {
   boardGet, boardList, claimGig, listGigs, paidGig, submitGig, trackGig, untrackGig,
@@ -1813,6 +1819,181 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   askGrade: async (params) => {
     const { question, submission } = p(params) as { question?: unknown; submission?: unknown };
     return gradeAnswer(jevDecideCall, { question: String(question ?? ""), submission: String(submission ?? "") });
+  },
+  /* ── Prediction markets: parimutuel pools, Jev resolution ────────── */
+  predictList: async (params) => {
+    const b = needBackend();
+    const { status } = p(params) as { status?: unknown };
+    return { markets: await listMarkets(b.db, typeof status === "string" ? status : undefined) };
+  },
+  predictShow: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const v = await marketView(b.db, id);
+    if (!v) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    return { market: v, bets: await getBets(b.db, id) };
+  },
+  predictCreate: async (params) => {
+    const b = needBackend();
+    const raw = p(params) as Record<string, unknown>;
+    const v = validateMarket(raw);
+    const origin = typeof raw.origin === "string" && raw.origin ? raw.origin : "predict";
+    const m = await createMarket(b.db, createBasket, {
+      question: v.question,
+      outcomes: v.outcomes,
+      closes_at: v.closes_at,
+      evidence: v.evidence,
+      fee_bps: v.fee_bps,
+      dispute_hours: v.dispute_hours,
+      creator_origin: origin,
+    });
+    return { market: await marketView(b.db, m.id) };
+  },
+  predictBet: async (params) => {
+    const b = needBackend();
+    const raw = p(params) as Record<string, unknown>;
+    const id = String(raw.id ?? "");
+    const outcome = String(raw.outcome ?? "");
+    const sats = Math.floor(Number(raw.sats) || 0);
+    const origin = typeof raw.origin === "string" && raw.origin ? raw.origin : "predict";
+    let to = String(raw.to ?? "");
+    const m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    const live = await lockIfPastClose(b.db, m);
+    if (live.status !== "open") throw Object.assign(new Error(`market is ${live.status}, not open`), { code: "BAD_STATE" });
+    if (!live.outcomes.includes(outcome)) throw Object.assign(new Error(`unknown outcome (pick: ${live.outcomes.join(", ")})`), { code: "BAD_PARAM" });
+    if (!(sats >= PREDICT_MIN_BET_SATS)) throw Object.assign(new Error(`min bet ${PREDICT_MIN_BET_SATS} sats`), { code: "BAD_PARAM" });
+    if (!to) to = selfAddress();
+    const paid = await sendSats({
+      db: b.db, chain: b.chain, origin, to: selfAddress(), sats,
+      label: `predict bet ${sats} on ${outcome} (${id})`,
+    });
+    await labelOutputs(b.db, paid.txid, [{ vout: 0, value: sats, basket: marketBasket(id) }]);
+    const bet = await recordBet(b.db, {
+      market_id: id, origin, payout_address: to, outcome, sats, txid: paid.txid,
+    });
+    return { bet, fee: paid.fee };
+  },
+  predictResolve: async (params) => {
+    const b = needBackend();
+    const raw = p(params) as Record<string, unknown>;
+    const id = String(raw.id ?? "");
+    const force = typeof raw.force === "string" && raw.force ? raw.force : null;
+    const evidence = typeof raw.evidence === "string" ? raw.evidence.slice(0, 500) : "";
+    const m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    const live = await lockIfPastClose(b.db, m);
+    if (live.status !== "locked") {
+      throw Object.assign(new Error(`market is ${live.status}; resolve needs a locked (past-close) market`), { code: "BAD_STATE" });
+    }
+    if (force) {
+      if (!live.outcomes.includes(force)) throw Object.assign(new Error(`unknown outcome (pick: ${live.outcomes.join(", ")})`), { code: "BAD_PARAM" });
+      const market = await recordVerdict(b.db, id, { winner: force, confidence: 1 });
+      return { market: await marketView(b.db, id), forced: true, verdict: market.winning_outcome };
+    }
+    const verdict = await gradeEvidence(
+      (state, questions) => jevDecideCall(state, questions as Record<string, JevQuestion>),
+      live,
+      evidence || undefined,
+    );
+    const market = await recordVerdict(b.db, id, verdict);
+    return {
+      market: await marketView(b.db, id),
+      verdict: market.winning_outcome,
+      confidence: market.verdict_confidence,
+      voided: !market.winning_outcome,
+    };
+  },
+  predictDispute: async (params) => {
+    const b = needBackend();
+    const raw = p(params) as Record<string, unknown>;
+    const id = String(raw.id ?? "");
+    const outcome = String(raw.outcome ?? "");
+    const why = String(raw.why ?? "");
+    const by = typeof raw.origin === "string" && raw.origin ? raw.origin : "predict";
+    const market = await recordDispute(b.db, id, { by, winningOutcome: outcome, why });
+    return { market: await marketView(b.db, id) };
+  },
+  predictSettle: async (params) => {
+    const b = needBackend();
+    const raw = p(params) as Record<string, unknown>;
+    const id = String(raw.id ?? "");
+    const origin = typeof raw.origin === "string" && raw.origin ? raw.origin : "predict";
+    const now = Date.now();
+    let m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    m = await lockIfPastClose(b.db, m, now);
+    if (m.status === "open" || m.status === "locked") {
+      throw Object.assign(new Error("resolve first (predictResolve), then settle"), { code: "BAD_STATE" });
+    }
+    if (m.status === "settled") throw Object.assign(new Error("already settled"), { code: "BAD_STATE" });
+    const bets = await getBets(b.db, id);
+    // Disputed: one re-grade with the disputant's evidence, then settle.
+    if (m.status === "disputed") {
+      if (!m.dispute_why) throw Object.assign(new Error("dispute without evidence"), { code: "BAD_STATE" });
+      const re = await gradeEvidence(
+        (state, questions) => jevDecideCall(state, questions as Record<string, JevQuestion>),
+        m,
+        `DISPUTE by ${m.dispute_by}: ${m.dispute_why}`,
+      );
+      if (re.winner && re.winner !== m.winning_outcome && re.confidence >= PREDICT_CONF_THRESHOLD) {
+        await recordVerdict(b.db, id, re, now);
+        m = (await getMarket(b.db, id)) as typeof m;
+      }
+      // else: original verdict stands; fall through to payout below.
+    }
+    if (m.status === "void" || !m.winning_outcome) {
+      if (bets.length === 0) {
+        await recordSettlement(b.db, id, null, "void");
+        return { market: await marketView(b.db, id), refunded: 0, txid: null };
+      }
+      const outs = splitVoid(bets).filter((o) => o.sats >= 546);
+      const paid = await spendTo({
+        db: b.db, chain: b.chain, origin,
+        payments: outs.map((o) => ({ to: o.payout_address, sats: o.sats })),
+        label: `predict void refund ${id}`,
+        description: `prediction market ${id} voided (${m.winning_outcome ?? "no verdict"}); full refunds, no fee`,
+      });
+      await recordSettlement(b.db, id, paid.txid, "void" as const);
+      return { market: await marketView(b.db, id), refunded: outs.reduce((s, o) => s + o.sats, 0), txid: paid.txid, fee: paid.fee };
+    }
+    // Resolving past the dispute window with no dispute: settle winners.
+    if (m.status === "resolving") {
+      if (!m.resolved_at || disputeWindowOpen(m.resolved_at, m.dispute_hours, now)) {
+        throw Object.assign(new Error("dispute window still open (dispute or wait)"), { code: "BAD_STATE" });
+      }
+    }
+    const { payouts, fee } = splitPool(bets, m.winning_outcome, m.fee_bps);
+    const outs = payouts.filter((o) => o.sats >= 546);
+    if (outs.length === 0) {
+      await recordSettlement(b.db, id, null, "void");
+      return { market: await marketView(b.db, id), refunded: 0, txid: null, note: "no payouts above dust; voided" };
+    }
+    const paid = await spendTo({
+      db: b.db, chain: b.chain, origin,
+      payments: outs.map((o) => ({ to: o.payout_address, sats: o.sats })),
+      label: `predict settle ${id} -> ${m.winning_outcome}`,
+      description: `prediction market ${id} settled: ${m.winning_outcome} wins (conf ${m.verdict_confidence})`,
+    });
+    await recordSettlement(b.db, id, paid.txid, "settled" as const);
+    return { market: await marketView(b.db, id), payouts: outs, fee, txid: paid.txid, settleFee: paid.fee };
+  },
+  predictCancel: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    if (m.status !== "open") throw Object.assign(new Error("only open markets cancel (settle pays the rest)"), { code: "BAD_STATE" });
+    await b.db("predict_markets").where({ id }).update({ status: "void", resolved_at: Date.now() });
+    return { market: await marketView(b.db, id), note: "cancelled; run predictSettle for full refunds" };
+  },
+  predictPositions: async (params) => {
+    const b = needBackend();
+    const { origin } = p(params) as { origin?: unknown };
+    if (typeof origin !== "string" || !origin) throw Object.assign(new Error("origin required"), { code: "BAD_PARAM" });
+    return { positions: await positionsFor(b.db, origin) };
   },
   /** Post a request and block for its first reply: the agent ask primitive. */
   boardAsk: async (params) => {
