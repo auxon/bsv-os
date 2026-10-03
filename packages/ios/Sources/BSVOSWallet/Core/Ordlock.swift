@@ -181,22 +181,27 @@ public enum Ordlock {
         }
     }
 
-    /// The seller's offer, exactly the daemon's `SwapOffer` for `kind: ordinal`.
-    /// BSV21 offers (`input`/`tokenId`/`tokenAmount`) are decoded but refused
-    /// by the phone's completion path.
+    /// The seller's offer, exactly the daemon's `SwapOffer` in both kinds:
+    /// v4 ordinal (`inputs`), v3 BSV21 (`input` + `unlockHex`).
     public struct SwapOffer: Codable, Sendable, Equatable {
         public var version: Int
         public var kind: String
         public var payScriptHex: String
         public var priceSats: Int
         public var lockTime: Int
+        /// v4 ordinal: [1-sat plain prefix, inscribed carrier].
         public var inputs: [SwapOfferInput]?
+        /// v3 BSV21: the single token carrier.
+        public var input: SwapOfferInput?
+        /// v3 BSV21: the seller's pre-signed unlock, beside `input`.
+        public var unlockHex: String?
         public var tokenId: String?
         public var tokenAmount: String?
 
         public init(
             version: Int, kind: String, payScriptHex: String, priceSats: Int, lockTime: Int,
-            inputs: [SwapOfferInput]? = nil, tokenId: String? = nil, tokenAmount: String? = nil
+            inputs: [SwapOfferInput]? = nil, input: SwapOfferInput? = nil, unlockHex: String? = nil,
+            tokenId: String? = nil, tokenAmount: String? = nil
         ) {
             self.version = version
             self.kind = kind
@@ -204,6 +209,8 @@ public enum Ordlock {
             self.priceSats = priceSats
             self.lockTime = lockTime
             self.inputs = inputs
+            self.input = input
+            self.unlockHex = unlockHex
             self.tokenId = tokenId
             self.tokenAmount = tokenAmount
         }
@@ -214,6 +221,9 @@ public enum Ordlock {
     /// 1-sat output 0 while the carrier's SINGLE signature commits to the
     /// payment at byte-exact output 1.
     public static let swapVersionOrdinal = 4
+    /// v3 is the BSV21 template: the carrier's own envelope identifies its
+    /// amount, so a single input and the payment output suffice.
+    public static let swapVersionToken = 3
     public static let swapSequence: Int = 0xffff_ffff
 
     /// The unsigned skeleton both sides agree on. The seller signs input 0

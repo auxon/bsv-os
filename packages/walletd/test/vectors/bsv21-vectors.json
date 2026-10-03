@@ -1,0 +1,152 @@
+{
+  "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "self": "13iX7DteNj1gV7zhe4t6o9FX9CArR5wZxz",
+  "selfScriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac",
+  "transfers": [
+    {
+      "name": "transfer 1000",
+      "owner": "13iX7DteNj1gV7zhe4t6o9FX9CArR5wZxz",
+      "tokenId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_0",
+      "amt": "1000",
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230004c757b2270223a226273762d3230222c226f70223a227472616e73666572222c226964223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161615f30222c22616d74223a2231303030227d68",
+      "envelope": {
+        "protocol": "bsv-20",
+        "op": "transfer",
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_0",
+        "amt": "1000",
+        "contentType": "application/bsv-20"
+      }
+    },
+    {
+      "name": "transfer uint64 max",
+      "owner": "13iX7DteNj1gV7zhe4t6o9FX9CArR5wZxz",
+      "tokenId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_0",
+      "amt": "18446744073709551615",
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230004c857b2270223a226273762d3230222c226f70223a227472616e73666572222c226964223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161615f30222c22616d74223a223138343436373434303733373039353531363135227d68",
+      "envelope": {
+        "protocol": "bsv-20",
+        "op": "transfer",
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_0",
+        "amt": "18446744073709551615",
+        "contentType": "application/bsv-20"
+      }
+    }
+  ],
+  "malformed": [
+    {
+      "name": "plain p2pkh",
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac"
+    },
+    {
+      "name": "ord envelope, not bsv21",
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f7264510a746578742f706c61696e0002686968"
+    },
+    {
+      "name": "envelope, json without p/op",
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230000a7b226964223a2278227d68"
+    },
+    {
+      "name": "envelope, no OP_ENDIF",
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d323000027b7d"
+    }
+  ],
+  "tokenIds": [
+    {
+      "raw": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_007",
+      "normalized": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_7"
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.3",
+      "normalized": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_3"
+    },
+    {
+      "raw": " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_1 ",
+      "normalized": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_1"
+    },
+    {
+      "raw": "nope",
+      "normalized": null
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "normalized": null
+    },
+    {
+      "raw": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz_0",
+      "normalized": null
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_-1",
+      "normalized": null
+    }
+  ],
+  "amounts": [
+    {
+      "raw": "1000",
+      "canonical": "1000"
+    },
+    {
+      "raw": "007",
+      "canonical": "7"
+    },
+    {
+      "raw": "0",
+      "canonical": null
+    },
+    {
+      "raw": "00",
+      "canonical": null
+    },
+    {
+      "raw": "-1",
+      "canonical": null
+    },
+    {
+      "raw": "1.5",
+      "canonical": null
+    },
+    {
+      "raw": "18446744073709551615",
+      "canonical": "18446744073709551615"
+    },
+    {
+      "raw": "18446744073709551616",
+      "canonical": null
+    }
+  ],
+  "offer": {
+    "version": 3,
+    "kind": "bsv21",
+    "payScriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac",
+    "priceSats": 25000,
+    "lockTime": 0,
+    "input": {
+      "txid": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "vout": 1,
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230004c757b2270223a226273762d3230222c226f70223a227472616e73666572222c226964223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161615f30222c22616d74223a2231303030227d68",
+      "sequence": 4294967295
+    },
+    "unlockHex": "48304502210094c681ed698428615ba81f8ef0c72c210f18a087d2306efb7e526abd7aee58a402207b7e2fe7891373007e829100c0804c6e9f62a9791a4d3d8fcd936cefbbfde2c7c321027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62",
+    "tokenId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_0",
+    "tokenAmount": "1000"
+  },
+  "complete": {
+    "funding": {
+      "txid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "vout": 1,
+      "value": 100000,
+      "scriptHex": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac"
+    },
+    "tokenOutput": "76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230004c757b2270223a226273762d3230222c226f70223a227472616e73666572222c226964223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161615f30222c22616d74223a2231303030227d68",
+    "unsignedHex": "0200000002dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd0100000000ffffffffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0100000000ffffffff03a8610000000000001976a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0100000000000000ac76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230004c757b2270223a226273762d3230222c226f70223a227472616e73666572222c226964223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161615f30222c22616d74223a2231303030227d68cb220100000000001976a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac00000000",
+    "signedHex": "0200000002dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd010000006b48304502210094c681ed698428615ba81f8ef0c72c210f18a087d2306efb7e526abd7aee58a402207b7e2fe7891373007e829100c0804c6e9f62a9791a4d3d8fcd936cefbbfde2c7c321027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62ffffffffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb010000006b483045022100a864a302afcb3799d46b2ae747163ad6295efecdcd4ddb2be58e6766180b014b0220716edef379c70f87be94ec43eaa6c03f2b9f7b91ff05737c4836f668760ee7274121027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62ffffffff03a8610000000000001976a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0100000000000000ac76a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac0063036f726451126170706c69636174696f6e2f6273762d3230004c757b2270223a226273762d3230222c226f70223a227472616e73666572222c226964223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161615f30222c22616d74223a2231303030227d68cb220100000000001976a9141dca7033f3ce0b62f794ef26b4ca2452f7b715cf88ac00000000",
+    "txid": "8326c4e07a4ee729e9b98fc5a8b3cd4c90b8d9f34303d5b038b41f8e647c11ee",
+    "fee": 557,
+    "changeSats": 74443,
+    "changeVout": 2,
+    "unlockHexes": [
+      "48304502210094c681ed698428615ba81f8ef0c72c210f18a087d2306efb7e526abd7aee58a402207b7e2fe7891373007e829100c0804c6e9f62a9791a4d3d8fcd936cefbbfde2c7c321027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62",
+      "483045022100a864a302afcb3799d46b2ae747163ad6295efecdcd4ddb2be58e6766180b014b0220716edef379c70f87be94ec43eaa6c03f2b9f7b91ff05737c4836f668760ee7274121027fa517bb858426db1571d0a63ebb792d9bfae95d7647d63b59c1dabbdc489e62"
+    ]
+  }
+}

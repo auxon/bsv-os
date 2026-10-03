@@ -153,3 +153,44 @@ test("the daemon's interpreter accepts the envelope and covenant spends", () => 
   const buyTx = Transaction.fromHex(ordlock.buy.signedHex);
   assert.notEqual(buyTx.inputs[0].unlockingScript.chunks[0].data[0], 0x30, "purchase unlock is not a signature");
 });
+
+// The bsv21 v3 swap: the seller pre-signs SINGLE|ANYONECANPAY over one input
+// and the payment output, and the buyer's transaction keeps that output at the
+// same index byte-exact, so the seller's signature must validate inside the
+// completion. This is the check that the pre-signature template is right — a
+// wrong output order or a shifted index would make it fail here.
+const bsv21 = JSON.parse(readFileSync(new URL("./vectors/bsv21-vectors.json", import.meta.url), "utf8"));
+
+test("the daemon's interpreter accepts the v3 token swap", () => {
+  const tx = Transaction.fromHex(bsv21.complete.signedHex);
+  const sources = [
+    { scriptHex: bsv21.offer.input.scriptHex, value: 1 },
+    { scriptHex: bsv21.complete.funding.scriptHex, value: bsv21.complete.funding.value },
+  ];
+  assert.equal(tx.inputs.length, 2);
+  for (let index = 0; index < tx.inputs.length; index++) {
+    const input = tx.inputs[index];
+    const valid = new Spend({
+      sourceTXID: input.sourceTXID,
+      sourceOutputIndex: input.sourceOutputIndex,
+      lockingScript: Script.fromHex(sources[index].scriptHex),
+      sourceSatoshis: sources[index].value,
+      transactionVersion: tx.version,
+      otherInputs: [],
+      allInputs: tx.inputs,
+      unlockingScript: input.unlockingScript,
+      inputSequence: input.sequence ?? 0xffffffff,
+      inputIndex: index,
+      outputs: tx.outputs,
+      lockTime: tx.lockTime,
+    }).validateJavaScript();
+    assert.equal(valid, true, `v3 swap input ${index} is accepted`);
+  }
+
+  // The buyer's output 0 is the byte-exact payment (what the seller signed);
+  // output 1 is the fresh transfer envelope, 1 sat.
+  assert.equal(tx.outputs[0].lockingScript.toHex(), bsv21.offer.payScriptHex);
+  assert.equal(tx.outputs[0].satoshis, bsv21.offer.priceSats);
+  assert.equal(tx.outputs[1].lockingScript.toHex(), bsv21.complete.tokenOutput);
+  assert.equal(tx.outputs[1].satoshis, 1);
+});
