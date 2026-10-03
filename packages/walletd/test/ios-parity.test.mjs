@@ -164,11 +164,16 @@ test("key-material methods are excluded by name, in both the doc and the Swift",
   }
 });
 
-test("the Swift package contains no key material, mirroring the daemon's custody boundary", () => {
-  // custody-boundary.test.mjs proves the daemon keeps keys in one module. The
-  // iOS client is the opposite extreme: it must have none at all, because in
-  // Phase 0 custody stays on the server. This fails the moment someone adds a
-  // Swift key path by "helpfully" making the phone standalone.
+test("key material stays in the custody core and never reaches a page", () => {
+  // The first version of this test forbade key material anywhere in the Swift
+  // package, because Phase 0 kept custody on the daemon. That premise was
+  // deliberately replaced: the iOS wallet is standalone now (S1-S3 in
+  // docs/ios.md), so the boundary moved rather than vanished. Key material may
+  // exist in the custody core; it must not exist anywhere else, and the hosted
+  // app surface (window.bsv) must never see it. The daemon-side half of the old
+  // test still holds: neverDeviceCallable keeps key-material methods off the
+  // remote surface, checked above.
+  const sources = path.join(root, "packages/ios/Sources");
   const swiftFiles = [];
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -176,19 +181,39 @@ test("the Swift package contains no key material, mirroring the daemon's custody
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith(".swift")) swiftFiles.push(full);
     }
-  })(path.join(root, "packages/ios/Sources"));
+  })(sources);
   assert.ok(swiftFiles.length > 0, "Swift sources found");
 
-  const forbidden = /secp256k1|fromWif|privateKey|mnemonic|seed phrase|bip39|beginPrivateKey/i;
-  for (const file of swiftFiles) {
-    const src = fs.readFileSync(file, "utf8");
-    // Comments may discuss custody; code may not implement it. Strip line
-    // comments and doc-comment bodies before looking.
-    const code = src
+  const stripComments = (src) =>
+    src
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .split("\n")
       .map((line) => line.replace(/\/\/.*$/, ""))
       .join("\n");
-    assert.ok(!forbidden.test(code), `${path.relative(root, file)} must not implement a key path`);
+
+  // The custody core: seed derivation, the curve, and the transaction signer
+  // that takes key bytes for the moment of signing.
+  const custody = new Set([
+    "BSVOSWallet/Core/BIP32.swift",
+    "BSVOSWallet/Core/Secp256k1.swift",
+    "BSVOSWallet/Core/Tx.swift",
+  ]);
+
+  const forbidden = /secp256k1|fromWif|privateKey|mnemonic|seed phrase|bip39|beginPrivateKey/i;
+  for (const file of swiftFiles) {
+    const relative = path.relative(sources, file);
+    const code = stripComments(fs.readFileSync(file, "utf8"));
+    if (custody.has(relative)) continue;
+    assert.ok(!forbidden.test(code), `${relative} carries key material outside the custody core (${[...custody].join(", ")})`);
+  }
+
+  // The page-facing surface is stricter still: no key material of any spelling,
+  // because window.bsv is exactly where a browser could read it.
+  const pageFacing = swiftFiles.filter((file) => file.includes(`${path.sep}Apps${path.sep}`));
+  assert.ok(pageFacing.length > 0, "the app host sources are present");
+  for (const file of pageFacing) {
+    const relative = path.relative(sources, file);
+    const code = stripComments(fs.readFileSync(file, "utf8"));
+    assert.ok(!/\b(privateKey|mnemonic|fromWif|wif|seed)\b/i.test(code), `${relative} must not carry key material — a page can read this surface`);
   }
 });
