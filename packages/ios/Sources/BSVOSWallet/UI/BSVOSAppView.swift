@@ -8,61 +8,127 @@ import SwiftUI
 /// screen that explains itself.
 public struct BSVOSAppView: View {
     private let baseURL: URL
-    private let store: CredentialStore
+    private let credentialStore: CredentialStore
+    private let seedVault: SeedVault
     private let biometrics: BiometricGate
 
-    @State private var credential: DeviceCredential?
-    @State private var checking = true
+    /// What this launch is: the phone's own wallet, the daemon's, or nothing
+    /// yet. The rule is `WalletLaunchMode.decide`, and it prefers the local
+    /// wallet: a phone that has both should not silently spend from the other.
+    @State private var launch: Launch = .checking
+    @State private var session: WalletSession?
     /// Set when push is unavailable, so the approvals screen can say so.
     @State private var pushNote: String?
-
     private let pushStatus: PushStatusBox?
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    enum Launch {
+        case checking
+        case unconfigured
+        case daemon(DeviceCredential)
+        case standalone(LocalWalletBackend)
+    }
 
     public init(
         baseURL: URL,
-        store: CredentialStore = KeychainCredentialStore(),
+        credentialStore: CredentialStore = KeychainCredentialStore(),
+        seedVault: SeedVault = KeychainSeedVault(),
         biometrics: BiometricGate = LocalAuthenticationGate(),
         pushStatus: PushStatusBox? = nil
     ) {
         self.baseURL = baseURL
-        self.store = store
+        self.credentialStore = credentialStore
+        self.seedVault = seedVault
         self.biometrics = biometrics
         self.pushStatus = pushStatus
     }
 
     public var body: some View {
         Group {
-            if checking {
+            switch launch {
+            case .checking:
                 ProgressView().task { load() }
-            } else if let credential {
-                RootView(
-                    session: WalletSession(
-                        backend: DeviceWalletBackend(baseURL: baseURL, credential: credential),
-                        biometrics: biometrics
-                    ),
-                    pushNote: pushNote ?? pushStatus?.note
-                )
-                .task {
-                    // Asked for only once paired: a notification permission
-                    // prompt before there is anything to notify about is noise.
-                    await requestPushIfNeeded()
+
+            case .unconfigured:
+                WalletSetupView(
+                    seedVault: seedVault,
+                    baseURL: baseURL,
+                    credentialStore: credentialStore
+                ) {
+                    load()
                 }
-            } else {
-                PairingView(baseURL: baseURL, store: store) { paired in
-                    credential = paired
+
+            case .daemon:
+                if let session {
+                    RootView(session: session, pushNote: pushNote ?? pushStatus?.note)
+                        .task {
+                            // Asked for only once paired: a notification
+                            // permission prompt before there is anything to
+                            // notify about is noise. A standalone wallet has no
+                            // daemon to register with, so it never asks.
+                            await requestPushIfNeeded()
+                        }
+                }
+
+            case .standalone(let backend):
+                if let session {
+                    RootView(session: session, pushNote: pushStatus?.note)
+                        .task { await backend.refreshPendingTransactions() }
+                        .onChange(of: scenePhase) { _, phase in
+                            // The phone-sized monitor: recheck in-flight
+                            // transactions when the app comes back, because
+                            // nothing else can do it while it is closed.
+                            guard phase == .active else { return }
+                            Task {
+                                await backend.refreshPendingTransactions()
+                                await session.refresh()
+                            }
+                        }
                 }
             }
         }
     }
 
     private func load() {
-        credential = try? store.load()
-        checking = false
+        let credential = try? credentialStore.load()
+        switch WalletLaunchMode.decide(hasLocalPhrase: seedVault.hasPhrase, hasDaemonCredential: credential != nil) {
+        case .standalone:
+            let backend = makeStandaloneBackend()
+            session = WalletSession(backend: backend, biometrics: biometrics)
+            launch = .standalone(backend)
+        case .daemon:
+            guard let credential else { launch = .unconfigured; return }
+            session = WalletSession(
+                backend: DeviceWalletBackend(baseURL: baseURL, credential: credential),
+                biometrics: biometrics
+            )
+            launch = .daemon(credential)
+        case .unconfigured:
+            session = nil
+            launch = .unconfigured
+        }
+    }
+
+    /// The standalone stack: file-backed stores next to the Keychain phrase,
+    /// falling back to memory if the directory cannot be made (a broken store
+    /// should not stop the wallet from opening).
+    private func makeStandaloneBackend() -> LocalWalletBackend {
+        let policyStore: any PolicyStore = (try? FilePolicyStore(url: FilePolicyStore.defaultURL()))
+            ?? InMemoryPolicyStore()
+        let ledger: any LedgerStore = (try? FileLedgerStore(url: FileLedgerStore.defaultURL()))
+            ?? InMemoryLedgerStore()
+        return LocalWalletBackend(
+            vault: seedVault,
+            chain: CombinedProvider(),
+            policy: PolicyEngine(store: policyStore),
+            ledger: ledger
+        )
     }
 
     private func requestPushIfNeeded() async {
         #if canImport(UserNotifications)
-        guard credential != nil else { return }
+        guard case .daemon = launch else { return }
         let registrar = PushRegistrar()
         await registrar.requestAuthorization()
         switch registrar.state {
@@ -79,6 +145,22 @@ public struct BSVOSAppView: View {
     }
 }
 
+/// Which wallet this launch uses. Extracted so the precedence is testable
+/// without a SwiftUI host: a phone with its own wallet uses it even when a
+/// daemon credential is also present, because quietly spending from the other
+/// wallet is the worst way to be surprised.
+public enum WalletLaunchMode: Equatable, Sendable {
+    case standalone
+    case daemon
+    case unconfigured
+
+    public static func decide(hasLocalPhrase: Bool, hasDaemonCredential: Bool) -> WalletLaunchMode {
+        if hasLocalPhrase { return .standalone }
+        if hasDaemonCredential { return .daemon }
+        return .unconfigured
+    }
+}
+
 /// Enter the code the desktop printed. Also offers forget/revoke, because a
 /// device that was revoked on the desktop should be able to start over without
 /// reinstalling the app.
@@ -86,16 +168,25 @@ public struct PairingView: View {
     let baseURL: URL
     let store: CredentialStore
     let onPaired: (DeviceCredential) -> Void
+    /// Shown when the pairing screen was pushed from a setup flow that has a
+    /// way back; nil when pairing is the only thing the app can do.
+    let onCancel: (() -> Void)?
 
     @State private var code = ""
     @State private var deviceName = ""
     @State private var busy = false
     @State private var error: WalletError?
 
-    public init(baseURL: URL, store: CredentialStore, onPaired: @escaping (DeviceCredential) -> Void) {
+    public init(
+        baseURL: URL,
+        store: CredentialStore,
+        onPaired: @escaping (DeviceCredential) -> Void,
+        onCancel: (() -> Void)? = nil
+    ) {
         self.baseURL = baseURL
         self.store = store
         self.onPaired = onPaired
+        self.onCancel = onCancel
     }
 
     public var body: some View {
@@ -139,6 +230,13 @@ public struct PairingView: View {
                 }
             }
             .navigationTitle("Pair this phone")
+            .toolbar {
+                if let onCancel {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Back", action: onCancel)
+                    }
+                }
+            }
         }
     }
 

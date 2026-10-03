@@ -334,4 +334,14 @@ final class LocalWalletTests: XCTestCase {
         let status = try await backend.isAuthenticated()
         XCTAssertTrue(status.hasWallet)
     }
+
+    // MARK: - launch precedence
+
+    func testLaunchModePrefersTheLocalWallet() {
+        // A phone with both must not silently spend from the other wallet.
+        XCTAssertEqual(WalletLaunchMode.decide(hasLocalPhrase: true, hasDaemonCredential: true), .standalone)
+        XCTAssertEqual(WalletLaunchMode.decide(hasLocalPhrase: true, hasDaemonCredential: false), .standalone)
+        XCTAssertEqual(WalletLaunchMode.decide(hasLocalPhrase: false, hasDaemonCredential: true), .daemon)
+        XCTAssertEqual(WalletLaunchMode.decide(hasLocalPhrase: false, hasDaemonCredential: false), .unconfigured)
+    }
 }

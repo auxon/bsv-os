@@ -4,7 +4,12 @@ Covers the daemon-side gate (Phase 0) and the app skeleton (Phase 1). The
 staging beyond that is at the end.
 
 The iOS plan is staged: a remote client first (full parity, daemon keeps the
-keys), on-device custody later and only if the phone must work standalone.
+keys), on-device custody now implemented as well — the operator chose the
+standalone path outright, with the same seed on both front ends, so the phone
+and the Mac are one wallet with two views of the same chain state. The
+remote-client stage is still built and still works; `WalletLaunchMode` prefers
+the phone's own wallet when one exists, because spending from the other wallet
+without saying so is the worst way to be surprised.
 Everything about the first stage rests on this document, because the daemon
 today has **no authentication at all** — `isLoopbackPeer()` in
 `packages/walletd/src/index.ts` returns 403 for anything that is not
@@ -562,10 +567,20 @@ bridge and one that uses same-origin RPC both work in the same host.
 1. **Where does the iOS code live?** A new repo (`auxon/bsv-os-ios`) keeps a
    Swift toolchain out of this repo's npm-based CI; `packages/ios/` keeps it
    together and visible to the front-end-split rule. Not yet decided.
-2. **Standalone mode (Phase 4) shape.** If the phone ever holds keys, it should
-   probably hold a *separate, capped sub-wallet* — the `agent mint` model
-   already exists for exactly this — rather than a copy of the main wallet.
-   Deciding this late means reconciling two disagreeing wallets.
+2. **Standalone mode (Phase 4) shape — decided and built.** The phone holds the
+   wallet outright: the same recovery phrase as the daemon (so both derive
+   `m/0/0` and are one wallet), the phrase in the Keychain with
+   `WhenUnlockedThisDeviceOnly`, and no server in the loop. The Swift core is
+   S1 (`Core/BIP32`, `Secp256k1`), S2 (`Core/Tx`, `Wallet/Chain`), S3
+   (`Policy/`), and S4 (`Core/Mnemonic`, `Wallet/SeedVault`,
+   `Wallet/LocalLedger`, `Wallet/LocalWalletBackend`, `UI/WalletSetupView`). Each layer is pinned against daemon-generated
+   vectors: identical transactions byte for byte, identical policy decisions
+   including reason strings, identical mnemonic derivation from entropy.
+   Open question, not the old one: the daemon's agent sub-wallets, the Jev
+   advisor and the Trust worker are seams on the phone rather than ports — with
+   none configured, `auto` fails closed exactly as the daemon does without an
+   API key. A phone cannot run the monitor: confirmations are checked while the
+   app is open (`refreshPendingTransactions`) and the ledger says so.
 3. **App Store posture** for a general-purpose BRC-100 app host. Worth a spike
    before Phase 2 goes deep.
 4. **Where the app target lives.** A `packages/ios/` Xcode project keeps it
