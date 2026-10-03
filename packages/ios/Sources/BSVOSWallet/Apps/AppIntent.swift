@@ -88,11 +88,15 @@ public struct DeclaredIntent: Codable, Sendable, Equatable {
     public let action: String
     public let label: String?
     public let description: String?
+    /// The daemon's `AppIntent.typicalSats`: what the action usually costs,
+    /// used as the seeded request's amount.
+    public let typicalSats: Int?
 
-    public init(action: String, label: String? = nil, description: String? = nil) {
+    public init(action: String, label: String? = nil, description: String? = nil, typicalSats: Int? = nil) {
         self.action = action
         self.label = label
         self.description = description
+        self.typicalSats = typicalSats
     }
 }
 
