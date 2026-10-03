@@ -572,7 +572,10 @@ origin. Three families refuse by name instead of half-working: the session lock
 (the app owns it, so a page cannot open the wallet), `sweepOut` (terminal-only
 by design) and app management (the Apps tab owns the registry on this device).
 Everything else the desktop shell calls answers `NOT_ALLOWED`, which the shell
-renders as a plain-language error.
+renders as a plain-language error. That includes the shell's Twetch screens:
+they proxy `api.twetch.com` with an account key the phone does not hold, so
+Twetch on the phone means the bundled Twetch app, and the shell's Twetch view
+stays desktop-only.
 
 ## Physical-device checklist
 
