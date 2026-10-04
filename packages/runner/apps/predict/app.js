@@ -110,7 +110,8 @@ function renderDetail() {
         <label>Outcome <select id="b-outcome">${m.outcomes.map((o) => `<option>${esc(o)}</option>`).join("")}</select></label>
         <label>Sats <input id="b-sats" type="number" min="1000" placeholder="2000" /></label>
         <button id="bet-btn" type="button">Bet (policy-gated)</button>
-        <button id="cancel-btn" type="button">Cancel market</button>` : ""}
+        <button id="cancel-btn" type="button">Cancel market</button>
+        <button id="announce-btn" type="button">Announce (federate)</button>` : ""}
       ${m.status === "locked" ? `<button id="resolve-btn" type="button">Resolve (Jev grades evidence)</button>` : ""}
       ${m.status === "resolving" ? `<button id="settle-btn" type="button">Settle (after dispute window)</button>` : ""}
     </div>
@@ -132,14 +133,24 @@ function renderDetail() {
       }
     });
   }
-  const cancelBtn = $("cancel-btn");
-  if (cancelBtn) {
+  const cancelBtn = $("cancel-btn");  if (cancelBtn) {
     cancelBtn.addEventListener("click", async () => {
       try {
         await rpc("predictCancel", { id: m.id });
         out(`<div class="notice ok">cancelled — run Settle for full refunds.</div>`);
         await refresh();
         await open(m.id);
+      } catch (err) {
+        out(`<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`);
+      }
+    });
+  }
+  const announceBtn = $("announce-btn");
+  if (announceBtn) {
+    announceBtn.addEventListener("click", async () => {
+      try {
+        const r = await rpc("predictAnnounce", { id: m.id });
+        out(`<div class="notice ok">announced on the predict board (post <span class="mono">${esc((r.postId ?? "").slice(0, 12))}…</span>). Other wallets can now bet in.</div>`);
       } catch (err) {
         out(`<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`);
       }
@@ -222,8 +233,7 @@ $("create-form").addEventListener("submit", async (e) => {
     box.innerHTML = `<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`;
   }
 });
-$("pos-btn").addEventListener("click", async () => {
-  const box = $("pos-out");
+$("pos-btn").addEventListener("click", async () => {  const box = $("pos-out");
   const origin = $("pos-origin").value.trim();
   if (!origin) {
     box.innerHTML = `<div class="notice bad">origin required.</div>`;
@@ -235,6 +245,68 @@ $("pos-btn").addEventListener("click", async () => {
     box.innerHTML = ps.length ? ps.map((p) =>
       `<div class="market"><b>${esc(p.market.question)}</b><div class="meta">${esc(p.market.status)} · staked ${fmtSats(p.staked)} · ${Object.entries(p.on).map(([o, s]) => `${esc(o)} ${fmtSats(s)}`).join(" · ")}</div></div>`).join("")
       : `<p class="hint">no positions for ${esc(origin)}.</p>`;
+  } catch (err) {
+    box.innerHTML = `<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`;
+  }
+});
+
+$("remote-btn").addEventListener("click", async () => {
+  const box = $("remote-out");
+  box.innerHTML = `<p class="hint">reading the predict board…</p>`;
+  try {
+    const r = await rpc("predictRemoteMarkets", {});
+    const ms = r?.markets ?? [];
+    if (!ms.length) {
+      box.innerHTML = `<p class="hint">no announced markets. Creators publish with: bsv predict announce &lt;id&gt;</p>`;
+      return;
+    }
+    box.innerHTML = ms.map(({ descriptor: d, from }, i) => `
+      <div class="market"><b>${esc(d.question)}</b>
+      <div class="meta">by ${esc(d.creator.slice(0, 12))}… · closes ${new Date(d.closes_at).toLocaleString()} · fee ${d.fee_bps / 100}%</div>
+      <div class="meta">outcomes: ${d.outcomes.map(esc).join(" / ")}</div>
+      <div class="actions">
+        <label>Outcome <select id="r-outcome-${i}">${d.outcomes.map((o) => `<option>${esc(o)}</option>`).join("")}</select></label>
+        <label>Sats <input id="r-sats-${i}" type="number" min="1000" placeholder="2000" /></label>
+        <label class="check"><input id="r-trust-${i}" type="checkbox" /> I checked the creator's Trust profile</label>
+        <button type="button" data-rbet="${i}">Bet remote</button>
+      </div></div>`).join("");
+    box.querySelectorAll("[data-rbet]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const i = Number(btn.dataset.rbet);
+        const d = ms[i].descriptor;
+        const outcome = $(`r-outcome-${i}`).value;
+        const sats = Math.floor(Number($(`r-sats-${i}`).value) || 0);
+        const trustOk = $(`r-trust-${i}`).checked;
+        try {
+          const r = await rpc("predictBetRemote", {
+            pool: d.pool_address, market: d.id, outcome, sats, trustOk,
+          });
+          btn.outerHTML = `<div class="notice ok">bet sent (tx <span class="mono">${esc((r.txid ?? "").slice(0, 12))}…</span>). The bookmaker credits it on sync; track via My positions after they sync-in.</div>`;
+        } catch (err) {
+          btn.outerHTML = `<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`;
+        }
+      });
+    });
+  } catch (err) {
+    box.innerHTML = `<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`;
+  }
+});
+
+$("sync-btn").addEventListener("click", async () => {
+  const box = $("sync-out");
+  const id = $("sync-id").value.trim();
+  if (!id) {
+    box.innerHTML = `<div class="notice bad">market id required.</div>`;
+    return;
+  }
+  box.innerHTML = `<p class="hint">scanning pool…</p>`;
+  try {
+    const r = await rpc("predictSyncIn", { id });
+    const c = r?.credited ?? [];
+    box.innerHTML = c.length
+      ? `<div class="notice ok">credited ${c.length}: ${c.map((x) => `${fmtSats(x.sats)} on ${esc(x.outcome)}`).join(", ")}</div>`
+      : `<p class="hint">nothing new${(r?.skipped?.length ?? 0) ? ` (${r.skipped.length} non-matching)` : ""}.</p>`;
+    await refresh();
   } catch (err) {
     box.innerHTML = `<div class="notice bad">[${esc(err.code ?? "")}] ${esc(err.message)}</div>`;
   }

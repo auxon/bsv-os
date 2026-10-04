@@ -102,6 +102,171 @@ export async function migratePredict(db: Knex): Promise<void> {
       t.integer("created_at").notNullable();
     });
   }
+  if (!(await db.schema.hasTable("predict_remote"))) {
+    await db.schema.createTable("predict_remote", (t) => {
+      t.string("market_id", 24).primary();
+      t.string("role", 16).notNullable(); // creator | bettor
+      t.string("board", 64).notNullable().defaultTo("predict");
+      t.string("post_id", 128).nullable(); // announcement post (creator) or source post (bettor)
+      t.text("descriptor").notNullable().defaultTo("{}");
+      t.string("status", 16).notNullable().defaultTo("open");
+      t.string("settle_txid", 64).nullable();
+      t.integer("created_at").notNullable();
+    });
+  }
+}
+
+export const PREDICT_BOARD = "predict";
+/** OP_RETURN memo convention for cross-wallet bets. */
+export const PREDICT_BET_TAG = "PREDICTBET";
+export const PREDICT_MARKET_TAG = "PREDICT-MARKET";
+export const PREDICT_SETTLE_TAG = "PREDICT-SETTLE";
+
+export interface RemoteDescriptor {
+  id: string;
+  question: string;
+  outcomes: string[];
+  closes_at: number;
+  evidence: string;
+  fee_bps: number;
+  dispute_hours: number;
+  pool_address: string;
+  creator: string; // identity key or origin label
+}
+
+export function descriptorFor(m: Market, poolAddress: string, creator: string): RemoteDescriptor {
+  return {
+    id: m.id,
+    question: m.question,
+    outcomes: m.outcomes,
+    closes_at: m.closes_at,
+    evidence: m.evidence,
+    fee_bps: m.fee_bps,
+    dispute_hours: m.dispute_hours,
+    pool_address: poolAddress,
+    creator,
+  };
+}
+
+/** Parse a PREDICT-MARKET board post. Null when not a descriptor. */
+export function parseDescriptor(text: string): RemoteDescriptor | null {
+  const m = String(text ?? "").match(/PREDICT-MARKET\s+(\{.*\})/s);
+  if (!m) return null;
+  try {
+    const d = JSON.parse(m[1]) as Record<string, unknown>;
+    if (typeof d.id !== "string" || typeof d.question !== "string" || !Array.isArray(d.outcomes)) return null;
+    if (typeof d.pool_address !== "string" || typeof d.creator !== "string") return null;
+    return d as unknown as RemoteDescriptor;
+  } catch {
+    return null;
+  }
+}
+
+/** Build the bet memo lines. Outcome/payout/identity ride as separate ≤80ch lines. */
+export function betMemo(marketId: string, outcome: string, payoutAddress: string, identityKey?: string): string[] {
+  const lines = [`${PREDICT_BET_TAG} ${marketId} ${outcome}`, payoutAddress];
+  if (identityKey) lines.push(identityKey);
+  for (const l of lines) {
+    if (l.length > 80) fail("BAD_PARAM", "bet memo line too long (outcome > ~50 chars unsupported remote)");
+  }
+  return lines;
+}
+
+/** Parse a bet memo back. Null when not a PREDICTBET memo. */
+export function parseBetMemo(lines: string[]): { marketId: string; outcome: string; payout: string; identityKey: string | null } | null {
+  if (!Array.isArray(lines) || lines.length < 2) return null;
+  const m = String(lines[0] ?? "").match(/^PREDICTBET\s+(\S+)\s+(.+)$/);
+  if (!m) return null;
+  const payout = String(lines[1] ?? "");
+  if (!/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(payout)) return null;
+  return { marketId: m[1], outcome: m[2].trim(), payout, identityKey: typeof lines[2] === "string" && lines[2] ? lines[2] : null };
+}
+
+/** Decode OP_RETURN pushdata to utf8 strings. Empty when not OP_RETURN. */
+export function decodeOpReturnStrings(scriptHex: string): string[] {
+  let hex = String(scriptHex ?? "").replace(/^0x/, "");
+  if (!/^(6a)/i.test(hex)) return [];
+  const bytes: number[] = [];
+  for (let i = 0; i + 2 <= hex.length; i += 2) bytes.push(parseInt(hex.slice(i, i + 2), 16));
+  if (bytes[0] !== 0x6a) return [];
+  const out: string[] = [];
+  let i = 1;
+  const take = (n: number): number[] | null => {
+    if (i + n > bytes.length) return null;
+    const d = bytes.slice(i, i + n);
+    i += n;
+    return d;
+  };
+  while (i < bytes.length) {
+    const op = bytes[i++];
+    let len = -1;
+    if (op >= 0x01 && op <= 0x4b) len = op;
+    else if (op === 0x4c) {
+      const b = take(1);
+      if (!b) break;
+      len = b[0];
+    } else if (op === 0x4d) {
+      const b = take(2);
+      if (!b) break;
+      len = b[0] | (b[1] << 8);
+    } else if (op === 0x4e) {
+      const b = take(4);
+      if (!b) break;
+      len = b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24);
+    } else break;
+    const d = take(len);
+    if (!d) break;
+    try {
+      const s = Buffer.from(d).toString("utf8");
+      if (s && /^[\x20-\x7e]+$/.test(s)) out.push(s);
+    } catch { /* skip binary push */ }
+  }
+  return out;
+}
+
+export interface ScannedOutput { scriptHex: string; sats: number }
+
+/**
+ * Credit one on-chain tx to a market: finds a PREDICTBET memo, checks a
+ * pool payment ≥ min bet, guards double-credit. Returns the bet or null
+ * with a reason. Pure ledger logic; fetching is the caller's job.
+ */
+export async function creditScannedBet(
+  db: Knex,
+  market: Market,
+  txid: string,
+  outputs: ScannedOutput[],
+  poolScriptHex: string,
+  now = Date.now(),
+): Promise<{ bet: Bet | null; reason?: string }> {
+  if (market.status !== "open" || now > market.closes_at) {
+    return { bet: null, reason: "market not open" };
+  }
+  let memo: ReturnType<typeof parseBetMemo> = null;
+  for (const o of outputs) {
+    const m = parseBetMemo(decodeOpReturnStrings(o.scriptHex));
+    if (m && m.marketId === market.id) {
+      memo = m;
+      break;
+    }
+  }
+  if (!memo) return { bet: null, reason: "no PREDICTBET memo for this market" };
+  if (!market.outcomes.includes(memo.outcome)) return { bet: null, reason: "unknown outcome" };
+  const paid = outputs
+    .filter((o) => o.scriptHex.toLowerCase() === poolScriptHex.toLowerCase())
+    .reduce((s, o) => s + o.sats, 0);
+  if (paid < PREDICT_MIN_BET_SATS) return { bet: null, reason: `pool payment ${paid} below min ${PREDICT_MIN_BET_SATS}` };
+  const dup = await db("predict_bets").where({ txid: txid.toLowerCase() }).first();
+  if (dup) return { bet: null, reason: "already credited" };
+  const bet = await recordBet(db, {
+    market_id: market.id,
+    origin: `remote:${memo.payout.slice(0, 12)}`,
+    payout_address: memo.payout,
+    outcome: memo.outcome,
+    sats: paid,
+    txid: txid.toLowerCase(),
+  }, now);
+  return { bet };
 }
 
 export function newMarketId(): string {

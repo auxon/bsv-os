@@ -27,7 +27,7 @@ import { track } from "./monitor.ts";
 import type { ChainProvider } from "./chain.ts";
 import type { JevDecide, SpendContext } from "./jev.ts";
 
-const WOC_TX = "https://api.whatsonchain.com/v1/bsv/main/tx";
+export const WOC_TX = "https://api.whatsonchain.com/v1/bsv/main/tx";
 
 function fail(code: string, message: string): never {
   throw Object.assign(new Error(message), { code });

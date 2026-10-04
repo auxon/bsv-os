@@ -1414,8 +1414,41 @@ async function main(): Promise<void> {
           break;
         }
         print(await call("predictPositions", { origin }));
+      } else if (pSub === "announce" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictAnnounce", { id: pRest.find((a) => !a.startsWith("--")) }));
+      } else if (pSub === "remote-markets") {
+        print(await call("predictRemoteMarkets", {}));
+      } else if (pSub === "bet-remote") {
+        const pool = flag(pRest, "pool");
+        const market = flag(pRest, "market");
+        const outcome = flag(pRest, "outcome");
+        const sats = flag(pRest, "sats");
+        if (!pool || !market || !outcome || !sats) {
+          console.error("usage: bsv predict bet-remote --pool <addr> --market <id> --outcome <o> --sats <n> [--payout <addr>] [--origin <o>] --trust-ok");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("predictBetRemote", {
+          pool, market, outcome, sats: Number(sats),
+          ...(flag(pRest, "payout") !== undefined ? { payout: flag(pRest, "payout") } : {}),
+          ...(pRest.includes("--trust-ok") || flag(pRest, "trust-ok") !== undefined ? { trustOk: true } : {}),
+          ...pParams,
+        }));
+      } else if (pSub === "sync-in" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictSyncIn", { id: pRest.find((a) => !a.startsWith("--")) }));
+      } else if (pSub === "credit") {
+        const id = flag(pRest, "id");
+        const txid = flag(pRest, "txid");
+        if (!id || !txid) {
+          console.error("usage: bsv predict credit --id <market> --txid <64-hex>");
+          process.exitCode = 2;
+          break;
+        }
+        print(await call("predictCredit", { id, txid }));
+      } else if (pSub === "sync-remote" && pRest.find((a) => !a.startsWith("--"))) {
+        print(await call("predictSyncRemote", { id: pRest.find((a) => !a.startsWith("--")) }));
       } else {
-        console.error("usage: bsv predict <create|list|show|bet|resolve|dispute|settle|cancel|positions>");
+        console.error("usage: bsv predict <create|list|show|bet|resolve|dispute|settle|cancel|positions|announce|remote-markets|bet-remote|sync-in|credit|sync-remote>");
         process.exitCode = 2;
       }
       break;

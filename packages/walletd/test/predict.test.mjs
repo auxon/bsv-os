@@ -2,12 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import knex from "knex";
 import {
+  betMemo,
+  creditScannedBet,
+  createMarket,
+  decodeOpReturnStrings,
+  descriptorFor,
   disputeWindowOpen,
   gradeEvidence,
   impliedOdds,
   marketBasket,
   migratePredict,
   newMarketId,
+  parseBetMemo,
+  parseDescriptor,
   parseDurationMs,
   splitPool,
   splitVoid,
@@ -96,8 +103,7 @@ test("gradeEvidence voids below-confidence verdicts", async () => {
   assert.deepEqual(bad, { winner: null, confidence: 0.9 });
 });
 
-test("migratePredict creates tables round-trip", async () => {
-  const db = knex({ client: "better-sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
+test("migratePredict creates tables round-trip", async () => {  const db = knex({ client: "better-sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
   try {
     await migratePredict(db);
     await migratePredict(db); // idempotent
@@ -105,6 +111,70 @@ test("migratePredict creates tables round-trip", async () => {
     const names = tables.map((t) => t.name);
     assert.ok(names.includes("predict_markets"));
     assert.ok(names.includes("predict_bets"));
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("descriptor round-trips through board text", () => {
+  const d = descriptorFor(
+    { id: "pm_x", question: "Q?", outcomes: ["yes", "no"], closes_at: 1, evidence: "e", fee_bps: 200, dispute_hours: 24, creator_origin: "o", created_at: 0, status: "open", winning_outcome: null, verdict_confidence: null, resolved_at: null, dispute_by: null, dispute_why: null, settle_txid: null },
+    "1ABC",
+    "key1",
+  );
+  const back = parseDescriptor(`PREDICT-MARKET ${JSON.stringify(d)}\ncome bet!`);
+  assert.deepEqual(back, d);
+  assert.equal(parseDescriptor("hello world"), null);
+  assert.equal(parseDescriptor("PREDICT-MARKET {nope"), null);
+});
+
+test("bet memo builds and parses, rejects junk", () => {
+  const lines = betMemo("pm_x", "yes", "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU", "key9");
+  assert.deepEqual(parseBetMemo(lines), {
+    marketId: "pm_x", outcome: "yes", payout: "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU", identityKey: "key9",
+  });
+  assert.deepEqual(parseBetMemo(["PREDICTBET pm_x yes", "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU"]).identityKey, null);
+  assert.equal(parseBetMemo(["hello"]), null);
+  assert.equal(parseBetMemo(["PREDICTBET pm_x yes", "not-an-address"]), null);
+  assert.throws(() => betMemo("pm_x", "o".repeat(100), "1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU"), /too long/);
+});
+
+test("decodeOpReturnStrings reads pushes, ignores the rest", () => {
+  assert.deepEqual(decodeOpReturnStrings("6a026869026f6b"), ["hi", "ok"]);
+  assert.deepEqual(decodeOpReturnStrings("76a914" + "ab".repeat(20) + "88ac"), []);
+  assert.deepEqual(decodeOpReturnStrings("zz"), []);
+});
+
+test("creditScannedBet credits a valid memo payment once", async () => {
+  const db = knex({ client: "better-sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
+  try {
+    await migratePredict(db);
+    const m = await createMarket(db, async () => ({}), {
+      question: "Will the credit path work end to end?",
+      outcomes: ["left", "right"], closes_at: Date.now() + 3600_000,
+      evidence: "test", fee_bps: 200, dispute_hours: 24, creator_origin: "t",
+    });
+    const pool = "aa".repeat(25);
+    const memoHex = (s) => "6a" + Buffer.from(s).toString("hex").split("").reduce((a, _, i, arr) => i % 2 ? a : a + ("0" + parseInt(arr.slice(i, i + 2).join(""), 16).toString(16)).slice(-2), "");
+    const push = (s) => {
+      const b = Buffer.from(s);
+      return (b.length < 76 ? b.length.toString(16).padStart(2, "0") : "4c" + b.length.toString(16).padStart(2, "0")) + b.toString("hex");
+    };
+    const opret = "6a" + push("PREDICTBET " + m.id + " left") + push("1LVDqy9JjDd2ceXqPULKs39pxPBFo2GcrU");
+    const outs = [
+      { scriptHex: opret, sats: 0 },
+      { scriptHex: pool, sats: 1500 },
+    ];
+    const r1 = await creditScannedBet(db, m, "tx1", outs, pool);
+    assert.ok(r1.bet);
+    assert.equal(r1.bet.outcome, "left");
+    assert.equal(r1.bet.sats, 1500);
+    assert.equal(r1.bet.origin, "remote:1LVDqy9JjDd2");
+    const r2 = await creditScannedBet(db, m, "tx1", outs, pool);
+    assert.equal(r2.bet, null);
+    // below-min payment rejected
+    const r3 = await creditScannedBet(db, m, "tx2", [{ scriptHex: opret, sats: 0 }, { scriptHex: pool, sats: 100 }], pool);
+    assert.equal(r3.bet, null);
   } finally {
     await db.destroy();
   }

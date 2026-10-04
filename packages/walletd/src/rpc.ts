@@ -1,3 +1,4 @@
+import { Transaction } from "@bsv/sdk";
 import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import {
   twetchAccountImport,
@@ -23,10 +24,13 @@ import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type Jev
 import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
 import {
   createMarket, disputeWindowOpen, getBets, getMarket, gradeEvidence, listMarkets, lockIfPastClose,
-  marketBasket, marketView, PREDICT_CONF_THRESHOLD, PREDICT_MIN_BET_SATS,
-  positionsFor, recordBet, recordDispute, recordSettlement, recordVerdict, splitPool, splitVoid,
+  betMemo, decodeOpReturnStrings, descriptorFor, parseBetMemo, parseDescriptor,
+  creditScannedBet, marketBasket, marketView, PREDICT_BOARD, PREDICT_CONF_THRESHOLD, PREDICT_MIN_BET_SATS,
+  PREDICT_MARKET_TAG, PREDICT_SETTLE_TAG, positionsFor, recordBet, recordDispute, recordSettlement, recordVerdict, splitPool, splitVoid,
   validateMarket, winnerFromChoice,
 } from "./predict.ts";
+import { WOC_TX } from "./engine.ts";
+import { p2pkhScript } from "./tx.ts";
 import { anchorTip, explorerTxUrl, getBalance, inscribeMint, safeLabel, sendBsv21, sendOrdinal, sendSats, spendTo, sweepIn, sweepOut } from "./engine.ts";
 import { DEVICE_READS, DEVICE_WRITES, deviceOrigin, isDeviceCallable } from "./device.ts";
 import { cancelPairing, listDevices, mintPairingCode, pendingPairingView, renameDevice, revokeDevice } from "./device.ts";
@@ -706,6 +710,25 @@ async function marketCancelFor(origin: string, params: unknown): Promise<unknown
     };
 }
 
+/** Best-effort PREDICT-SETTLE board reply so remote bettors can sync. Never throws. */
+async function announceSettlement(
+  bdb: Knex,
+  marketId: string,
+  txid: string,
+): Promise<void> {
+  const row = await bdb("predict_remote").where({ market_id: marketId, role: "creator" }).first() as {
+    post_id?: unknown; board?: unknown;
+  } | undefined;
+  if (!row?.post_id) return;
+  const board = await getBoard(bdb, String(row.board ?? "predict")).catch(() => null);
+  if (!board) return;
+  await boardPublish({ db: bdb } as ReturnType<typeof needBackend>, board, {
+    text: `${PREDICT_SETTLE_TAG} ${marketId} ${txid}`,
+    kind: "predict",
+    replyTo: String(row.post_id),
+    origin: "predict",
+  });
+}
 const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
   getVersion: () => ({ version: VERSION, brc100: true }),
   isAuthenticated: async () => {
@@ -1820,6 +1843,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { question, submission } = p(params) as { question?: unknown; submission?: unknown };
     return gradeAnswer(jevDecideCall, { question: String(question ?? ""), submission: String(submission ?? "") });
   },
+
   /* ── Prediction markets: parimutuel pools, Jev resolution ────────── */
   predictList: async (params) => {
     const b = needBackend();
@@ -1977,6 +2001,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       description: `prediction market ${id} settled: ${m.winning_outcome} wins (conf ${m.verdict_confidence})`,
     });
     await recordSettlement(b.db, id, paid.txid, "settled" as const);
+    await announceSettlement(b.db, id, paid.txid).catch(() => null);
     return { market: await marketView(b.db, id), payouts: outs, fee, txid: paid.txid, settleFee: paid.fee };
   },
   predictCancel: async (params) => {
@@ -1994,6 +2019,150 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { origin } = p(params) as { origin?: unknown };
     if (typeof origin !== "string" || !origin) throw Object.assign(new Error("origin required"), { code: "BAD_PARAM" });
     return { positions: await positionsFor(b.db, origin) };
+  },
+  /* ── Federated bookmaker: markets other wallets can bet into ────── */
+  predictAnnounce: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    let board = await getBoard(b.db, PREDICT_BOARD).catch(() => null);
+    if (!board) board = await createBoard(b.db, { name: PREDICT_BOARD, mode: "members" });
+    let creator = m.creator_origin;
+    try {
+      creator = identityPubkeyHex();
+    } catch { /* locked wallet: origin label it is */ }
+    const text = `${PREDICT_MARKET_TAG} ${JSON.stringify(descriptorFor(m, selfAddress(), creator))}`;
+    const sent = await boardPublish({ db: b.db } as ReturnType<typeof needBackend>, board, { text, kind: "predict", origin: m.creator_origin });
+    await b.db("predict_remote").insert({
+      market_id: id, role: "creator", board: PREDICT_BOARD, post_id: sent.id,
+      descriptor: JSON.stringify(descriptorFor(m, selfAddress(), creator)),
+      status: "open", created_at: Date.now(),
+    }).onConflict("market_id").merge({ post_id: sent.id });
+    return { postId: sent.id, board: PREDICT_BOARD };
+  },
+  predictRemoteMarkets: async () => {
+    const b = needBackend();
+    const board = await getBoard(b.db, PREDICT_BOARD).catch(() => null);
+    if (!board) return { markets: [] };
+    const res = await getPosts(b.db, board.name, { limit: 100 });
+    const out = [];
+    for (const post of res.posts ?? []) {
+      const d = parseDescriptor(post.text ?? "");
+      if (d) out.push({ descriptor: d, postId: post.id ?? null, from: post.from ?? null });
+    }
+    return { markets: out };
+  },
+  predictBetRemote: async (params) => {
+    const b = needBackend();
+    const raw = p(params) as Record<string, unknown>;
+    const pool = String(raw.pool ?? "");
+    const marketId = String(raw.market ?? raw.id ?? "");
+    const outcome = String(raw.outcome ?? "");
+    const sats = Math.floor(Number(raw.sats) || 0);
+    const origin = typeof raw.origin === "string" && raw.origin ? raw.origin : "predict";
+    const payout = String(raw.payout ?? "");
+    const trustOk = raw.trustOk === true;
+    if (!pool || !marketId || !outcome || !(sats >= PREDICT_MIN_BET_SATS)) {
+      throw Object.assign(new Error("pool, market, outcome and sats≥1000 required"), { code: "BAD_PARAM" });
+    }
+    if (!trustOk) {
+      throw Object.assign(new Error("remote bookmaker: verify the creator's Trust profile first (bsv trust), then pass trustOk"), { code: "TRUST_REQUIRED" });
+    }
+    const to = payout || selfAddress();
+    const paid = await spendTo({
+      db: b.db, chain: b.chain, origin,
+      payments: [{ to: pool, sats }],
+      memo: betMemo(marketId, outcome, to),
+      label: `predict remote bet ${sats} on ${outcome} (${marketId})`,
+      description: `remote prediction bet: ${sats} sats on ${outcome} to bookmaker ${pool.slice(0, 12)}`,
+    });
+    await b.db("predict_remote").insert({
+      market_id: marketId, role: "bettor", board: PREDICT_BOARD, post_id: null,
+      descriptor: JSON.stringify({ pool_address: pool, outcome, sats, payout: to }),
+      status: "open", created_at: Date.now(),
+    }).onConflict("market_id").merge({ status: "open" });
+    await recordBet(b.db, {
+      market_id: marketId, origin: `${origin}:remote`, payout_address: to, outcome, sats, txid: paid.txid,
+    }).catch(() => null);
+    return { txid: paid.txid, fee: paid.fee, market: marketId, outcome, sats };
+  },
+  predictSyncIn: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    const poolHex = p2pkhScript(selfAddress()).toHex();
+    const u = await b.chain.utxos(selfAddress());
+    const credited = [];
+    const skipped = [];
+    for (const x of (u.utxos ?? []).slice(0, 30)) {
+      const known = await b.db("predict_bets").where({ txid: String(x.txid).toLowerCase() }).first();
+      if (known) continue;
+      let hex = "";
+      try {
+        const r = await fetch(`${WOC_TX}/${x.txid}/hex`);
+        if (!r.ok) continue;
+        hex = (await r.text()).trim();
+      } catch {
+        continue;
+      }
+      let outputs: { scriptHex: string; sats: number }[] = [];
+      try {
+        const tx = Transaction.fromHex(hex);
+        outputs = (tx.outputs ?? []).map((o) => ({
+          scriptHex: o.lockingScript?.toHex?.() ?? "",
+          sats: Number(o.satoshis ?? 0),
+        }));
+      } catch {
+        continue;
+      }
+      const r = await creditScannedBet(b.db, m, String(x.txid), outputs, poolHex);
+      if (r.bet) credited.push({ txid: x.txid, outcome: r.bet.outcome, sats: r.bet.sats });
+      else skipped.push({ txid: String(x.txid).slice(0, 12), reason: r.reason });
+    }
+    return { market: id, credited, skipped };
+  },
+  predictCredit: async (params) => {
+    const b = needBackend();
+    const { id, txid } = p(params) as { id?: unknown; txid?: unknown };
+    if (typeof id !== "string" || !id || typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
+      throw Object.assign(new Error("id and 64-hex txid required"), { code: "BAD_PARAM" });
+    }
+    const m = await getMarket(b.db, id);
+    if (!m) throw Object.assign(new Error(`no market ${id}`), { code: "NOT_FOUND" });
+    const poolHex = p2pkhScript(selfAddress()).toHex();
+    const r = await fetch(`${WOC_TX}/${txid}/hex`);
+    if (!r.ok) throw Object.assign(new Error("tx fetch failed"), { code: "RAILS" });
+    const tx = Transaction.fromHex((await r.text()).trim());
+    const outputs = (tx.outputs ?? []).map((o) => ({
+      scriptHex: o.lockingScript?.toHex?.() ?? "",
+      sats: Number(o.satoshis ?? 0),
+    }));
+    const res = await creditScannedBet(b.db, m, txid, outputs, poolHex);
+    if (!res.bet) throw Object.assign(new Error(`not credited: ${res.reason}`), { code: "BAD_STATE" });
+    return { bet: res.bet };
+  },
+  predictSyncRemote: async (params) => {
+    const b = needBackend();
+    const { id } = p(params) as { id?: unknown };
+    if (typeof id !== "string" || !id) throw Object.assign(new Error("id required"), { code: "BAD_PARAM" });
+    const row = await b.db("predict_remote").where({ market_id: id, role: "bettor" }).first();
+    if (!row) throw Object.assign(new Error(`no remote bet tracked for ${id}`), { code: "NOT_FOUND" });
+    const board = await getBoard(b.db, PREDICT_BOARD).catch(() => null);
+    if (!board) return { market: id, status: (row as Record<string, unknown>).status, note: "no predict board" };
+    const res = await getPosts(b.db, board.name, { limit: 200 });
+    for (const post of res.posts ?? []) {
+      const text = post.text ?? "";
+      const mm = text.match(/PREDICT-SETTLE\s+(\S+)\s+([0-9a-fA-F]{64})/);
+      if (mm && mm[1] === id) {
+        await b.db("predict_remote").where({ market_id: id }).update({ status: "settled", settle_txid: mm[2].toLowerCase() });
+        return { market: id, status: "settled", settleTxid: mm[2].toLowerCase() };
+      }
+    }
+    return { market: id, status: (row as Record<string, unknown>).status };
   },
   /** Post a request and block for its first reply: the agent ask primitive. */
   boardAsk: async (params) => {

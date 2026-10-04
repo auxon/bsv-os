@@ -38,6 +38,19 @@
       <button id="pos-btn" type="button">Show</button>
       <div id="pos-out"></div>
     </section>
+    <section id="remote">
+      <h2>Remote markets <span class="tag">federated bookmakers</span></h2>
+      <p class="hint">Other wallets' markets, announced on the predict board. You pay the creator's pool; they settle to your payout address. Check the creator's Trust profile first — betting is trust in their daemon.</p>
+      <button id="remote-btn" type="button">List remote markets</button>
+      <div id="remote-out"></div>
+    </section>
+    <section id="creator">
+      <h2>Bookmaker inbox</h2>
+      <p class="hint">Scan your pool for memo-carried bets from other wallets and credit them.</p>
+      <label>Market <input id="sync-id" type="text" placeholder="pm_…" /></label>
+      <button id="sync-btn" type="button">Sync incoming bets</button>
+      <div id="sync-out"></div>
+    </section>
   </main>
   <script type="module" src="app.js"></script>
 </body>
