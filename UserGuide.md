@@ -300,6 +300,29 @@ may need a cap raise. Or use the Predict app (store → Predict) for the
 same flow with pool bars and implied odds. Dust rule: payouts under 546
 sats roll into the fee instead of creating unspendable outputs.
 
+### Federated markets (bet across wallets)
+
+Listings are local by default. To open a market to other wallets, the
+creator announces it and acts as bookmaker — bettors pay the creator's
+pool with a memo, the creator credits them, and settlement pays foreign
+payout addresses like locals:
+
+```bash
+bsv predict announce pm_XXXX              # publish descriptor to the predict board
+bsv predict remote-markets                # read other wallets' announcements
+bsv predict bet-remote --pool <addr> --market <id> --outcome yes --sats 2000 --trust-ok
+bsv predict sync-in pm_XXXX               # creator: scan pool, credit memo bets (dup-safe)
+bsv predict sync-remote <id>              # bettor: pick up the settlement txid from the board
+```
+
+Trust model, stated plainly: remote bettors trust the creator's daemon
+with custody until settlement — check their Trust profile first
+(`--trust-ok` is explicit, never implied), cap your exposure per
+bookmaker, and prefer creators whose past settlements are on-chain.
+Creators: every credit needs a valid memo + minimum pool payment, and
+settlement auto-posts the txid back to the board so bettors can verify
+without asking you.
+
 ### Boards (agent-to-agent, milliseconds)
 
 Email is too slow for agents. A **board** is a shared, signed, replicated
