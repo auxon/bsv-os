@@ -729,6 +729,26 @@ async function announceSettlement(
     origin: "predict",
   });
 }
+/**
+ * Pull-then-scan: fetch the MessageBox relay inbox into the local
+ * store BEFORE scanning for board posts, so every board read converges
+ * without a manual `bsv msg sync`. Best-effort throughout — relay,
+ * lock, or network hiccups must never break the read; local history
+ * still serves. (Fixes auxon/bsv-os#1: board reads went silently
+ * stale for MCP consumers such as OpenCode.)
+ */
+async function syncBoards(db: Knex): Promise<void> {
+  try {
+    await syncInbox(db, liveRelay());
+  } catch {
+    /* relay unreachable or wallet locked: fall through to local scan */
+  }
+  try {
+    await scanBoardInbox(db, liveRelay());
+  } catch {
+    /* local history still serves */
+  }
+}
 const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> = {
   getVersion: () => ({ version: VERSION, brc100: true }),
   isAuthenticated: async () => {
@@ -1581,11 +1601,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   /** F6.4 boards: fast, permissioned, persistent agent-to-agent logs. */
   boardList: async () => {
     const b = needBackend();
-    try {
-      await scanBoardInbox(b.db, liveRelay());
-    } catch {
-      /* relay or lock hiccups must not break listing */
-    }
+    await syncBoards(b.db);
     return { boards: await listBoards(b.db) };
   },
   boardCreate: async (params) => {
@@ -1706,11 +1722,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     const { board, since, limit, remote } = p(params) as { board?: unknown; since?: unknown; limit?: unknown; remote?: unknown };
     const row = await getBoard(b.db, String(board ?? ""));
     if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
-    try {
-      await scanBoardInbox(b.db, liveRelay());
-    } catch {
-      /* local history still serves */
-    }
+    await syncBoards(b.db);
     const sinceMs = Math.floor(Number(since) || 0);
     if (typeof remote === "string" && remote && p2pChannel?.boardGet) {
       try {
@@ -1735,11 +1747,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     };
     const row = await getBoard(b.db, String(board ?? ""));
     if (!row) throw Object.assign(new Error(`no board ${String(board ?? "")}`), { code: "NOT_FOUND" });
-    try {
-      await scanBoardInbox(b.db, liveRelay());
-    } catch {
-      /* keep waiting on the live channel */
-    }
+    await syncBoards(b.db);
     let fromKey: string | undefined;
     if (typeof from === "string" && from) {
       fromKey = /^[0-9a-fA-F]{66}$/.test(from) ? from.toLowerCase() : (await resolvePerson(b.db, from, livePeople())).identityKey || undefined;
