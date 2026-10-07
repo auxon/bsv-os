@@ -159,6 +159,14 @@ start_background() {
     say "    already running (pid $(cat "$PIDFILE"))"
     return 0
   fi
+  # Pick up daemon env (BSV_WALLETD_KEYSTORE=file etc.) the same way the
+  # systemd unit does via its EnvironmentFile.
+  if [ -f "$HOME/.config/bsv-os/walletd.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$HOME/.config/bsv-os/walletd.env"
+    set +a
+  fi
   # setsid detaches fully; nohup keeps it alive after this shell exits.
   BSV_WALLETD_DATA="$DATA_DIR" \
     setsid nohup "$(command -v node)" "$DIR/packages/walletd/dist/index.js" \
@@ -198,7 +206,9 @@ check_secret_service() {
     return 0
   fi
   say "    note: no Secret Service on the session bus — 'bsv create'/'bsv unlock'"
-  say "    need one (e.g. gnome-keyring-daemon). The daemon and CLI run fine without it."
+  say "    need one (e.g. gnome-keyring-daemon). Headless alternative: the file"
+  say "    backend — set BSV_WALLETD_KEYSTORE=file and BSV_WALLETD_KEYSTORE_PASSWORD"
+  say "    in the daemon's environment (the 0600 walletd.env), then restart it."
   return 1
 }
 
