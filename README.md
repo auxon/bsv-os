@@ -211,6 +211,37 @@ bash scripts/install-macos.sh uninstall  # stop + remove the agent (data is kept
 - Depth on the runner, the bridge, and app identity:
   [packages/runner/README.md](packages/runner/README.md).
 
+### Linux (generic — no Omarchy needed)
+
+The daemon is plain Node/TypeScript, so it builds and runs on any modern
+Linux distro (x86_64 and aarch64). No Arch package, no Omarchy shell
+required — the installer detects your package manager and supervises the
+daemon with a systemd user service when one exists, otherwise as a
+background process.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/auxon/bsv-os/main/scripts/install-linux.sh | bash
+```
+
+Or from a clone: `bash scripts/install-linux.sh`. Idempotent — re-run to
+pull + rebuild. It installs system deps (git, toolchain, libsecret), needs
+Node >= 22 already on your PATH, symlinks `bsv` into `~/.local/bin`, and
+starts the daemon. Logs: `~/.local/share/bsv-os/walletd.log`.
+
+Wallet setup is the same as macOS (`bsv create` / `bsv import` /
+`bsv unlock`), except the seed lives in the freedesktop Secret Service
+instead of Keychain — on a headless box install `gnome-keyring` and make
+sure a secret service is on the session bus first; the installer tells you
+if none is found.
+
+#### Managing the install
+
+```bash
+bash scripts/install-linux.sh            # update: re-run to pull + rebuild
+bash scripts/install-linux.sh status     # service + daemon + wallet status
+bash scripts/install-linux.sh uninstall  # stop + remove the service (data is kept)
+```
+
 ## Layout
 
 - `packages/walletd/` — `bsv-walletd` daemon (P0 in progress)
