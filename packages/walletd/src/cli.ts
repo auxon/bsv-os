@@ -613,6 +613,47 @@ async function main(): Promise<void> {
       }));
       break;
     }
+    case "twonk-mint": {
+      const manifestPath = flag(rest, "manifest");
+      if (!manifestPath) {
+        console.error("usage: bsv twonk-mint --manifest=<tokens.json>");
+        process.exitCode = 2;
+        break;
+      }
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        contractId: string; ownerAddress: string;
+        tokens: Array<{
+          title: string; number: number;
+          attributes: Array<{ trait: string; value: string }>;
+          imageSha256: string; imageFile?: string; imageMime?: string;
+          description?: string;
+        }>;
+      };
+      const base = path.dirname(path.resolve(manifestPath));
+      const images: Array<{ dataBase64: string; mime: string }> = [];
+      for (const t of manifest.tokens) {
+        if (t.imageFile) {
+          const full = path.resolve(base, t.imageFile);
+          images.push({
+            dataBase64: fs.readFileSync(full).toString("base64"),
+            mime: t.imageMime ?? mediaMimeFor(full),
+          });
+        }
+      }
+      print(await call("twonkMint", {
+        contractId: manifest.contractId,
+        ownerAddress: manifest.ownerAddress,
+        tokens: manifest.tokens.map((t) => ({
+          title: t.title,
+          number: t.number,
+          attributes: t.attributes,
+          imageSha256: t.imageSha256,
+          ...(t.description ? { description: t.description } : {}),
+        })),
+        images,
+      }));
+      break;
+    }
     case "trust": {
       const [tSub] = rest;
       if (tSub === "terms" || tSub === "status" || tSub === undefined) {

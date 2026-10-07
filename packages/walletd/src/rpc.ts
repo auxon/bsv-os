@@ -125,6 +125,7 @@ import {
   userPosts,
   userProfile,
 } from "./twetch.ts";
+import { mintTwonks } from "./twonk.ts";
 import {
   cancelLogin,
   currentSession,
@@ -3405,6 +3406,43 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       { db: b.db, chain: b.chain, fetchFn: fetch, origin: "twetch", expectUserId: userId },
       txid,
       { userId },
+    );
+  },
+  /**
+   * Mint a Twonk-protocol NFT collection: one tx carrying B:// image outputs
+   * plus one 546-sat token UTXO per token. Same on-chain format Twetch uses;
+   * marketplace recognition stays Twetch's call, but the tokens are real.
+   */
+  twonkMint: async (params) => {
+    const b = needBackend();
+    const raw = p(params);
+    const contractId = typeof raw.contractId === "string" ? raw.contractId.trim().toLowerCase() : "";
+    const ownerAddress = typeof raw.ownerAddress === "string" ? raw.ownerAddress.trim() : "";
+    const tokens = Array.isArray(raw.tokens) ? raw.tokens : [];
+    const images = Array.isArray(raw.images) ? raw.images : [];
+    const parsedTokens = tokens.map((t) => {
+      const o = (t ?? {}) as Record<string, unknown>;
+      return {
+        title: String(o.title ?? ""),
+        number: Math.floor(Number(o.number) || 0),
+        attributes: (Array.isArray(o.attributes) ? o.attributes : []).map((a) => {
+          const e = (a ?? {}) as Record<string, unknown>;
+          return { trait: String(e.trait ?? ""), value: String(e.value ?? "") };
+        }),
+        imageSha256: String(o.imageSha256 ?? "").toLowerCase(),
+        ...(typeof o.description === "string" && o.description ? { description: o.description } : {}),
+      };
+    });
+    const parsedImages = images.map((im) => {
+      const o = (im ?? {}) as Record<string, unknown>;
+      const bytes = typeof o.dataBase64 === "string" && o.dataBase64
+        ? Array.from(Buffer.from(o.dataBase64, "base64"))
+        : [];
+      return { bytes, mime: typeof o.mime === "string" ? o.mime : "" };
+    });
+    return mintTwonks(
+      { db: b.db, chain: b.chain, fetchFn: fetch, origin: "twonk" },
+      { contractId, ownerAddress, tokens: parsedTokens, images: parsedImages },
     );
   },
   twetchAccountImport: async (params) => {
