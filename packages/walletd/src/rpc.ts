@@ -765,6 +765,19 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
     lock();
     return { locked: true };
   },
+  /**
+   * Sign an arbitrary message with the identity root key (BSM, base64).
+   * Powers wallet-identity auth schemes like Wayfare's BSV1 request signing:
+   * the agent builds the canonical string and asks the daemon to sign it.
+   * Throws WALLET_LOCKED when locked — unlock first.
+   */
+  sign: async (params) => {
+    const { message } = p(params) as { message?: unknown };
+    if (typeof message !== "string" || !message) {
+      throw Object.assign(new Error("message required"), { code: "BAD_PARAM" });
+    }
+    return { identityKey: identityPubkeyHex(), signature: identitySignMessage(message) };
+  },
   pending: async () => {
     if (!backend) return { tracked: [] };
     const rows = await backend.db("pending_txs")

@@ -223,6 +223,23 @@ async function main(): Promise<void> {
     case "lock":
       print(await call("lock"));
       break;
+    case "sign": {
+      // Message via --message= or stdin (for scripts piping canonical strings).
+      // Signs with the identity root key (BSM, base64). Throws WALLET_LOCKED
+      // when locked — run `bsv unlock` first.
+      const mFlag = rest.find((a) => a.startsWith("--message="));
+      let message = mFlag ? mFlag.slice("--message=".length) : "";
+      if (!message && !process.stdin.isTTY) {
+        message = fs.readFileSync(0, "utf8").replace(/\n$/, "");
+      }
+      if (!message) {
+        console.error("usage: bsv sign --message=<text> | echo <text> | bsv sign");
+        process.exitCode = 2;
+        break;
+      }
+      print(await call("sign", { message }));
+      break;
+    }
     case "pending":
       print(await call("pending"));
       break;
