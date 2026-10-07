@@ -25,6 +25,12 @@ guardian names, fingerprints).
   account, at which point the keyring is also reachable.
 - Authentication factor = OS login session (keyring). No TPM sealing, no PIN,
   no PAM integration yet — scheduled with the Quickshell lock-screen work.
+- File keystore (`BSV_WALLETD_KEYSTORE=file`, headless/server opt-in): the
+  authentication factor is the encryption password in the environment, not
+  the OS login session. Threat model shifts accordingly — anyone who can
+  read the password (env, process list at creation, backups) can decrypt
+  the seed file. Never use the default keychain backend's threat assumptions
+  for a file-backend deployment.
 - Identity key is the HD root pubkey. BRC-42 `keyDeriver` paths replace this
   before any identity feature ships (M2).
 - Auto-lock default 15 min (`BSV_WALLETD_LOCK_MS` overrides).

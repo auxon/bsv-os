@@ -2,17 +2,20 @@
  * Custody boundary — the ONLY module allowed raw key material.
  *
  * Design (M1):
- * - 12-word recovery phrase generated with SDK entropy, kept in the OS
- *   keyring (`keytar`: Keychain on macOS, libsecret on Arch) under
- *   service `bsv-walletd` / account `master`. The OS login session is the
- *   authentication factor; TPM/PAM pinning lands in a later milestone.
+ * - 12-word recovery phrase generated with SDK entropy, kept in a pluggable
+ *   secret store (`./keystore.ts`): OS keyring by default (`keytar`:
+ *   Keychain on macOS, libsecret on Arch), or an AES-256-GCM encrypted file
+ *   on headless servers (`BSV_WALLETD_KEYSTORE=file`). Service
+ *   `bsv-walletd` / account `master`. The OS login session (or the file
+ *   password) is the authentication factor; TPM/PAM pinning lands in a later
+ *   milestone.
  * - Session holds an in-memory HD root while unlocked. `lock()` drops the
  *   reference (best-effort wipe; JS GC caveat documented in
  *   docs/trust-boundary.md) and an idle timer re-locks automatically.
  * - Identity key = HD root compressed pubkey (hex). BRC-42 counterparty
  *   keys (below) scope every derived secret to one peer + protocol.
  */
-import keytar from "keytar";
+import { getKeystore, type Keystore } from "./keystore.ts";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { entropyToMnemonic, mnemonicToEntropy } from "@scure/bip39";
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
@@ -45,6 +48,10 @@ function svc(): { service: string; account: string } {
   const suffix = process.env.BSV_WALLETD_KEYCHAIN_SUFFIX ?? "";
   return { service: `bsv-walletd${suffix}`, account: "master" };
 }
+
+// Secret storage backend: OS keyring by default, encrypted file on headless
+// servers (BSV_WALLETD_KEYSTORE=file). Fails fast at import when misconfigured.
+const keystore: Keystore = getKeystore();
 const DEFAULT_LOCK_MS = 15 * 60 * 1000;
 
 export interface CustodyStatus {
@@ -86,7 +93,7 @@ function identityOf(hd: HD): string {
 export async function hasWallet(): Promise<boolean> {
   if (hasWalletCache !== null) return hasWalletCache;
   try {
-    hasWalletCache = (await keytar.getPassword(svc().service, svc().account)) !== null;
+    hasWalletCache = (await keystore.getPassword(svc().service, svc().account)) !== null;
   } catch {
     hasWalletCache = false;
   }
@@ -98,7 +105,7 @@ export async function createWallet(force = false): Promise<{ identityKey: string
     throw new CustodyError("EXISTS", "a wallet already exists (pass force to replace — destroys access to the old one)");
   }
   const phrase = Mnemonic.fromRandom().toString();
-  await keytar.setPassword(svc().service, svc().account, phrase);
+  await keystore.setPassword(svc().service, svc().account, phrase);
   hasWalletCache = true;
   session = HD.fromSeed(new Mnemonic(phrase).toSeed());
   armTimer();
@@ -121,7 +128,7 @@ export async function importWallet(rawPhrase: string, force = false): Promise<{ 
   if (!Mnemonic.isValid(phrase)) {
     throw new CustodyError("BAD_PHRASE", "that is not a valid 12-word recovery phrase");
   }
-  await keytar.setPassword(svc().service, svc().account, phrase);
+  await keystore.setPassword(svc().service, svc().account, phrase);
   hasWalletCache = true;
   session = HD.fromSeed(new Mnemonic(phrase).toSeed());
   armTimer();
@@ -129,7 +136,7 @@ export async function importWallet(rawPhrase: string, force = false): Promise<{ 
 }
 
 export async function unlock(): Promise<{ identityKey: string }> {
-  const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
+  const stored = await keystore.getPassword(svc().service, svc().account).catch(() => null);
   if (!stored) {
     hasWalletCache = false;
     throw new CustodyError("NO_WALLET", "no wallet enrolled — call createWallet first");
@@ -539,7 +546,7 @@ export function sweepSigner(wif: string): {
 const TWETCH_KEY_ACCOUNT = "twetch-account";
 
 async function twetchKey(): Promise<PrivateKey | null> {
-  const wif = await keytar.getPassword(svc().service, TWETCH_KEY_ACCOUNT).catch(() => null);
+  const wif = await keystore.getPassword(svc().service, TWETCH_KEY_ACCOUNT).catch(() => null);
   if (!wif) return null;
   try {
     return PrivateKey.fromWif(wif);
@@ -574,7 +581,7 @@ export async function twetchAccountImport(wif: string): Promise<{ address: strin
   } catch {
     throw new CustodyError("BAD_WIF", "that is not a valid private key (WIF)");
   }
-  await keytar.setPassword(svc().service, TWETCH_KEY_ACCOUNT, key.toWif());
+  await keystore.setPassword(svc().service, TWETCH_KEY_ACCOUNT, key.toWif());
   return { address: key.toPublicKey().toAddress("mainnet") };
 }
 
@@ -679,7 +686,7 @@ async function importTwetchFromPhrase(
     scanned = 1;
   }
 
-  await keytar.setPassword(svc().service, TWETCH_KEY_ACCOUNT, child.toWif());
+  await keystore.setPassword(svc().service, TWETCH_KEY_ACCOUNT, child.toWif());
   return {
     address: child.toPublicKey().toAddress("mainnet"),
     publicKey: child.toPublicKey().toString(),
@@ -692,7 +699,7 @@ export async function twetchAccountImportFromSeed(
   path = TWETCH_DEFAULT_PATH,
   targetPubkey?: string,
 ): Promise<{ address: string; publicKey: string; path: string; scanned: number }> {
-  const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
+  const stored = await keystore.getPassword(svc().service, svc().account).catch(() => null);
   if (!stored) {
     throw new CustodyError("NO_WALLET", "no wallet enrolled — create or import one first");
   }
@@ -728,7 +735,7 @@ export async function twetchPublicKey(): Promise<string | null> {
 }
 
 export async function twetchAccountRemove(): Promise<void> {
-  await keytar.deletePassword(svc().service, TWETCH_KEY_ACCOUNT).catch(() => false);
+  await keystore.deletePassword(svc().service, TWETCH_KEY_ACCOUNT).catch(() => false);
 }
 
 /**
@@ -801,7 +808,7 @@ export function p2pkhUnlockHookNone(path: string, satoshis: number, lockingScrip
 export async function destroyWallet(): Promise<void> {
   lock();
   try {
-    await keytar.deletePassword(svc().service, svc().account);
+    await keystore.deletePassword(svc().service, svc().account);
   } catch {
     /* ignore */
   }
@@ -814,7 +821,7 @@ export async function destroyWallet(): Promise<void> {
  * never stored, logged, or sent anywhere by the daemon.
  */
 async function enrolledPhrase(): Promise<string> {
-  const stored = await keytar.getPassword(svc().service, svc().account).catch(() => null);
+  const stored = await keystore.getPassword(svc().service, svc().account).catch(() => null);
   if (!stored) {
     hasWalletCache = false;
     throw new CustodyError("NO_WALLET", "no wallet enrolled — call createWallet first");
