@@ -1,6 +1,9 @@
 import { Transaction } from "@bsv/sdk";
 import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
 import {
+  pgpDecryptSelf, pgpEncryptTo, pgpEnsureDeviceKey, pgpPublicKey,
+} from "./custody.ts";
+import {
   twetchAccountImport,
   twetchAccountImportFromPhrase,
   twetchAccountImportFromSeed,
@@ -75,6 +78,11 @@ import {
   MEMORY_BOARD, USENET_BASE, USENET_GROUP, cleanTag, contentHash, forgetRefs, memoryRefs,
   normalizeMemoryText, recallMemories, refHash, usenetPayload,
 } from "./memory.ts";
+import { pgpFingerprint } from "./memoryTiers.ts";
+import { workersAiEmbedder } from "./embed.ts";
+import {
+  hotClear, hotPut, parseWriteInput, registerSelfDevice, resolveRecipients, writeTierRows,
+} from "./memoryWrite.ts";
 import {
   ASK_BOARD, amountFromRefs, amountRef, decodeQuestion,
   ensureAskBoard, gradeAnswer, openQuestions, payToFromRefs, payToRef, titleRef, triageQuestion,
@@ -784,6 +792,7 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   },
   lock: () => {
     lock();
+    hotClear(); // locked wallet = cold memories: drop L1 plaintext
     return { locked: true };
   },
   /**
@@ -2216,42 +2225,155 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * articles in the shared group, idempotent per content hash. Dry-run is
    * the default; live writes need `live: true`.
    */
+  /**
+   * Tiered agent memory (P1 write path). Visibility is private by default,
+   * shared with `--for` recipients (PGP), or public (usenet, as before).
+   * Every write lands L1 (hot cache) + L2 (tier rows); L3 is the board
+   * artifact for private/shared (PGP ciphertext inside the board envelope)
+   * or the usenet article for public (unchanged). Public writes also store a
+   * vector when Cloudflare embeddings are configured — never for ciphertext.
+   * Dry-run is the default; live writes need `live: true`.
+   */
   memoryRemember: async (params) => {
     const b = needBackend();
-    const { text, tag, visibility, live, agent, origin } = p(params) as {
-      text?: unknown; tag?: unknown; visibility?: unknown; live?: unknown; agent?: unknown; origin?: unknown;
+    const { text, tag, visibility, for: forRaw, pin, tagPublic, live, agent, origin } = p(params) as {
+      text?: unknown; tag?: unknown; visibility?: unknown; for?: unknown; pin?: unknown;
+      tagPublic?: unknown; live?: unknown; agent?: unknown; origin?: unknown;
     };
     const clean = normalizeMemoryText(text);
     if (!clean) throw Object.assign(new Error("text required"), { code: "BAD_PARAM" });
+    const input = parseWriteInput({ visibility, for: forRaw, pin, tagPublic });
     const ctag = cleanTag(tag);
     const hash = contentHash(clean);
-    const vis = visibility === "public" ? "public" : "private";
+    const recipients = input.visibility === "shared" ? await resolveRecipients(b.db, input.forList) : [];
+
+    // Duplicate fast-path: tier rows first (covers tiered writes), board second (legacy).
+    const knownTier = await b.db("memory_items").where({ hash }).first();
+    if (knownTier) {
+      return { duplicate: true, hash, visibility: (knownTier as { visibility: string }).visibility, tag: (knownTier as { tag: string }).tag };
+    }
     let row = await getBoard(b.db, MEMORY_BOARD);
     if (!row) row = await createBoard(b.db, { name: MEMORY_BOARD, mode: "members" });
     const known = await getPosts(b.db, MEMORY_BOARD, { limit: 500, markRead: false });
     const dup = known.posts.find((x) => x.refs.includes(`sha256:${hash}`) && x.refs.includes("#memory"));
-    if (dup) return { duplicate: true, hash, id: dup.id, board: MEMORY_BOARD, visibility: vis };
-    const refs = memoryRefs(hash, ctag);
+    if (dup) return { duplicate: true, hash, id: dup.id, board: MEMORY_BOARD };
+
+    const selfPub = await pgpPublicKey();
     if (live !== true) {
-      return { dryRun: true, hash, board: MEMORY_BOARD, visibility: vis, refs, tag: ctag, text: clean };
+      return {
+        dryRun: true, hash, board: MEMORY_BOARD, visibility: input.visibility, tag: ctag,
+        pin: input.pin, tagPublic: input.tagPublic ?? input.visibility === "public",
+        recipients: recipients.map((r) => ({ fingerprint: r.fingerprint, label: r.label })),
+        selfKey: selfPub !== "",
+        note: (input.visibility !== "public" && !selfPub)
+          ? "a device PGP key will be minted on first live write (needs unlocked wallet)"
+          : undefined,
+      };
     }
+
     const originStr = typeof origin === "string" && origin ? origin : "memory";
-    if (vis === "private") {
-      const sent = await boardPublish(b, row, { text: clean, kind: "artifact", refs, agent, origin: originStr });
-      return { duplicate: false, hash, id: sent.id, board: MEMORY_BOARD, visibility: vis, tag: ctag };
+    const author = typeof agent === "string" && agent ? agent : "";
+    // Self device row (mints the device key on first tiered write).
+    const self = selfPub ? { publicKey: selfPub, fingerprint: await pgpFingerprint(selfPub) }
+      : await pgpEnsureDeviceKey("bsvOS device");
+    await registerSelfDevice(b.db, { fingerprint: self.fingerprint, publicKey: self.publicKey, identityKey: identityPubkeyHex(), label: "bsvOS device" });
+
+    let payload = clean;
+    if (input.visibility !== "public") {
+      const keys = [self.publicKey, ...recipients.map((r) => r.publicKey)];
+      payload = await pgpEncryptTo(keys, clean);
     }
-    const payload = usenetPayload(clean, ctag, hash);
-    const paid = await x402Pay({
-      db: b.db, chain: b.chain,
-      url: `${USENET_BASE}/api/groups/${USENET_GROUP}/post`,
-      method: "POST", body: payload, origin: originStr,
+    const cfId = (process.env.CLOUDFLARE_ACCOUNT_ID ?? "").trim();
+    const cfToken = (process.env.CLOUDFLARE_API_TOKEN ?? "").trim();
+    const written = await writeTierRows(b.db, {
+      text: clean,
+      visibility: input.visibility,
+      tag: ctag,
+      tagPublic: input.tagPublic,
+      pin: input.pin,
+      fromFp: self.fingerprint,
+      author,
+      payload,
+      embedder: input.visibility === "public" && cfId && cfToken ? workersAiEmbedder({ accountId: cfId, token: cfToken }) : null,
     });
-    const article = (paid.data ?? {}) as { id?: unknown; messageId?: unknown; createdTx?: unknown };
+    hotPut({ hash, text: clean, tag: written.tag, visibility: input.visibility, at: Date.now() });
+
+    if (input.visibility === "public") {
+      const articlePayload = usenetPayload(clean, written.tag, hash);
+      const paid = await x402Pay({
+        db: b.db, chain: b.chain,
+        url: `${USENET_BASE}/api/groups/${USENET_GROUP}/post`,
+        method: "POST", body: articlePayload, origin: originStr,
+      });
+      const article = (paid.data ?? {}) as { id?: unknown; messageId?: unknown; createdTx?: unknown };
+      return {
+        duplicate: false, hash, board: MEMORY_BOARD, visibility: input.visibility, tag: written.tag,
+        pin: input.pin, tiered: true, vectorized: written.vectorized,
+        articleId: typeof article.id === "string" ? article.id : null,
+        createdTx: typeof article.createdTx === "string" ? article.createdTx : null,
+        txid: paid.receipt?.txid ?? null,
+      };
+    }
+    const refs = [...memoryRefs(hash, written.tag), "enc:pgp"];
+    const sent = await boardPublish(b, row, { text: payload, kind: "artifact", refs, agent, origin: originStr });
     return {
-      duplicate: false, hash, board: MEMORY_BOARD, visibility: vis, tag: ctag,
-      articleId: typeof article.id === "string" ? article.id : null,
-      createdTx: typeof article.createdTx === "string" ? article.createdTx : null,
-      txid: paid.receipt?.txid ?? null,
+      duplicate: false, hash, id: sent.id, board: MEMORY_BOARD, visibility: input.visibility,
+      tag: written.tag, pin: input.pin, tiered: true, vectorized: false,
+      recipients: recipients.map((r) => ({ fingerprint: r.fingerprint, label: r.label })),
+    };
+  },
+  /**
+   * Tier key directory. Lists known PGP device keys (fingerprints + labels +
+   * identity bindings) — private key material never leaves custody, and this
+   * table holds none.
+   */
+  memoryKeys: async () => {
+    const b = needBackend();
+    const rows = (await b.db("memory_devices").orderBy("is_self", "desc").orderBy("approved_at", "desc").select()) as Array<{
+      fingerprint: string; identity_key: string; label: string; is_self: number; approved_at: number; revoked_at: number | null;
+    }>;
+    return {
+      keys: rows.map((r) => ({
+        fingerprint: r.fingerprint, identityKey: r.identity_key, label: r.label,
+        self: r.is_self === 1, approvedAt: r.approved_at, revoked: r.revoked_at !== null,
+      })),
+    };
+  },
+  /**
+   * Import a peer's PGP public key into the directory (key exchange happens
+   * out of band in P1; pairing transport lands in P3). The fingerprint must
+   * match the key, or the import is refused.
+   */
+  memoryKeyAdd: async (params) => {
+    const b = needBackend();
+    const { identityKey, publicKey, label } = p(params) as { identityKey?: unknown; publicKey?: unknown; label?: unknown };
+    const ident = typeof identityKey === "string" ? identityKey.trim().toLowerCase() : "";
+    if (!/^[0-9a-f]{66}$/.test(ident)) throw Object.assign(new Error("identityKey must be a 66-hex compressed pubkey"), { code: "BAD_PARAM" });
+    const armored = typeof publicKey === "string" ? publicKey.trim() : "";
+    if (!armored.includes("PGP PUBLIC KEY")) throw Object.assign(new Error("publicKey must be an armored PGP public key"), { code: "BAD_PARAM" });
+    const fingerprint = await pgpFingerprint(armored).catch(() => "");
+    if (!fingerprint) throw Object.assign(new Error("publicKey is not parseable"), { code: "BAD_PARAM" });
+    const cleanLabel = typeof label === "string" ? label.trim().slice(0, 64) : "";
+    await b.db("memory_devices").insert({
+      fingerprint, identity_key: ident, public_key: armored, label: cleanLabel,
+      is_self: 0, approved_at: Date.now(), revoked_at: null,
+    }).onConflict("fingerprint").ignore();
+    return { fingerprint, identityKey: ident, label: cleanLabel };
+  },
+  /**
+   * This device's publishable identity: PGP public key + fingerprint + the
+   * wallet identity signature binding them. Hand the bundle to a peer (or a
+   * future pairing transport); they import it with memoryKeyAdd after
+   * verifying the signature against your identity key. Needs unlock.
+   */
+  memoryKeyShow: async () => {
+    const self = await pgpEnsureDeviceKey("bsvOS device");
+    const identityKey = identityPubkeyHex();
+    const message = `pgp:${self.fingerprint}`;
+    return {
+      fingerprint: self.fingerprint, publicKey: self.publicKey,
+      identityKey, identitySignature: identitySignMessage(message),
+      message,
     };
   },
   memoryRecall: async (params) => {

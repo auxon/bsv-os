@@ -242,13 +242,15 @@ const TOOLS = [
   },
   {
     name: "memory_remember",
-    description: "Store an agent memory: private goes to the shared encrypted memory board (signed artifact, idempotent per content hash), public goes to the bsvos.memory UsenetBSV group over x402 (~20 sats). Dry-run by default; pass live true to write.",
+    description: "Store an agent memory (default private): tiered L1+L2 rows plus the L3 store — private/shared go to the memory board as PGP ciphertext (to self, or to --for recipients + self), public goes to the bsvos.memory UsenetBSV group over x402 (~20 sats). Dry-run by default; pass live true to write.",
     inputSchema: {
       type: "object" as const,
       properties: {
         text: { type: "string", description: "memory body, up to 8 KB" },
         tag: { type: "string", description: "optional lowercase tag" },
-        visibility: { type: "string", description: "private (default) or public" },
+        visibility: { type: "string", description: "private (default), shared, or public" },
+        for: { type: "array", description: "shared visibility only: recipient @names, identity keys, or PGP fingerprints", items: { type: "string" } },
+        pin: { type: "boolean", description: "pin as a core memory (chain-promotion eligible)" },
         live: { type: "boolean", description: "false (default) = dry-run, true = write" },
       },
       required: ["text"],

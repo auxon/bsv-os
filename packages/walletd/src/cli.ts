@@ -1575,8 +1575,21 @@ async function main(): Promise<void> {
           text: mText,
           ...(flag(mRest, "tag") !== undefined ? { tag: flag(mRest, "tag") } : {}),
           ...(flag(mRest, "visibility") !== undefined ? { visibility: flag(mRest, "visibility") } : {}),
+          ...(flags(mRest, "for").length ? { for: flags(mRest, "for") } : {}),
+          ...(mRest.includes("--pin") ? { pin: true } : {}),
+          ...(mRest.includes("--tag-public") ? { tagPublic: true } : {}),
           ...(mRest.includes("--live") ? { live: true } : {}),
           ...(flag(mRest, "agent") !== undefined ? { agent: flag(mRest, "agent") } : {}),
+        }));
+      } else if (mSub === "keys") {
+        print(await call("memoryKeys", {}));
+      } else if (mSub === "key-show") {
+        print(await call("memoryKeyShow", {}));
+      } else if (mSub === "key-add") {
+        print(await call("memoryKeyAdd", {
+          ...(flag(mRest, "identity") !== undefined ? { identityKey: flag(mRest, "identity") } : {}),
+          ...(flag(mRest, "key") !== undefined ? { publicKey: flag(mRest, "key") } : {}),
+          ...(flag(mRest, "label") !== undefined ? { label: flag(mRest, "label") } : {}),
         }));
       } else if (mSub === "recall") {
         print(await call("memoryRecall", {
@@ -1594,7 +1607,7 @@ async function main(): Promise<void> {
         }));
       } else {
         console.error(
-          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|public] [--live]|recall [--query q] [--tag t] [--limit n] [--include-public]|forget <id>|init [--live [--pay-to <addr>]]>',
+          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|shared|public] [--for @name] [--pin] [--tag-public] [--live]|recall [--query q] [--tag t] [--limit n] [--include-public]|forget <id>|keys|key-show|key-add --identity <key> --key <armored>|init [--live [--pay-to <addr>]]>',
         );
         process.exitCode = 2;
       }
