@@ -30,6 +30,7 @@ import { migrateFunds } from "./attest.ts";
 import { migrateDevices } from "./device.ts";
 import { migrateStreams } from "./streams.ts";
 import { migrateX402 } from "./x402.ts";
+import { migrateMemoryTiers } from "./memoryTiers.ts";
 
 export function dataDir(): string {
   const dir =
@@ -94,4 +95,5 @@ export async function migrate(db: Knex): Promise<void> {
   await migrateWatch(db);
   await migrateFunds(db);
   await migrateDevices(db);
+  await migrateMemoryTiers(db);
 }

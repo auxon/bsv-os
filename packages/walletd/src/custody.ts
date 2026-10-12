@@ -800,10 +800,14 @@ export function p2pkhUnlockHookNone(path: string, satoshis: number, lockingScrip
 /** Factory reset: wipes the enrolled secret. Caller must have a backup. */
 export async function destroyWallet(): Promise<void> {
   lock();
-  try {
-    await keytar.deletePassword(svc().service, svc().account);
-  } catch {
-    /* ignore */
+  // Device identity dies with the wallet: the PGP key and sync secret would
+  // otherwise leave decryptable memories behind after "destroy".
+  for (const account of [svc().account, PGP_KEY_ACCOUNT, SYNC_KEY_ACCOUNT]) {
+    try {
+      await keytar.deletePassword(svc().service, account);
+    } catch {
+      /* ignore */
+    }
   }
   hasWalletCache = false;
 }
@@ -851,4 +855,114 @@ export async function getStatus(): Promise<CustodyStatus> {
 /** Test hook: forget cached keyring presence (forces a re-read). */
 export function __resetCache(): void {
   hasWalletCache = null;
+}
+
+/**
+ * PGP device keys for tiered memory (P0). Raw private material never leaves
+ * this module — callers get armored public keys, ciphertext, and plaintext
+ * they are entitled to, never keys.
+ *
+ * - Device key: Curve25519 (ed25519 signing + cv25519 encryption subkey),
+ *   generated per machine, private half in the OS keyring under account
+ *   "pgp". (openpgp v6 disables the legacy secp256k1 curve; the identity
+ *   binding is curve-agnostic — the wallet identity key signs the PGP
+ *   fingerprint regardless of curve.)
+ * - Gating mirrors the wallet lock: anything touching private key material
+ *   (generate, decrypt, sync wrap/unwrap) requires an unlocked wallet, so
+ *   the 15-minute auto-lock is also a memory lock. Encrypting to other
+ *   people's public keys needs no unlock — public keys are public.
+ * - Sync secret: 32 random bytes in the keyring under account "sync",
+ *   wrapped via PGP to approved device keys for multi-machine sync (P3).
+ */
+import * as openpgp from "openpgp";
+import { randomBytes } from "node:crypto";
+
+const PGP_KEY_ACCOUNT = "pgp";
+const SYNC_KEY_ACCOUNT = "sync";
+
+function needUnlock(): void {
+  if (!session) throw new CustodyError("WALLET_LOCKED", "wallet locked");
+}
+
+async function readPrivateKey(): Promise<openpgp.PrivateKey> {
+  const armored = await keytar.getPassword(svc().service, PGP_KEY_ACCOUNT).catch(() => null);
+  if (!armored) throw new CustodyError("NO_PGP_KEY", "no device PGP key — call pgpEnsureDeviceKey first");
+  return openpgp.readPrivateKey({ armoredKey: armored });
+}
+
+/** Create the device PGP key if absent. Returns fingerprint + armored public. */
+export async function pgpEnsureDeviceKey(label = "bsvOS device"): Promise<{ fingerprint: string; publicKey: string }> {
+  needUnlock();
+  const existing = await keytar.getPassword(svc().service, PGP_KEY_ACCOUNT).catch(() => null);
+  if (existing) {
+    const pub = (await readPrivateKey()).toPublic();
+    return { fingerprint: pub.getFingerprint().toUpperCase(), publicKey: pub.armor() };
+  }
+  const { privateKey, publicKey } = await openpgp.generateKey({
+    type: "curve25519",
+    userIDs: [{ name: label }],
+    format: "armored",
+  });
+  await keytar.setPassword(svc().service, PGP_KEY_ACCOUNT, privateKey);
+  const pub = await openpgp.readKey({ armoredKey: publicKey });
+  return { fingerprint: pub.getFingerprint().toUpperCase(), publicKey };
+}
+
+/** Armored public key of this device (empty when none exists yet). */
+export async function pgpPublicKey(): Promise<string> {
+  const armored = await keytar.getPassword(svc().service, PGP_KEY_ACCOUNT).catch(() => null);
+  if (!armored) return "";
+  return (await readPrivateKey()).toPublic().armor();
+}
+
+/** Encrypt to one or more armored PGP public keys. No unlock needed. */
+export async function pgpEncryptTo(armoredKeys: string[], text: string): Promise<string> {
+  if (!armoredKeys.length) throw new CustodyError("BAD_PARAM", "at least one recipient key is required");
+  if (!text) throw new CustodyError("BAD_PARAM", "nothing to encrypt");
+  const keys = await Promise.all(
+    armoredKeys.map((k) => openpgp.readKey({ armoredKey: k.trim() }).catch(() => null)),
+  );
+  if (keys.some((k) => !k)) throw new CustodyError("BAD_PARAM", "one recipient key is not a valid PGP public key");
+  return openpgp.encrypt({
+    message: await openpgp.createMessage({ text }),
+    encryptionKeys: keys as openpgp.Key[],
+  });
+}
+
+/** Decrypt a message for this device. Requires an unlocked wallet. */
+export async function pgpDecryptSelf(armoredMessage: string): Promise<string> {
+  needUnlock();
+  const priv = await readPrivateKey();
+  const message = await openpgp.readMessage({ armoredMessage: armoredMessage.trim() }).catch(() => null);
+  if (!message) throw new CustodyError("BAD_PARAM", "not a PGP message");
+  try {
+    const { data } = await openpgp.decrypt({ message, decryptionKeys: priv });
+    return String(data);
+  } catch {
+    throw new CustodyError("DECRYPT_FAILED", "message is not for this device key");
+  }
+}
+
+/** This device's sync secret (32 bytes hex), creating it on first use. */
+export async function syncSecret(): Promise<string> {
+  needUnlock();
+  const existing = await keytar.getPassword(svc().service, SYNC_KEY_ACCOUNT).catch(() => null);
+  if (existing && /^[0-9a-f]{64}$/.test(existing)) return existing;
+  const hex = randomBytes(32).toString("hex");
+  await keytar.setPassword(svc().service, SYNC_KEY_ACCOUNT, hex);
+  return hex;
+}
+
+/** Wrap the sync secret to approved device public keys (multi-recipient). */
+export async function wrapSyncKey(armoredKeys: string[]): Promise<string> {
+  needUnlock();
+  return pgpEncryptTo(armoredKeys, await syncSecret());
+}
+
+/** Accept a wrapped sync secret (adopts it as this device's sync secret). */
+export async function unwrapSyncKey(armoredMessage: string): Promise<void> {
+  needUnlock();
+  const hex = (await pgpDecryptSelf(armoredMessage)).trim();
+  if (!/^[0-9a-f]{64}$/.test(hex)) throw new CustodyError("BAD_PARAM", "wrapped payload is not a sync secret");
+  await keytar.setPassword(svc().service, SYNC_KEY_ACCOUNT, hex);
 }
