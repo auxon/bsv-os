@@ -151,6 +151,15 @@ export async function hybridRecall(db: Knex, deps: HybridDeps, rawOpts: HybridOp
         if (h) struckHashes.add(h);
       }
     }
+    // Synced tombstones strike the same way (P3) — forget wins everywhere.
+    try {
+      const tombs = (await db("memory_tombstones").select("hash")) as Array<{ hash: string }>;
+      for (const t of tombs) {
+        if (/^[0-9a-f]{64}$/.test(t.hash)) struckHashes.add(t.hash);
+      }
+    } catch {
+      /* pre-P3 database without the table: board tombstones still apply */
+    }
 
     // L2 tier rows.
     let q = db("memory_items").select();

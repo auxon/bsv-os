@@ -42,6 +42,7 @@ export interface MemoryItemRow {
   author: string;
   payload: string;
   pin: number;
+  pin_ts: number;
   importance: number;
   created_at: number;
 }
@@ -108,6 +109,32 @@ export async function migrateMemoryTiers(db: Knex): Promise<void> {
       t.integer("created_at").notNullable();
     });
   }
+  // P3 additions: synced tombstones (board-independent), sync kv state,
+  // pin timestamps for last-writer-wins, promotion payout txids (P4).
+  if (!(await db.schema.hasTable("memory_tombstones"))) {
+    await db.schema.createTable("memory_tombstones", (t) => {
+      t.string("hash", 64).primary();
+      t.integer("ts").notNullable();
+      t.string("from_fp", 40).notNullable().defaultTo("");
+    });
+  }
+  if (!(await db.schema.hasTable("memory_sync_state"))) {
+    await db.schema.createTable("memory_sync_state", (t) => {
+      t.string("key", 64).primary();
+      t.text("value").notNullable().defaultTo("");
+      t.integer("updated_at").notNullable().defaultTo(0);
+    });
+  }
+  if (!(await db.schema.hasColumn("memory_items", "pin_ts"))) {
+    await db.schema.alterTable("memory_items", (t) => {
+      t.integer("pin_ts").notNullable().defaultTo(0);
+    });
+  }
+  if (!(await db.schema.hasColumn("memory_promotions", "txid"))) {
+    await db.schema.alterTable("memory_promotions", (t) => {
+      t.string("txid", 64).nullable();
+    });
+  }
 }
 
 /** Uppercase hex OpenPGP fingerprint for an armored public key. */
@@ -145,4 +172,25 @@ export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
   }
   if (na <= 0 || nb <= 0) return 0;
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/**
+ * Promotion score for chain eligibility (P4 reads this; P3 tiers status
+ * reports it). Pinned dominates, importance counts, recency decays over
+ * ~30 days. Pure and deterministic — no model decides eligibility.
+ */
+export function promotionScore(
+  item: { pin: number; importance: number; ts: number },
+  now = Date.now(),
+): number {
+  const ageDays = Math.max(0, (now - item.ts) / 86_400_000);
+  return (item.pin ? 100 : 0) + item.importance * 10 + Math.max(0, 30 - ageDays);
+}
+
+/** Canonical JSON (sorted keys, recursive) for signed manifests. */
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",")}}`;
 }

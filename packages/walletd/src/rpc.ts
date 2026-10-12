@@ -1,7 +1,7 @@
 import { Transaction } from "@bsv/sdk";
-import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock } from "./custody.ts";
+import { createWallet, exportEntropy, getStatus, identityPubkeyHex, identitySignMessage, importWallet, lock, restoreFromEntropy, selfAddress, unlock, verifyIdentitySignature } from "./custody.ts";
 import {
-  pgpDecryptSelf, pgpEncryptTo, pgpEnsureDeviceKey, pgpPublicKey,
+  pgpDecryptSelf, pgpEncryptTo, pgpEnsureDeviceKey, pgpPublicKey, rotateSyncKey, syncSecret, unwrapSyncKey, wrapSyncKey,
 } from "./custody.ts";
 import {
   twetchAccountImport,
@@ -81,9 +81,11 @@ import {
 import { pgpFingerprint } from "./memoryTiers.ts";
 import { workersAiEmbedder } from "./embed.ts";
 import {
-  hotClear, hotPut, parseWriteInput, registerSelfDevice, resolveRecipients, writeTierRows,
+  hotClear, hotList, hotPut, parseWriteInput, registerSelfDevice, resolveRecipients, writeTierRows,
 } from "./memoryWrite.ts";
 import { hybridRecall } from "./memoryRecall.ts";
+import { packDecrypt, syncPull, syncPush } from "./memorySync.ts";
+import { distillTag, openRouterChat, tiersStatus } from "./memoryJob.ts";
 import {
   ASK_BOARD, amountFromRefs, amountRef, decodeQuestion,
   ensureAskBoard, gradeAnswer, openQuestions, payToFromRefs, payToRef, titleRef, triageQuestion,
@@ -2376,6 +2378,208 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
       identityKey, identitySignature: identitySignMessage(message),
       message,
     };
+  },
+  /** Tier observability: L1 size, L2 counts, devices, promotions, sync state. */
+  memoryTiers: async () => {
+    const b = needBackend();
+    return tiersStatus(b.db, hotList().length);
+  },
+  /** Multi-machine sync: push (snapshot+manifest+vector fan-out), pull (merge), status (local only). */
+  memorySync: async (params) => {
+    const b = needBackend();
+    const { op } = p(params) as { op?: unknown };
+    const action = typeof op === "string" ? op : "status";
+    const r2 = {
+      accessKey: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID,
+      secretKey: process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY,
+      accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+      bucket: process.env.CLOUDFLARE_R2_BUCKET,
+    };
+    const vec = {
+      accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+      token: process.env.CLOUDFLARE_API_TOKEN,
+      index: process.env.CLOUDFLARE_VECTORIZE_INDEX,
+    };
+    if (action === "status") {
+      const rows = (await b.db("memory_sync_state").select()) as Array<{ key: string; value: string }>;
+      const kv: Record<string, string> = {};
+      for (const r of rows) kv[r.key] = r.value;
+      return {
+        r2Configured: Boolean(r2.accessKey?.trim() && r2.secretKey?.trim() && r2.accountId?.trim()),
+        vectorizeConfigured: Boolean(vec.accountId?.trim() && vec.token?.trim()),
+        lastPush: kv.lastPush ?? null, lastPull: kv.lastPull ?? null, lastVecSync: kv.lastVecSync ?? null,
+        peers: Object.entries(kv).filter(([k]) => k.startsWith("peer:")).map(([k, v]) => ({ fingerprint: k.slice(5), manifestTs: Number(v) || 0 })),
+      };
+    }
+    // Push + pull move ciphertext and need the sync secret: unlock first.
+    const pub = await pgpPublicKey();
+    const self = pub ? { publicKey: pub, fingerprint: await pgpFingerprint(pub) } : await pgpEnsureDeviceKey("bsvOS device");
+    const identityKey = identityPubkeyHex();
+    const hex = await syncSecret();
+    const epochRow = (await b.db("memory_sync_keys").orderBy("epoch", "desc").first()) as { epoch: number } | undefined;
+    if (action === "push") {
+      return syncPush(b.db, { r2, vec }, {
+        fingerprint: self.fingerprint, identityKey,
+        sign: (message: string) => identitySignMessage(message),
+        syncHex: hex,
+      });
+    }
+    if (action === "pull") {
+      return syncPull(b.db, { r2, vec }, {
+        fingerprint: self.fingerprint,
+        epoch: async () => epochRow?.epoch ?? 0,
+        unwrap: (blob: string) => unwrapSyncKey(blob).then(() => {}),
+        decryptPack: async (blob: string) => packDecrypt(await syncSecret(), blob),
+      }, verifyIdentitySignature);
+    }
+    throw Object.assign(new Error("op must be push, pull, or status"), { code: "BAD_PARAM" });
+  },
+  /**
+   * Approve a new device (operator-mediated ceremony): verify the identity
+   * binding, import the key, wrap the CURRENT sync secret to it, and hand
+   * back the blob. Rotation is NOT triggered by adds — only by revokes.
+   */
+  memoryPairApprove: async (params) => {
+    const b = needBackend();
+    const { publicKey, identityKey, identitySignature, label } = p(params) as {
+      publicKey?: unknown; identityKey?: unknown; identitySignature?: unknown; label?: unknown;
+    };
+    const ident = typeof identityKey === "string" ? identityKey.trim().toLowerCase() : "";
+    if (!/^[0-9a-f]{66}$/.test(ident)) throw Object.assign(new Error("identityKey must be a 66-hex compressed pubkey"), { code: "BAD_PARAM" });
+    const armored = typeof publicKey === "string" ? publicKey.trim() : "";
+    if (!armored.includes("PGP PUBLIC KEY")) throw Object.assign(new Error("publicKey must be an armored PGP public key"), { code: "BAD_PARAM" });
+    const fingerprint = await pgpFingerprint(armored).catch(() => "");
+    if (!fingerprint) throw Object.assign(new Error("publicKey is not parseable"), { code: "BAD_PARAM" });
+    const sig = typeof identitySignature === "string" ? identitySignature.trim() : "";
+    if (!sig || !verifyIdentitySignature(ident, `pgp:${fingerprint}`, sig)) {
+      throw Object.assign(new Error("identity binding does not verify — the key is not bound to that identity"), { code: "BAD_BINDING" });
+    }
+    const cleanLabel = typeof label === "string" ? label.trim().slice(0, 64) : "";
+    await b.db("memory_devices").insert({
+      fingerprint, identity_key: ident, public_key: armored, label: cleanLabel,
+      is_self: 0, approved_at: Date.now(), revoked_at: null,
+    }).onConflict("fingerprint").ignore();
+    const blob = await wrapSyncKey([armored]);
+    const prev = (await b.db("memory_sync_keys").orderBy("epoch", "desc").first()) as { epoch: number } | undefined;
+    const epoch = (prev?.epoch ?? 0) + 1;
+    await b.db("memory_sync_keys").insert({ epoch, wrapped: JSON.stringify({ [fingerprint]: blob }), active: 0, created_at: Date.now() });
+    return { fingerprint, identityKey: ident, label: cleanLabel, epoch, wrapped: blob };
+  },
+  /** Accept a pairing: adopt the wrapped sync secret as this device's own. */
+  memoryPairAccept: async (params) => {
+    const { blob } = p(params) as { blob?: unknown };
+    if (typeof blob !== "string" || !blob.trim()) throw Object.assign(new Error("blob is required"), { code: "BAD_PARAM" });
+    await unwrapSyncKey(blob);
+    return { ok: true };
+  },
+  /**
+   * Revoke a device key and rotate the sync secret. Survivors get the new
+   * secret wrapped to them in the new epoch (distributed via manifest on
+   * next push). Rotation stops future reads, not copies already synced.
+   */
+  memoryKeyRevoke: async (params) => {
+    const b = needBackend();
+    const { fingerprint } = p(params) as { fingerprint?: unknown };
+    const fp = typeof fingerprint === "string" ? fingerprint.trim().toUpperCase() : "";
+    if (!/^[0-9A-F]{40}$/.test(fp)) throw Object.assign(new Error("fingerprint must be 40 hex chars"), { code: "BAD_PARAM" });
+    const row = (await b.db("memory_devices").where({ fingerprint: fp }).first()) as
+      | { is_self: number; revoked_at: number | null }
+      | undefined;
+    if (!row) throw Object.assign(new Error("unknown device key"), { code: "NOT_FOUND" });
+    if (row.is_self === 1) throw Object.assign(new Error("refusing to revoke self — use destroyWallet to retire this device"), { code: "BAD_PARAM" });
+    await b.db("memory_devices").where({ fingerprint: fp }).update({ revoked_at: Date.now() });
+    const hex = await rotateSyncKey();
+    void hex;
+    const survivors = (await b.db("memory_devices").where({ revoked_at: null }).whereNot({ fingerprint: fp }).select()) as Array<{
+      fingerprint: string; public_key: string; is_self: number;
+    }>;
+    const wraps: Record<string, string> = {};
+    for (const s of survivors.filter((x) => x.is_self !== 1)) {
+      try {
+        wraps[s.fingerprint] = await wrapSyncKey([s.public_key]);
+      } catch {
+        /* a bad stored key must not block rotation for everyone else */
+      }
+    }
+    const prev = (await b.db("memory_sync_keys").orderBy("epoch", "desc").first()) as { epoch: number } | undefined;
+    const epoch = (prev?.epoch ?? 0) + 1;
+    await b.db("memory_sync_keys").where({ active: 1 }).update({ active: 0 });
+    await b.db("memory_sync_keys").insert({ epoch, wrapped: JSON.stringify(wraps), active: 1, created_at: Date.now() });
+    return { revoked: fp, epoch, wrappedFor: Object.keys(wraps) };
+  },
+  /**
+   * Distill one tag cluster into a summary artifact. Dry-run previews the
+   * readable set; live spends one chat call and writes a private artifact
+   * linking its sources. Sources are never destroyed.
+   */
+  memoryDistill: async (params) => {
+    const b = needBackend();
+    const { tag, live } = p(params) as { tag?: unknown; live?: unknown };
+    const read = async (r: { visibility: string; payload: string }): Promise<string | null> => {
+      if (r.visibility === "public") return r.payload;
+      try {
+        return await pgpDecryptSelf(r.payload);
+      } catch {
+        return null;
+      }
+    };
+    if (live !== true) {
+      const clean = String(tag ?? "").trim().toLowerCase().slice(0, 32);
+      const rows = (await b.db("memory_items").where({ tag: clean }).select("hash")) as Array<{ hash: string }>;
+      if (!clean) throw Object.assign(new Error("tag is required"), { code: "BAD_PARAM" });
+      return { dryRun: true, tag: clean, readable: rows.length, note: "live spends one summarizer chat call and writes a private artifact" };
+    }
+    const apiKey = (process.env.OPENROUTER_API_KEY ?? "").trim();
+    const model = (process.env.MEMORY_SUMMARY_MODEL ?? "").trim() || "openai/gpt-4o-mini";
+    const out = await distillTag(b.db, { tag: String(tag ?? "") }, read, (system, user) => openRouterChat(apiKey, model, system, user));
+    const { contentHash: chash, memoryRefs: mrefs } = await import("./memory.ts");
+    const text = `DISTILL [${String(tag ?? "").trim()}]\n${out.title}\n\n${out.summary}\n\nsources: ${out.hashes.join(", ")}`;
+    const hash = chash(text);
+    let row = await getBoard(b.db, MEMORY_BOARD);
+    if (!row) row = await createBoard(b.db, { name: MEMORY_BOARD, mode: "members" });
+    const sent = await boardPublish(b, row, {
+      text, kind: "artifact", refs: [...mrefs(hash, String(tag ?? "")), ...out.hashes.map((h) => `src:${h}`)],
+    });
+    const ownPub = await pgpPublicKey();
+    const ownFp = ownPub ? await pgpFingerprint(ownPub) : "";
+    const payload = ownPub ? await pgpEncryptTo([ownPub], text) : text;
+    await writeTierRows(b.db, {
+      text, visibility: "private", tag: String(tag ?? ""), tagPublic: false, pin: false,
+      fromFp: ownFp, author: "", payload,
+      embedder: null,
+    });
+    return { distilled: true, hash, id: sent.id, title: out.title, sources: out.count };
+  },
+  /** Fresh-machine restore: pull everything (pair-accept must come first). */
+  memoryRestore: async () => {
+    const b = needBackend();
+    try {
+      await syncSecret();
+    } catch {
+      throw Object.assign(new Error("no sync secret — run memory pair-accept first"), { code: "NO_SYNC_KEY" });
+    }
+    const pub = await pgpPublicKey();
+    const fp = pub ? await pgpFingerprint(pub) : "";
+    if (!fp) throw Object.assign(new Error("no device key — run memory key-show first"), { code: "NO_PGP_KEY" });
+    const r2 = {
+      accessKey: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID,
+      secretKey: process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY,
+      accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+      bucket: process.env.CLOUDFLARE_R2_BUCKET,
+    };
+    const vec = {
+      accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+      token: process.env.CLOUDFLARE_API_TOKEN,
+      index: process.env.CLOUDFLARE_VECTORIZE_INDEX,
+    };
+    const epochRow = (await b.db("memory_sync_keys").orderBy("epoch", "desc").first()) as { epoch: number } | undefined;
+    const report = await syncPull(b.db, { r2, vec }, {
+      fingerprint: fp,
+      epoch: async () => epochRow?.epoch ?? 0,
+      unwrap: (blob: string) => unwrapSyncKey(blob).then(() => {}),
+      decryptPack: async (blob: string) => packDecrypt(await syncSecret(), blob),
+    }, verifyIdentitySignature);
+    return { restored: true, ...report };
   },
   memoryRecall: async (params) => {
     const b = needBackend();

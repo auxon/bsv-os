@@ -966,3 +966,15 @@ export async function unwrapSyncKey(armoredMessage: string): Promise<void> {
   if (!/^[0-9a-f]{64}$/.test(hex)) throw new CustodyError("BAD_PARAM", "wrapped payload is not a sync secret");
   await keytar.setPassword(svc().service, SYNC_KEY_ACCOUNT, hex);
 }
+
+/**
+ * Rotate the sync secret (device removal). Generates fresh bytes, stores
+ * them, and returns the hex — callers wrap it to survivors and publish the
+ * new epoch. Rotation stops future reads, not copies already synced.
+ */
+export async function rotateSyncKey(): Promise<string> {
+  needUnlock();
+  const hex = randomBytes(32).toString("hex");
+  await keytar.setPassword(svc().service, SYNC_KEY_ACCOUNT, hex);
+  return hex;
+}

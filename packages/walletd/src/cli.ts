@@ -1591,6 +1591,33 @@ async function main(): Promise<void> {
           ...(flag(mRest, "key") !== undefined ? { publicKey: flag(mRest, "key") } : {}),
           ...(flag(mRest, "label") !== undefined ? { label: flag(mRest, "label") } : {}),
         }));
+      } else if (mSub === "key-revoke") {
+        print(await call("memoryKeyRevoke", {
+          ...(flag(mRest, "fp") !== undefined ? { fingerprint: flag(mRest, "fp") } : {}),
+        }));
+      } else if (mSub === "tiers") {
+        print(await call("memoryTiers", {}));
+      } else if (mSub === "sync") {
+        const op = mRest.find((a) => !a.startsWith("--")) ?? "status";
+        print(await call("memorySync", { op }));
+      } else if (mSub === "distill") {
+        print(await call("memoryDistill", {
+          ...(flag(mRest, "tag") !== undefined ? { tag: flag(mRest, "tag") } : {}),
+          ...(mRest.includes("--live") ? { live: true } : {}),
+        }));
+      } else if (mSub === "pair-approve") {
+        print(await call("memoryPairApprove", {
+          ...(flag(mRest, "key") !== undefined ? { publicKey: flag(mRest, "key") } : {}),
+          ...(flag(mRest, "identity") !== undefined ? { identityKey: flag(mRest, "identity") } : {}),
+          ...(flag(mRest, "signature") !== undefined ? { identitySignature: flag(mRest, "signature") } : {}),
+          ...(flag(mRest, "label") !== undefined ? { label: flag(mRest, "label") } : {}),
+        }));
+      } else if (mSub === "pair-accept") {
+        print(await call("memoryPairAccept", {
+          ...(flag(mRest, "blob") !== undefined ? { blob: flag(mRest, "blob") } : {}),
+        }));
+      } else if (mSub === "restore") {
+        print(await call("memoryRestore", {}));
       } else if (mSub === "recall") {
         print(await call("memoryRecall", {
           ...(flag(mRest, "query") !== undefined ? { query: flag(mRest, "query") } : {}),
@@ -1609,7 +1636,7 @@ async function main(): Promise<void> {
         }));
       } else {
         console.error(
-          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|shared|public] [--for @name] [--pin] [--tag-public] [--live]|recall [--query q] [--tag t] [--limit n] [--depth hot|local|all] [--semantic] [--include-public]|forget <id>|keys|key-show|key-add --identity <key> --key <armored>|init [--live [--pay-to <addr>]]>',
+          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|shared|public] [--for @name] [--pin] [--tag-public] [--live]|recall [--query q] [--tag t] [--limit n] [--depth hot|local|all] [--semantic] [--include-public]|forget <id>|keys|key-show|key-add --identity <key> --key <armored>|key-revoke --fp <fp>|tiers|sync [push|pull]|distill --tag t [--live]|pair-approve --key <armored> --identity <key> --signature <sig>|pair-accept --blob <blob>|restore|init [--live [--pay-to <addr>]]>',
         );
         process.exitCode = 2;
       }
