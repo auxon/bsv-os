@@ -43,7 +43,7 @@ export const SERVE_MENU: ServeMethod[] = [
   },
   {
     method: "memoryRecall",
-    description: "Keyword + tag recall over this wallet's shared memory board, optionally merged with bsvos.memory.",
+    description: "Hybrid recall (keyword + vector) over this wallet's public memories, optionally merged with bsvos.memory. Depth all costs 2x (usenet fetch). Private tiers are never served.",
     defaultPrice: 20,
   },
 ];
@@ -127,6 +127,28 @@ export async function servePrice(db: Knex, method: string): Promise<{ method: st
   if (!def) fail("NOT_FOUND", `not for sale: ${method}`);
   const row = (await db("x402_server_prices").where({ method }).first()) as { price: number } | undefined;
   return { method, priceSats: row?.price ?? def.defaultPrice, payTo: await payToAddress(db) };
+}
+
+/**
+ * Effective price for a call: memoryRecall at depth "all" costs 2x because
+ * the seller pays a usenet fetch (+ metered embedding) per call. Quote and
+ * verify must use this — never the base price — or buyers underpay.
+ */
+export const RECALL_DEPTH_MULTIPLIER = 2;
+
+export async function servePriceFor(
+  db: Knex,
+  method: string,
+  params: unknown,
+): Promise<{ method: string; priceSats: number; payTo: string; depthMultiplier: number }> {
+  const base = await servePrice(db, method);
+  if (method === "memoryRecall") {
+    const depth = (params as Record<string, unknown> | null)?.depth;
+    if (depth === "all") {
+      return { ...base, priceSats: base.priceSats * RECALL_DEPTH_MULTIPLIER, depthMultiplier: RECALL_DEPTH_MULTIPLIER };
+    }
+  }
+  return { ...base, depthMultiplier: 1 };
 }
 
 export async function serveSetPrice(db: Knex, method: string, priceSats: number): Promise<{ method: string; priceSats: number }> {
@@ -309,7 +331,7 @@ export async function serveCall(
   txHex: string,
 ): Promise<{ data: unknown; receipt: { txid: string; method: string; amountSats: number } }> {
   const { db, chain } = deps;
-  const { priceSats, payTo } = await servePrice(db, method);
+  const { priceSats, payTo } = await servePriceFor(db, method, params);
   if (!(priceSats > 0)) fail("BAD_METHOD", `${method} is not priced for sale`);
   let tx: Transaction;
   try {
@@ -352,11 +374,18 @@ async function serveDispatch(deps: ServeDeps, method: string, params: unknown): 
       });
     }
     case "memoryRecall": {
-      return recallMemories(deps.db, deps.fetchFn ?? fetch, {
+      const { hybridRecall } = await import("./memoryRecall.ts");
+      return hybridRecall(deps.db, {
+        fetchFn: deps.fetchFn ?? fetch,
+        decrypt: async () => null, // seller scope: no private tiers, no unlock games
+      }, {
         ...(typeof p.query === "string" ? { query: p.query } : {}),
         ...(typeof p.tag === "string" ? { tag: p.tag } : {}),
         ...(Number.isFinite(Number(p.limit)) ? { limit: Number(p.limit) } : {}),
         ...(p.includePublic === true ? { includePublic: true as const } : {}),
+        ...(typeof p.depth === "string" ? { depth: p.depth } : {}),
+        ...(p.semantic === true ? { semantic: true as const } : {}),
+        scope: "seller",
       });
     }
     default:

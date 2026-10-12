@@ -76,13 +76,14 @@ import {
 } from "./boards.ts";
 import {
   MEMORY_BOARD, USENET_BASE, USENET_GROUP, cleanTag, contentHash, forgetRefs, memoryRefs,
-  normalizeMemoryText, recallMemories, refHash, usenetPayload,
+  normalizeMemoryText, refHash, usenetPayload,
 } from "./memory.ts";
 import { pgpFingerprint } from "./memoryTiers.ts";
 import { workersAiEmbedder } from "./embed.ts";
 import {
   hotClear, hotPut, parseWriteInput, registerSelfDevice, resolveRecipients, writeTierRows,
 } from "./memoryWrite.ts";
+import { hybridRecall } from "./memoryRecall.ts";
 import {
   ASK_BOARD, amountFromRefs, amountRef, decodeQuestion,
   ensureAskBoard, gradeAnswer, openQuestions, payToFromRefs, payToRef, titleRef, triageQuestion,
@@ -2378,14 +2379,20 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   },
   memoryRecall: async (params) => {
     const b = needBackend();
-    const { query, tag, limit, includePublic } = p(params) as {
+    const { query, tag, limit, includePublic, depth, semantic } = p(params) as {
       query?: unknown; tag?: unknown; limit?: unknown; includePublic?: unknown;
+      depth?: unknown; semantic?: unknown;
     };
-    return recallMemories(b.db, fetch, {
+    return hybridRecall(b.db, {
+      fetchFn: fetch,
+      decrypt: async (armored) => pgpDecryptSelf(armored).catch(() => null),
+    }, {
       ...(typeof query === "string" ? { query } : {}),
       ...(typeof tag === "string" ? { tag } : {}),
       ...(Number.isFinite(Number(limit)) ? { limit: Number(limit) } : {}),
       ...(includePublic === true ? { includePublic: true as const } : {}),
+      ...(depth !== undefined ? { depth: depth as string } : {}),
+      ...(semantic !== undefined ? { semantic: semantic === true } : {}),
     });
   },
   memoryForget: async (params) => {

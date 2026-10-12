@@ -478,13 +478,13 @@ async function serveHttp(req: IncomingMessage, res: ServerResponse, method: stri
   } catch {
     return json(400, { error: { code: "PARSE", message: "invalid JSON" } });
   }
-  const { serveMenu, servePrice, serveCall, serveRequirement, b64json, parseProof } = await import("./serve.ts");
+  const { serveMenu, servePriceFor, serveCall, serveRequirement, b64json, parseProof } = await import("./serve.ts");
   const menu = await serveMenu(wireBackend.db).catch(() => null);
   const item = menu?.find((m) => m.method === method);
   if (!item) return json(404, { error: { code: "NOT_FOR_SALE", message: `not for sale: ${method}` } });
   const resource = `https://wallet/v1/serve/${method}`;
   const quote = async (): Promise<void> => {
-    const q = await servePrice(wireBackend!.db, method);
+    const q = await servePriceFor(wireBackend!.db, method, body);
     json(402, { error: "payment_required", priceSats: q.priceSats, payTo: q.payTo, network: "bsv:mainnet" }, {
       "payment-required": b64json(serveRequirement(method, q.priceSats, q.payTo, resource)),
     });

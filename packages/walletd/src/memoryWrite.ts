@@ -224,6 +224,18 @@ export function hotClear(): void {
   hot.clear();
 }
 
+export function hotList(now = Date.now()): HotHit[] {
+  const out: HotHit[] = [];
+  for (const [hash, hit] of hot) {
+    if (now - hit.at > HOT_TTL_MS) {
+      hot.delete(hash);
+      continue;
+    }
+    out.push(hit);
+  }
+  return out;
+}
+
 export function hotGet(hash: string, now = Date.now()): HotHit | null {
   const hit = hot.get(hash);
   if (!hit || now - hit.at > HOT_TTL_MS) {

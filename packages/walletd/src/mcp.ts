@@ -258,14 +258,16 @@ const TOOLS = [
   },
   {
     name: "memory_recall",
-    description: "Recall agent memories: keyword + tag search over the shared memory board, optionally merged with the public bsvos.memory UsenetBSV group. Merged by content hash.",
+    description: "Hybrid recall over agent memories: keyword + vector ranking across the hot cache, tier rows (decrypted when unlocked), and the shared board — optionally merged with the public bsvos.memory UsenetBSV group. Encrypted tiers you cannot decrypt are skipped, never served.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "keyword query (exact/tag search; no embeddings yet)" },
+        query: { type: "string", description: "keyword + semantic query" },
         tag: { type: "string", description: "only memories with this tag" },
         limit: { type: "number", description: "max hits (default 20, cap 100)" },
-        include_public: { type: "boolean", description: "merge the public UsenetBSV group (default false)" },
+        depth: { type: "string", description: "hot (cache only), local (default), or all (+usenet; x402 costs 2x)" },
+        semantic: { type: "boolean", description: "force vector ranking (needs an embedder; auto when a query is present)" },
+        include_public: { type: "boolean", description: "merge the public UsenetBSV group (default false; depth all implies it)" },
       },
     },
   },

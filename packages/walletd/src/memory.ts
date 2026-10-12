@@ -30,7 +30,7 @@ export interface MemoryHit {
   text: string;
   tag: string;
   hash: string;
-  backend: "board" | "usenet";
+  backend: "board" | "usenet" | "tiers";
   ts: number;
   from: string;
   ref: string;
@@ -112,6 +112,11 @@ function tokens(query: string): string[] {
     .split(/[^a-z0-9]+/)
     .filter((t) => t.length >= 2)
     .slice(0, 12);
+}
+
+/** Keyword relevance exported for the tiered hybrid ranker (P2). */
+export function keywordScore(text: string, query: string): number {
+  return scoreText(text, tokens(query.trim()));
 }
 
 function scoreText(text: string, toks: string[]): number {

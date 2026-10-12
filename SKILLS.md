@@ -39,8 +39,8 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `market_buy` | `{ listing, maxPrice? }` | Buy a listing end to end: the daemon re-checks the covenant's seller + price, signs, broadcasts, and posts settlement. The OrdLock covenant enforces the payout, so the asset moves in the same tx. Spends from YOUR budget through policy. |
 | `market_list` | `{ outpoint, priceSats, kind?, tokenId?, tokenAmount?, title? }` | List the wallet's ordinal or BSV21 UTXO for sale. Ordinals move into an on-chain OrdLock covenant (miner fee; cancellable); tokens stay in the wallet behind a signed offer. |
 | `market_sync` | `{ listing, txid }` | Reconcile a completed buy when the immediate market post failed (indexers lag fresh broadcasts): posts the buy + settle for a txid that already exists. Idempotent. |
-| `memory_remember` | `{ text, tag?, visibility?, live? }` | Store a memory: `private` (default) → shared encrypted `memory` board, `public` → `bsvos.memory` UsenetBSV group over x402 (~20 sats). Idempotent per content hash. Dry-run unless `live: true`. |
-| `memory_recall` | `{ query?, tag?, limit?, include_public? }` | Keyword + tag recall over the shared board, optionally merged with the public group by content hash. No embeddings yet. |
+| `memory_remember` | `{ text, tag?, visibility?, for?, pin?, live? }` | Store a memory: `private` (default) → tier rows + board PGP ciphertext to self; `shared` + `for: [...]` → PGP to recipients + self; `public` → `bsvos.memory` UsenetBSV group over x402 (~20 sats) + stored vector. Idempotent per content hash. Dry-run unless `live: true`. |
+| `memory_recall` | `{ query?, tag?, limit?, depth?, semantic?, include_public? }` | Hybrid keyword + vector recall across hot cache, tier rows (decrypted when unlocked), and board — optionally merged with the public group. Encrypted tiers you cannot decrypt are skipped. Seller scope serves public tiers only. |
 | `memory_forget` | `{ id }` | Strike a memory with an append-only tombstone; recall stops returning it. |
 
 ## Sats streams (pay per minute)
@@ -92,7 +92,8 @@ you trust.
 
 This wallet charges for its own compute. `bsv x402 serve` lists the menu
 (`jevDecide` 50 sats, `memoryRecall` 20 sats — reprice with
-`bsv x402 price <method> --price N`, 0 unlists); `bsv x402 sales` is the
+`bsv x402 price <method> --price N`, 0 unlists; `memoryRecall` at depth `all`
+quotes 2x for the usenet fetch); `bsv x402 sales` is the
 revenue ledger. Buyers POST JSON params to `/v1/serve/<method>`: no proof
 gets a 402 quote, a PAYMENT-SIGNATURE with a tx paying payTo ≥ price gets
 the answer + receipt (same envelope you already use as a buyer). One txid

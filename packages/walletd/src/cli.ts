@@ -1596,6 +1596,8 @@ async function main(): Promise<void> {
           ...(flag(mRest, "query") !== undefined ? { query: flag(mRest, "query") } : {}),
           ...(flag(mRest, "tag") !== undefined ? { tag: flag(mRest, "tag") } : {}),
           ...(flag(mRest, "limit") !== undefined ? { limit: Number(flag(mRest, "limit")) } : {}),
+          ...(flag(mRest, "depth") !== undefined ? { depth: flag(mRest, "depth") } : {}),
+          ...(mRest.includes("--semantic") ? { semantic: true } : {}),
           ...(mRest.includes("--include-public") ? { includePublic: true } : {}),
         }));
       } else if (mSub === "forget" && mRest.find((a) => !a.startsWith("--"))) {
@@ -1607,7 +1609,7 @@ async function main(): Promise<void> {
         }));
       } else {
         console.error(
-          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|shared|public] [--for @name] [--pin] [--tag-public] [--live]|recall [--query q] [--tag t] [--limit n] [--include-public]|forget <id>|keys|key-show|key-add --identity <key> --key <armored>|init [--live [--pay-to <addr>]]>',
+          'usage: bsv memory <remember --text "…" [--tag t] [--visibility private|shared|public] [--for @name] [--pin] [--tag-public] [--live]|recall [--query q] [--tag t] [--limit n] [--depth hot|local|all] [--semantic] [--include-public]|forget <id>|keys|key-show|key-add --identity <key> --key <armored>|init [--live [--pay-to <addr>]]>',
         );
         process.exitCode = 2;
       }
