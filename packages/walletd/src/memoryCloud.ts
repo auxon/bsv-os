@@ -131,9 +131,17 @@ export async function r2Get(env: R2Env, key: string, fetchFn?: typeof fetch): Pr
   return r.body;
 }
 
+export async function r2Delete(env: R2Env, key: string, fetchFn?: typeof fetch): Promise<void> {
+  const r = await s3({ env, method: "DELETE", key, fetchFn });
+  if (r.status !== 204 && r.status !== 200 && r.status !== 404) {
+    throw Object.assign(new Error(`R2 DELETE failed (${r.status})`), { code: "R2_FAILED", status: 502 });
+  }
+}
+
 /** Keys under a prefix (ListObjectsV2, minimal <Key> parse, 1000 max). */
 export async function r2List(env: R2Env, prefix: string, fetchFn?: typeof fetch): Promise<string[]> {
-  const q = `list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=1000`;
+  // SigV4 requires query params sorted by name in the canonical request.
+  const q = `list-type=2&max-keys=1000&prefix=${encodeURIComponent(prefix)}`;
   const r = await s3({ env, method: "GET", key: "", query: q, fetchFn });
   if (r.status !== 200) {
     throw Object.assign(new Error(`R2 LIST failed (${r.status})`), { code: "R2_FAILED", status: 502 });
