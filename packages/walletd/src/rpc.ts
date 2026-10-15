@@ -23,7 +23,7 @@ import {
 } from "./attest.ts";
 import { parseDurationMs } from "./watch.ts";
 import { runDoctor } from "./doctor.ts";
-import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevQuestion } from "./jev.ts";
+import { autoThresholds, decide as jevDecideCall, jevEnabled, jevModel, type JevAsset, type JevQuestion } from "./jev.ts";
 import { classifyMeme, CLEF_MAX_IMAGE_BYTES } from "./clef.ts";
 import {
   createMarket, disputeWindowOpen, getBets, getMarket, gradeEvidence, listMarkets, lockIfPastClose,
@@ -1073,10 +1073,11 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
    * the OpenRouter key stays in the daemon environment; ~$0.00002/call.
    */
   jevDecide: async (params) => {
-    const { state, questions, model } = p(params) as { state?: unknown; questions?: unknown; model?: unknown };
+    const { state, questions, model, assets } = p(params) as { state?: unknown; questions?: unknown; model?: unknown; assets?: unknown };
     if (state === undefined || state === null) throw Object.assign(new Error("state required"), { code: "BAD_PARAM" });
     return jevDecideCall(state, questions as Record<string, JevQuestion>, {
       model: typeof model === "string" && model ? model : undefined,
+      ...(assets !== undefined ? { assets: assets as Record<string, JevAsset> } : {}),
     });
   },
   /**

@@ -18,8 +18,18 @@
  *   BSV_WALLETD_JEV_AUTO_MIN_PROB auto mode: minimum P(allow)
  *   BSV_WALLETD_JEV_AUTO_MAX_RISK auto mode: maximum risk score (< 0.5 = routine)
  *   BSV_WALLETD_JEV_AUTO_MIN_CONF auto mode: minimum confidence
+ *
+ * Multimodal (Dreamer-ready upstream — request format and accuracy may
+ * change between releases): images travel in a top-level `assets` map and
+ * are referenced from state, instructions, or criteria by their key. Any
+ * request carrying assets — or a `box` question (bounding-box location,
+ * needs Jev 1.14 via `model`) — sends
+ * `TypeSafe-Danger-Zone-Images: true`, which the API requires. Jev does
+ * not generate images; `box` answers are edge fractions, not pictures.
+ * Images leave the machine with the decision call like any other state,
+ * so never send anything the wallet owner would not show a stranger.
  */
-export type JevQuestionType = "noul" | "choice" | "score";
+export type JevQuestionType = "noul" | "choice" | "score" | "box";
 
 export interface JevQuestion {
   type: JevQuestionType;
@@ -27,11 +37,19 @@ export interface JevQuestion {
   criteria?: unknown;
 }
 
+/** One image asset: base64-encoded PNG/JPEG, referenced by its map key. */
+export interface JevAsset {
+  type?: "image";
+  format: "png" | "jpg" | "jpeg";
+  data_base64: string;
+}
+
 export interface JevAnswer {
   type: JevQuestionType;
   noul?: number;
   choice?: string;
   score?: number;
+  box?: { top: number; bottom: number; left: number; right: number };
   probabilities?: Record<string, number>;
   confidence?: number;
   legend?: Record<string, string>;
@@ -47,7 +65,7 @@ export interface JevResult {
 export type JevDecide = (
   state: unknown,
   questions: Record<string, JevQuestion>,
-  opts?: { model?: string },
+  opts?: { model?: string; assets?: Record<string, JevAsset> },
 ) => Promise<JevResult>;
 
 export interface SpendContext {
@@ -133,11 +151,17 @@ function validateQuestions(questions: unknown): asserts questions is Record<stri
   }
   for (const [id, q] of Object.entries(questions as Record<string, JevQuestion>)) {
     if (q === null || typeof q !== "object") fail("BAD_PARAM", `question "${id}" must be an object`);
-    if (!["noul", "choice", "score"].includes(q.type)) {
-      fail("BAD_PARAM", `question "${id}": type must be "noul", "choice", or "score"`);
+    if (!["noul", "choice", "score", "box"].includes(q.type)) {
+      fail("BAD_PARAM", `question "${id}": type must be "noul", "choice", "score", or "box"`);
     }
     if (typeof q.instructions !== "string" || !q.instructions.trim()) {
       fail("BAD_PARAM", `question "${id}": instructions is required`);
+    }
+    if (q.type === "box") {
+      // Box takes no criteria: the target is named in instructions, e.g.
+      // "the coffee mug in `photo`". Box needs Jev 1.14 (pass model).
+      if (q.criteria !== undefined) fail("BAD_PARAM", `question "${id}": box takes no criteria`);
+      continue;
     }
     if (q.type === "choice") {
       if (q.criteria === null || typeof q.criteria !== "object" || Array.isArray(q.criteria) || !Object.keys(q.criteria).length) {
@@ -152,20 +176,55 @@ function validateQuestions(questions: unknown): asserts questions is Record<stri
   }
 }
 
+const ASSET_FORMATS = ["png", "jpg", "jpeg"] as const;
+
+/** Shape-check the assets map; the API enforces size/dimension limits (400/413). */
+function validateAssets(assets: unknown): asserts assets is Record<string, JevAsset> {
+  if (assets === null || typeof assets !== "object" || Array.isArray(assets) || !Object.keys(assets).length) {
+    fail("BAD_PARAM", "assets must be a non-empty map of { <reference>: asset }");
+  }
+  for (const [ref, a] of Object.entries(assets as Record<string, JevAsset>)) {
+    if (a === null || typeof a !== "object") fail("BAD_PARAM", `asset "${ref}" must be an object`);
+    if (a.type !== undefined && a.type !== "image") fail("BAD_PARAM", `asset "${ref}": type must be "image"`);
+    if (!ASSET_FORMATS.includes(a.format as (typeof ASSET_FORMATS)[number])) {
+      fail("BAD_PARAM", `asset "${ref}": format must be png, jpg, or jpeg`);
+    }
+    if (typeof a.data_base64 !== "string" || !a.data_base64.trim()) {
+      fail("BAD_PARAM", `asset "${ref}": data_base64 is required (standard base64, no data: prefix)`);
+    }
+  }
+}
+
+/** Images/Box gate: the API rejects multimodal requests without this header. */
+export const JEV_IMAGES_HEADER = "TypeSafe-Danger-Zone-Images";
+
 /** One decision call. Retries 429/529/network like the skill helper; throws coded errors. */
 export async function decide(
   state: unknown,
   questions: Record<string, JevQuestion>,
-  opts: { model?: string; fetchFn?: typeof fetch } = {},
+  opts: { model?: string; assets?: Record<string, JevAsset>; fetchFn?: typeof fetch } = {},
 ): Promise<JevResult> {
   if (state === undefined || state === null) fail("BAD_PARAM", "state is required (string, object, or array)");
   validateQuestions(questions);
+  if (opts.assets !== undefined) validateAssets(opts.assets);
   const key = (process.env.OPENROUTER_API_KEY ?? "").trim();
   if (!key) fail("NO_KEY", "OPENROUTER_API_KEY is not set in the daemon environment");
   const fetchFn = opts.fetchFn ?? fetch;
   const timeout = Number(process.env.JEV_TIMEOUT_MS ?? 10_000);
   const retries = Number(process.env.JEV_RETRIES ?? 2);
-  const body = JSON.stringify({ state, questions, model: opts.model ?? jevModel() });
+  const body = JSON.stringify({
+    state,
+    questions,
+    model: opts.model ?? jevModel(),
+    ...(opts.assets !== undefined ? { assets: opts.assets } : {}),
+  });
+  const multimodal =
+    opts.assets !== undefined || Object.values(questions).some((q) => q.type === "box");
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${key}`,
+    "content-type": "application/json",
+    ...(multimodal ? { [JEV_IMAGES_HEADER]: "true" } : {}),
+  };
   const started = Date.now();
   let last: { code: string; message: string } | null = null;
 
@@ -178,7 +237,7 @@ export async function decide(
     try {
       res = await fetchFn(jevEndpoint(), {
         method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        headers,
         body,
         signal: ctrl.signal,
       });

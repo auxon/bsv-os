@@ -587,7 +587,7 @@ async function main(): Promise<void> {
       const stateRaw = flag(jRest, "state");
       const questionsRaw = flag(jRest, "questions");
       if (stateRaw === undefined || questionsRaw === undefined) {
-        console.error("usage: bsv jev decide --state <json|text|@file> --questions <json|@file> [--model=m]");
+        console.error("usage: bsv jev decide --state <json|text|@file> --questions <json|@file> [--model=m] [--asset <ref>@<png|jpg>]…");
         process.exitCode = 2;
         break;
       }
@@ -606,10 +606,37 @@ async function main(): Promise<void> {
         process.exitCode = 2;
         break;
       }
+      // Images: --asset <ref>@<path> (repeatable). The ref is written in
+      // state/instructions/criteria wherever the image belongs. PNG/JPEG
+      // only, 16 MiB per file (the API limit); prepare (upright, ≤1568px
+      // longest side) before sending. Images leave the machine with the
+      // call — never send anything the owner would not show a stranger.
+      let assets: Record<string, { type: "image"; format: "png" | "jpg" | "jpeg"; data_base64: string }> | undefined;
+      try {
+        for (const spec of flags(jRest, "asset")) {
+          const at = spec.indexOf("@");
+          if (at <= 0 || at === spec.length - 1) throw new Error(`bad --asset "${spec}": want <ref>@<path>`);
+          const ref = spec.slice(0, at);
+          const path = spec.slice(at + 1);
+          const ext = path.toLowerCase().endsWith(".png") ? "png"
+            : /\.jpe?g$/.test(path.toLowerCase()) ? "jpg" : null;
+          if (!ext) throw new Error(`bad --asset "${spec}": PNG or JPEG only (.png/.jpg/.jpeg)`);
+          const stat = fs.statSync(path);
+          if (stat.size > 16 * 1024 * 1024) throw new Error(`bad --asset "${spec}": file is over the 16 MiB per-image limit`);
+          assets ??= {};
+          if (assets[ref]) throw new Error(`bad --asset "${spec}": duplicate ref "${ref}"`);
+          assets[ref] = { type: "image", format: ext, data_base64: fs.readFileSync(path).toString("base64") };
+        }
+      } catch (e) {
+        console.error(`jev decide: ${e instanceof Error ? e.message : e}`);
+        process.exitCode = 2;
+        break;
+      }
       print(await call("jevDecide", {
         state,
         questions,
         ...(flag(jRest, "model") ? { model: flag(jRest, "model") } : {}),
+        ...(assets ? { assets } : {}),
       }));
       break;
     }

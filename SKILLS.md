@@ -25,7 +25,7 @@ ledger. Keep it stable across sessions (e.g. `research-agent`, `nightshift`).
 | `anchor_tip` | `{ sha256 }` | Timestamp 64-hex on-chain (OP_RETURN). Policy-gated. Returns `{ txid, fee }`. |
 | `list_pending` | — | Txs the daemon is watching: `seen` / `mined` / `failed`. |
 | `x402_pay` | `{ url, method?, data? }` | Metered fetch: quotes, pays from YOUR budget through policy, retries with proof. Returns resource + receipt. Denials work like `anchor_tip`. |
-| `jev_decide` | `{ state, questions, model? }` | Calibrated decision call (TypeSafe System One): `noul` (yes/no probability), `choice`, `score`; returns probabilities + confidence in ~250 ms. Batch all questions into one call; ~$0.00002/call. For classification, routing, risk scoring, triage — not writing or open-ended reasoning. |
+| `jev_decide` | `{ state, questions, model?, assets? }` | Calibrated decision call (TypeSafe System One): `noul` (yes/no probability), `choice`, `score`, `box` (locate in an image; needs Jev 1.14 model). Images go in `assets` (`{ ref: { format: png\|jpg\|jpeg, data_base64 } }`), referenced by ref from state/instructions/criteria. Returns probabilities + confidence in ~250 ms. Batch all questions into one call; ~$0.00002/call. For classification, routing, risk scoring, triage — not writing or open-ended reasoning. |
 | `jev_status` | — | Whether Jev is configured in the daemon, the model, and the auto-approval thresholds. |
 | `trust_terms` | — | This wallet's EntangleIT Trust profile: level, terms (approval multiplier, bond discount, discount ceiling), expiry, and the reasons behind the level. Fetched from the configured Trust worker and verified offline; only widens the Jev auto-approval band inside existing caps — never uncaps. `configured: false` when the daemon has no `TRUST_URL`. |
 | `policy_probe` | `{ action, amountSats, label?, description? }` | Dry-run the spending gate: caps, your budget, Jev verdict — without spending or writing a request. Call before spending to see what approval you need. |
@@ -244,6 +244,7 @@ bsv allow <agent> [capSats] [--auto]  # approve an agent, optionally capped; --a
 bsv deny <agent>              # revoke
 bsv pending                   # watch queue
 bsv jev status                # Jev advisor on/off + thresholds
+bsv jev decide --state '{"photo":"door1"}' --questions '{"person":{"type":"noul","instructions":"Is there a person in `photo`?"}}' --asset door1@door.jpg  # multimodal: --asset <ref>@<png|jpg> (repeatable); box questions need --model with Jev 1.14
 bsv probe <origin> <action> <sats> [--label=..]  # dry-run the gate, no money moves
 bsv events --wait 60          # approval-lifecycle feed (same as events_poll)
 bsv watch 'type=payment since=1h'   # the whole wallet as one filtered tail

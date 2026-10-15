@@ -154,3 +154,82 @@ test("x402 context shapes the decision state and criteria", () => {
   assert.match(q.verdict.instructions, /pay-per-call/);
   assert.equal(q.risk.criteria.length, 3);
 });
+
+test("decide sends assets and the images header only for multimodal calls", async () => {
+  process.env.OPENROUTER_API_KEY = "test-key";
+  try {
+    let seen = null;
+    const fetchFn = async (url, init) => {
+      seen = { headers: init.headers, body: JSON.parse(init.body) };
+      return okResponse({ q: { type: "noul", noul: 0.8 } });
+    };
+    const assets = { "a3f1-door": { type: "image", format: "jpg", data_base64: "aGVsbG8=" } };
+    await decide({ door: "a3f1-door" }, { q: { type: "noul", instructions: "Is there a person in `door`?" } }, { fetchFn, assets });
+    assert.deepEqual(seen.body.assets, assets);
+    assert.equal(seen.headers["TypeSafe-Danger-Zone-Images"], "true");
+
+    seen = null;
+    await decide("plain", { q: { type: "noul", instructions: "yes?" } }, { fetchFn });
+    assert.equal("assets" in seen.body, false);
+    assert.equal("TypeSafe-Danger-Zone-Images" in seen.headers, false);
+  } finally {
+    delete process.env.OPENROUTER_API_KEY;
+  }
+});
+
+test("box questions validate and trigger the images header", async () => {
+  process.env.OPENROUTER_API_KEY = "test-key";
+  try {
+    let seen = null;
+    const fetchFn = async (url, init) => {
+      seen = { headers: init.headers, body: JSON.parse(init.body) };
+      return okResponse({ mug: { type: "box", box: { top: 0.25, bottom: 0.82, left: 0.44, right: 0.84 }, confidence: 0.92 } });
+    };
+    const r = await decide(
+      { photo: "k1" },
+      {
+        mug_visible: { type: "noul", instructions: "Is there a coffee mug in `photo`?" },
+        mug: { type: "box", instructions: "the coffee mug in `photo`" },
+      },
+      { fetchFn },
+    );
+    assert.deepEqual(r.answers.mug.box, { top: 0.25, bottom: 0.82, left: 0.44, right: 0.84 });
+    assert.equal(seen.headers["TypeSafe-Danger-Zone-Images"], "true");
+
+    let fetched = false;
+    const noFetch = async () => { fetched = true; return okResponse({}); };
+    await assert.rejects(
+      decide("x", { q: { type: "box", instructions: "find it", criteria: { a: "b" } } }, { fetchFn: noFetch }),
+      (e) => e.code === "BAD_PARAM",
+    );
+    await assert.rejects(
+      decide("x", { q: { type: "laser", instructions: "zap" } }, { fetchFn: noFetch }),
+      (e) => e.code === "BAD_PARAM",
+    );
+    assert.equal(fetched, false);
+  } finally {
+    delete process.env.OPENROUTER_API_KEY;
+  }
+});
+
+test("decide rejects malformed assets before spending a call", async () => {
+  process.env.OPENROUTER_API_KEY = "test-key";
+  try {
+    let fetched = false;
+    const fetchFn = async () => { fetched = true; return okResponse({}); };
+    const q = { q: { type: "noul", instructions: "yes?" } };
+    const bad = [
+      {},
+      { k: { format: "jpg" } },
+      { k: { format: "gif", data_base64: "aGVsbG8=" } },
+      { k: { format: "png", data_base64: "  " } },
+      { k: "not-an-object" },
+    ];
+    for (const assets of bad) {
+      await assert.rejects(decide("x", q, { fetchFn, assets }), (e) => e.code === "BAD_PARAM");
+    }
+    assert.equal(fetched, false);
+  } finally {
+    delete process.env.OPENROUTER_API_KEY;
+  }
+});

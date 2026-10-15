@@ -71,16 +71,20 @@ const TOOLS = [
   },
   {
     name: "jev_decide",
-    description: "Ask Jev (TypeSafe System One) for a calibrated decision: a state (facts) plus typed questions — noul (yes/no probability), choice (pick from a set you define), score (rate on ordered levels) — returns probabilities and confidence in ~250 ms. Batch all questions into one call. ~$0.00002/call. Use for classification, routing, risk scoring, triage; not for writing or open-ended reasoning.",
+    description: "Ask Jev (TypeSafe System One) for a calibrated decision: a state (facts) plus typed questions — noul (yes/no probability), choice (pick from a set you define), score (rate on ordered levels), box (locate in an image; needs a Jev 1.14 model) — returns probabilities and confidence in ~250 ms. Images go in an assets map ({ ref: { format: png|jpg|jpeg, data_base64 } }) and are referenced by ref from state, instructions, or criteria. Batch all questions into one call. ~$0.00002/call. Use for classification, routing, risk scoring, triage; not for writing or open-ended reasoning.",
     inputSchema: {
       type: "object" as const,
       properties: {
         state: { description: "facts to judge: string, object, or array (redact secrets)" },
         questions: {
           type: "object" as const,
-          description: 'map of id -> { type: "noul"|"choice"|"score", instructions, criteria? }; choice needs { option: description }, score needs >=2 level strings',
+          description: 'map of id -> { type: "noul"|"choice"|"score"|"box", instructions, criteria? }; choice needs { option: description }, score needs >=2 level strings, box takes no criteria',
         },
-        model: { type: "string", description: "default typesafe/jev-1.13" },
+        model: { type: "string", description: "default typesafe/jev-1.13 (box needs Jev 1.14)" },
+        assets: {
+          type: "object" as const,
+          description: "optional images: map of ref -> { format: png|jpg|jpeg, data_base64 }; every ref must be referenced from state, instructions, or criteria",
+        },
       },
       required: ["state", "questions"],
     },
@@ -598,6 +602,7 @@ export function buildMcpServer(callDaemon: DaemonCall, agent: string): Server {
             state: args.state,
             questions: args.questions,
             ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
+            ...(args.assets !== null && typeof args.assets === "object" ? { assets: args.assets } : {}),
           }));
         }
         case "jev_status":
