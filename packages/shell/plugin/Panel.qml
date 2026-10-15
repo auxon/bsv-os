@@ -1498,9 +1498,20 @@ Panel {
             Layout.fillWidth: true
 
             Text {
-              text: `${String(modelData.txid ?? "?").slice(0, 12)}… · ${modelData.status ?? "?"}${modelData.label ? ` · ${modelData.label}` : ""}`
+              text: `${modelData.status ?? "?"}${modelData.label ? ` · ${modelData.label}` : ""}`
               color: Color.foreground
               font.pixelSize: Style.font.body
+            }
+
+            Text {
+              text: `<a href="https://whatsonchain.com/tx/${modelData.txid}">${modelData.txid}</a>`
+              textFormat: Text.RichText
+              color: Color.accent
+              font.pixelSize: Style.font.caption
+              font.family: "monospace"
+              wrapMode: Text.Wrap
+              Layout.fillWidth: true
+              onLinkActivated: (link) => Qt.openUrlExternally(link)
             }
 
             Text {

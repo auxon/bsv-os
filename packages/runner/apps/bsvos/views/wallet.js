@@ -239,7 +239,7 @@ const STATUS_HINT = {
 export const transactions = {
   id: "transactions",
   title: "Transactions",
-  group: "Wallet",
+  group: "Money",
   note: "Every send this wallet has made. Losers of a double-spend race cost nothing.",
   async load(ctx) {
     const [h, p] = await Promise.all([tryRpc("history"), tryRpc("pending")]);
@@ -250,22 +250,24 @@ export const transactions = {
     const txs = ctx.data.history?.transactions ?? [];
     const inflight = ctx.data.pending ?? [];
     if (!txs.length && !inflight.length) return empty("No transactions yet.");
+    const txLink = (txid) =>
+      `<a class="mono" data-explorer="${esc(txid)}" href="https://whatsonchain.com/tx/${esc(txid)}">${esc(txid)}</a>`;
     const body = (t) =>
       `<div class="row">` +
         `${chip(t.status, t.status === "mined" ? "ok" : t.status === "failed" ? "bad" : "info")}` +
         `<span class="grow ellipsis">${esc(t.label || "transaction")}</span>` +
-        `<span class="mono dim">${esc(short(t.txid, 8))}</span>` +
         `<span class="dim">${timeAgo(Math.floor((t.created_at ?? 0) / 1000))}</span>` +
         `<span class="actions">` +
           `<button class="btn tiny" data-copy="${esc(t.txid)}">Copy txid</button>` +
-          `<button class="btn tiny" data-explorer="${esc(t.txid)}">Explorer</button>` +
         `</span>` +
-      `</div>`;
+      `</div>` +
+      `<div class="card-sub" style="word-break:break-all">${txLink(t.txid)}</div>`;
     return (
       (inflight.length
         ? `<h2 class="sec">In flight (${inflight.length})</h2>` + rows(inflight, (t) =>
-            `<div class="row">${chip("broadcast", "info")}<span class="grow ellipsis">${esc(t.label || t.txid)}</span>` +
-            `<span class="dim">${esc(STATUS_HINT.seen)}</span></div>`)
+            `<div class="row">${chip("broadcast", "info")}<span class="grow ellipsis">${esc(t.label || "transaction")}</span>` +
+            `<span class="dim">${esc(STATUS_HINT.seen)}</span></div>` +
+            `<div class="card-sub" style="word-break:break-all">${txLink(t.txid)}</div>`)
         : "") +
       `<h2 class="sec">History (${txs.length})</h2>` +
       (txs.length
@@ -278,7 +280,7 @@ export const transactions = {
       const cp = e.target.closest("[data-copy]");
       if (cp) return copy(cp.dataset.copy, "txid copied");
       const ex = e.target.closest("[data-explorer]");
-      if (ex) return ctx.openExplorer(ex.dataset.explorer);
+      if (ex) { e.preventDefault(); return ctx.openExplorer(ex.dataset.explorer); }
     });
   },
 };
