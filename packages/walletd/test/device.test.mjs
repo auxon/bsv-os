@@ -417,10 +417,9 @@ it("bundled app assets are served to devices, and nothing else moved", () => {
   }
 
   // And the carve-out itself is narrow: GET only, and only known app names.
-  const carve = src.slice(src.indexOf("// Bundled app assets move ABOVE"), gate);
+  const carve = src.slice(src.indexOf("// Bundled app assets BEFORE"), gate);
   assert.match(carve, /req\.method === "GET"/, "GET only");
-  // `appMatch[1]!` — the non-null assertion is part of the source text.
-  assert.match(carve, /RUNNER_APPS\.has\(appMatch\[1\]!?\)/, "only bundled app names");
+  assert.match(carve, /runnerAppForRequest\(host/, "host+path routing, including *.localhost");
   assert.doesNotMatch(carve, /resolveRunnerAppFile\(req/, "no caller-supplied path reaches the resolver");
 });
 

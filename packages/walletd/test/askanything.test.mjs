@@ -16,6 +16,7 @@ import { readCatalog } from "../src/apps.ts";
 import { validateManifest } from "../src/apps.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO_CATALOG = path.resolve(here, "../../runner/store.json");
 
 test("client validation mirrors the daemon floor and caps", () => {
   assert.deepEqual(
@@ -49,7 +50,7 @@ test("askanything manifest validates on its own host", () => {
 });
 
 test("the shipped catalog lists AskAnything on askanything.localhost", () => {
-  const catalog = readCatalog();
+  const catalog = readCatalog(REPO_CATALOG);
   const entry = catalog.apps.find((a) => a.name === "AskAnything");
   assert.ok(entry, "AskAnything is catalogued");
   assert.equal(entry.domain, "askanything.localhost");

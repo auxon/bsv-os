@@ -1,7 +1,7 @@
 # Maintainer: EntangleIT <bsv-os@entangleit.com>
 pkgname=bsv-os-meta
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="BSV OS layer for Omarchy: system BRC-100 wallet daemon, CLI, shell plugins"
 arch=('aarch64')
 url="https://github.com/auxon/bsv-os"
@@ -45,11 +45,13 @@ package() {
 
   # F2 runner: bridge extension + loopback demo + F1 store catalog (the CLI
   # resolves them from here when not running out of a repo checkout).
+  # store.json is installed on its own so a missing extension tree cannot
+  # leave a stale one-entry catalog in /usr/share from an older package.
   local runner="$startdir/../../../packages/runner"
+  install -dm755 "$pkgdir/usr/share/bsv-os/runner"
+  install -Dm644 "$runner/store.json" "$pkgdir/usr/share/bsv-os/runner/store.json"
   if [ -d "$runner/extension" ]; then
-    install -dm755 "$pkgdir/usr/share/bsv-os/runner"
     cp -a "$runner/extension" "$pkgdir/usr/share/bsv-os/runner/"
-    [ -f "$runner/store.json" ] && cp -a "$runner/store.json" "$pkgdir/usr/share/bsv-os/runner/"
     [ -d "$runner/demo" ] && cp -a "$runner/demo" "$pkgdir/usr/share/bsv-os/runner/"
   fi
 

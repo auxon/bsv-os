@@ -759,8 +759,31 @@ async function serveRunnerApp(req: IncomingMessage, res: ServerResponse, name: s
 }
 
 
-function handler() {
+export function handler() {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    // Bundled app assets BEFORE the API / POST-only surface. GET / on
+    // cast.localhost is the Cast HTML, not {"error":"POST only"}. Path
+    // /cast/ still works. A paired phone loads these in a web view and is
+    // never loopback (docs/ios.md).
+    //
+    // Safe to serve: they are public source in this repository, so a peer that
+    // can already reach the daemon learns nothing new — the same reasoning as
+    // /health. Deliberately narrow: GET only, only names runnerAppForRequest
+    // admits, and resolveRunnerAppFile polices traversal. The JSON-RPC those
+    // pages call is NOT here: it stays loopback-only, and the iOS host rewrites
+    // it to the authenticated device surface (packages/ios), so the token never
+    // reaches a page.
+    if (typeof req.url === "string" && req.method === "GET") {
+      const hostHeader = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
+      const authority = req.headers[":authority"];
+      const authorityHeader = Array.isArray(authority) ? authority[0] : authority;
+      const host = String(hostHeader ?? authorityHeader ?? "");
+      const routed = runnerAppForRequest(host, req.url.split("?")[0] || "/");
+      if (routed) {
+        await serveRunnerApp(req, res, routed.name, routed.subpath);
+        return;
+      }
+    }
     if (req.url === "/health" && req.method === "GET") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, version: VERSION }));
@@ -790,24 +813,6 @@ function handler() {
     if (typeof req.url === "string" && req.url.split("?")[0]!.startsWith("/v1/device/")) {
       await deviceHttp(req, res);
       return;
-    }
-    // Bundled app assets move ABOVE the loopback gate: a paired phone loads
-    // these in a web view, and a phone is never loopback (docs/ios.md).
-    //
-    // Safe to serve: they are public source in this repository, so a peer that
-    // can already reach the daemon learns nothing new — the same reasoning as
-    // /health. Deliberately narrow: GET only, only names in RUNNER_APPS, and
-    // resolveRunnerAppFile polices traversal. The JSON-RPC those pages call is
-    // NOT here: it stays loopback-only, and the iOS host rewrites it to the
-    // authenticated device surface (packages/ios), so the token never reaches a
-    // page.
-    if (typeof req.url === "string" && req.method === "GET") {
-      const host = String(Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host ?? "");
-      const routed = runnerAppForRequest(host, req.url.split("?")[0] || "/");
-      if (routed) {
-        await serveRunnerApp(req, res, routed.name, routed.subpath);
-        return;
-      }
     }
 
     if (!isLoopbackPeer(req)) {

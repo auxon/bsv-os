@@ -18,6 +18,7 @@ import { readCatalog } from "../src/apps.ts";
 import { validateManifest } from "../src/apps.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO_CATALOG = path.resolve(here, "../../runner/store.json");
 // Proportional stub: deterministic without a canvas.
 const stubMeasure = (text, px) => text.length * px * 0.6;
 
@@ -117,7 +118,7 @@ test("memestudio manifest validates on memestudio.localhost", () => {
 });
 
 test("the shipped catalog lists Meme Studio on memestudio.localhost", () => {
-  const catalog = readCatalog();
+  const catalog = readCatalog(REPO_CATALOG);
   const entry = catalog.apps.find((a) => a.name === "Meme Studio");
   assert.ok(entry, "Meme Studio is catalogued");
   assert.equal(entry.domain, "memestudio.localhost");

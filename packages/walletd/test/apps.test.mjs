@@ -9,8 +9,11 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { migrate } from "../src/storage.ts";
 import { desktopFile } from "../src/desktop.ts";
+
+const REPO_CATALOG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../runner/store.json");
 
 const GOOD = {
   name: "Demo App",
@@ -285,7 +288,7 @@ test("loopback trust stays scoped to loopback hosts", () => {
 test("storeList merges catalog, installed extras, and live caps", async () => {
   const db = await memdb();
   try {
-    const catalog = readCatalog();
+    const catalog = readCatalog(REPO_CATALOG);
     assert.ok(Array.isArray(catalog.apps));
     const hooks = { seedPolicyRequest: async () => {} };
     await installApp(db, "storetest.example", hooks, { manifestJson: V1 });
@@ -381,7 +384,7 @@ test("an installed app that is not a catalog variant stays visible as an extra",
 });
 
 test("the shipped catalog gives every bundled app its own host", () => {
-  const catalog = readCatalog();
+  const catalog = readCatalog(REPO_CATALOG);
   for (const [domain, name] of [
     ["127.0.0.1", "bsvOS"],
     ["cast.localhost", "Cast"],
@@ -445,6 +448,52 @@ test("storeList uses overlay listings when present and falls back to store.json"
   } finally {
     await db.destroy();
   }
+});
+
+test("readCatalog without a file still finds the repo catalog", () => {
+  const prev = process.env.BSV_STORE_CATALOG;
+  delete process.env.BSV_STORE_CATALOG;
+  try {
+    const catalog = readCatalog();
+    assert.ok(catalog.apps.find((a) => a.name === "Cast" && a.domain === "cast.localhost"), "repo catalog, not a stale /usr/share copy");
+    assert.ok(catalog.apps.length >= 6, "full catalog, not the one-entry packaged stub");
+  } finally {
+    if (prev === undefined) delete process.env.BSV_STORE_CATALOG;
+    else process.env.BSV_STORE_CATALOG = prev;
+  }
+});
+
+test("readCatalog prefers BSV_STORE_CATALOG over every packaged path", () => {
+  const override = path.join(os.tmpdir(), `bsv-store-override-${process.pid}.json`);
+  fs.writeFileSync(override, JSON.stringify({
+    version: 1,
+    apps: [{ domain: "override.localhost", name: "Override App" }],
+  }));
+  const prev = process.env.BSV_STORE_CATALOG;
+  try {
+    process.env.BSV_STORE_CATALOG = override;
+    const catalog = readCatalog();
+    assert.deepEqual(catalog.apps.map((a) => a.name), ["Override App"]);
+  } finally {
+    if (prev === undefined) delete process.env.BSV_STORE_CATALOG;
+    else process.env.BSV_STORE_CATALOG = prev;
+    fs.rmSync(override, { force: true });
+  }
+});
+
+test("readCatalog candidate order puts the repo file before /usr/share", () => {
+  const src = fs.readFileSync(new URL("../src/apps.ts", import.meta.url), "utf8");
+  const start = src.indexOf("export function readCatalog");
+  const end = src.indexOf("return { version: 1, apps: [] }", start);
+  assert.ok(start > 0 && end > start, "readCatalog body found");
+  const body = src.slice(start, end);
+  const envAt = body.indexOf("BSV_STORE_CATALOG");
+  const repoAt = body.indexOf('runner", "store.json"');
+  const shareAt = body.indexOf("/usr/share/bsv-os/runner/store.json");
+  assert.ok(envAt > 0, "BSV_STORE_CATALOG is a candidate");
+  assert.ok(repoAt > 0, "repo store.json is a candidate");
+  assert.ok(shareAt > 0, "/usr/share is still a fallback");
+  assert.ok(envAt < repoAt && repoAt < shareAt, "env, then repo, then /usr/share");
 });
 
 test("readCatalog drops a URL that escapes its own domain", () => {
