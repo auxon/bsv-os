@@ -818,16 +818,25 @@ function catalogUrl(raw: unknown, domain: string): { url: string | null; invalid
   }
 }
 
-/** Curated catalog: packaged file first, repo checkout second, empty offline. */
+/**
+ * Curated catalog. A stale `/usr/share/bsv-os/runner/store.json` from an
+ * older bsv-os-meta package must not shadow the repo copy next to this
+ * module (that is how a live machine showed only "Runner Demo").
+ *
+ * Order: explicit file, then `BSV_STORE_CATALOG`, then the checkout next
+ * to the running code, then the packaged share path, then empty offline.
+ */
 export function readCatalog(file?: string): { version: number; apps: CatalogApp[] } {
   const here = path.dirname(new URL(import.meta.url).pathname);
+  const env = process.env.BSV_STORE_CATALOG;
   const candidates = file
     ? [file]
     : [
-        "/usr/share/bsv-os/runner/store.json",
+        env,
         path.resolve(here, "..", "..", "runner", "store.json"),
         path.resolve(here, "..", "runner", "store.json"),
-      ];
+        "/usr/share/bsv-os/runner/store.json",
+      ].filter((c): c is string => typeof c === "string" && c.length > 0);
   for (const candidate of candidates) {
     try {
       const raw = JSON.parse(fs.readFileSync(candidate, "utf8")) as {

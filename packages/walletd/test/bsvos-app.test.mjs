@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { validateManifest, readCatalog } from "../src/apps.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO_CATALOG = path.resolve(here, "../../runner/store.json");
 const appDir = path.resolve(here, "../../runner/apps/bsvos");
 const read = (f) => fs.readFileSync(path.join(appDir, f), "utf8");
 const exists = (f) => fs.existsSync(path.join(appDir, f));
@@ -273,7 +274,7 @@ test("bsvos app: OIDC setup is possible in-app, and never exposes a secret", () 
 });
 
 test("store catalog: every bundled app gets its own host", () => {
-  const catalog = readCatalog();
+  const catalog = readCatalog(REPO_CATALOG);
   const keys = catalog.apps.map((a) => `${a.domain}${a.url ? new URL(a.url).pathname : "/"}`);
   assert.equal(new Set(keys).size, keys.length, "catalog identities are unique");
   const shell = catalog.apps.find((a) => a.domain === "127.0.0.1");
