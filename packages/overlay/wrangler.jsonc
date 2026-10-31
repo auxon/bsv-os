@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bsvos-apps-overlay",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  // Richard: create the D1 database, then replace this placeholder id.
+  //   npx wrangler d1 create bsvos-apps
+  // Do not deploy or put secrets from this PR.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bsvos-apps",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "TOPIC": "tm_bsvos_apps",
+    "LOOKUP": "ls_bsvos_apps",
+    // Store P2PKH address that must receive the publishing fee and the install cut.
+    // Empty until Richard creates the store key and sets this (and STORE_PUBKEY).
+    "STORE_ADDRESS": "",
+    "STORE_PUBKEY": "",
+    "PUBLISHING_FEE_SATS": "1000",
+    // 1000 bps = 10%. Nothing on-chain enforces this; admission and licensing do.
+    "STORE_CUT_BPS": "1000"
+  }
+}

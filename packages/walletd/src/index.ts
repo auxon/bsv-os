@@ -16,7 +16,7 @@ import { deviceInvoke } from "./rpc.ts";
 import { authorizeDeviceRequest, completePairing, forgetPushToken, pushTargets } from "./device.ts";
 import { ApnsHttpTransport, ApnsTokenProvider, apnsConfigFromEnv, approvalPushContent, sendToDevices } from "./push.ts";
 import { onRequestCreated } from "./policy.ts";
-import { resolveRunnerAppFile, runnerAppStamp } from "./apps.ts";
+import { resolveRunnerAppFile, runnerAppForRequest, runnerAppStamp } from "./apps.ts";
 import { VERSION } from "./rpc.ts";
 import { CombinedProvider } from "./chain.ts";
 import { dataDir, migrate, openDb } from "./storage.ts";
@@ -802,9 +802,10 @@ function handler() {
     // authenticated device surface (packages/ios), so the token never reaches a
     // page.
     if (typeof req.url === "string" && req.method === "GET") {
-      const appMatch = /^\/([a-z0-9-]+)(\/[^?]*)?$/.exec(req.url.split("?")[0]!);
-      if (appMatch && RUNNER_APPS.has(appMatch[1]!)) {
-        await serveRunnerApp(req, res, appMatch[1]!, appMatch[2] ?? "/");
+      const host = String(Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host ?? "");
+      const routed = runnerAppForRequest(host, req.url.split("?")[0] || "/");
+      if (routed) {
+        await serveRunnerApp(req, res, routed.name, routed.subpath);
         return;
       }
     }

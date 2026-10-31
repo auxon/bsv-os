@@ -60,13 +60,11 @@ fetch skipped. Production installs stay https-manifest-only.
   `colosseum/` (Ordinal Colosseum: your ordinals fight), `memestudio/`
   (Meme Studio: caption Meme Library templates, post them on-chain), and
   `askanything/` (AskAnything: funded questions, paid answers).
-- `store.json`: curated catalog for `bsv store` — every bundled app as its
-   own entry with its own install URL (the shell on `127.0.0.1`, and Cast,
-   Twetch, Explorer, Colosseum, Meme Studio and AskAnything on the shared
-   `localhost` slot), plus the
-   remote Metanet apps. Two entries may share a host when their paths differ;
-   the store shows which variant is installed and offers a **Switch** for its
-   slot-mates.
+- `store.json`: curated catalog for `bsv store` — the shell on `127.0.0.1`,
+   bundled feature apps on their own `*.localhost` hosts (`cast.localhost`,
+   …), plus the remote Metanet apps. This file is the mirror/fallback when
+   the overlay lookup (`ls_bsvos_apps`) is unset or down. See
+   [docs/app-store-overlay.md](../../docs/app-store-overlay.md).
 
 ## The shell app (`apps/bsvos/`)
 
@@ -113,24 +111,22 @@ operator surface, not a sandboxed third-party app, and its manifest carries a
 ## App identity: one slot per host
 
 An installed app is keyed by **hostname** (`apps.domain`, unique), not by
-URL. The daemon only ever binds `127.0.0.1:2121`, and only `localhost` /
-`::1` / `127.x` are trusted as loopback, so there are exactly two identities
-available for bundled apps:
+URL. The `Origin` header a browser sends has no path, so the bridge can
+only pin a host. Bundled feature apps therefore each get a `*.localhost`
+identity (`cast.localhost`, `twetch.localhost`, …). The daemon still binds
+`127.0.0.1:2121`; modern resolvers send `*.localhost` there, and the handler
+routes on the Host header. Path URLs (`/cast/`, …) still serve the files.
 
 - `127.0.0.1` — owned by the **shell**, permanently.
-- `localhost` — shared by the bundled feature apps. Cast, Twetch, Explorer,
-  Colosseum, Meme Studio and AskAnything all resolve to
-  `https://localhost:2121/<name>/`,
-  so installing one replaces whichever was there. The store lists every one
-  of them separately: the entry whose path matches the installed `start_url`
-  is the installed variant, and the others are offered as a **Switch**
-  (installing their URL replaces the holder). One click, no removal first.
+- `<app>.localhost` — one bundled feature app. Required before a real
+  overlay listing: a publisher key over a shared `localhost` slot cannot
+  prove who shipped the code.
 
-The `Origin` header a browser sends has no path, so the bridge can only pin
-a host — giving each bundled app its own policy identity needs per-app
-subdomains or nonces, not a path. That is why this is documented rather than
-worked around. The dev demo (`127.0.0.1:8443`) shares the shell's host slot
-too: running the click-through below evicts the shell, and
+Shared `localhost` path installs still parse (old bookmarks, tests), but
+`tm_bsvos_apps` rejects `localhost` / `127.0.0.1` as listing domains.
+
+The dev demo (`127.0.0.1:8443`) shares the shell's host slot: running the
+click-through below evicts the shell, and
 `bsv app install https://127.0.0.1:2121/bsvos/` puts it back.
 
 ## Store + updates (F1)

@@ -395,7 +395,7 @@ pointing at the outpoint.
 
 A bundled desktop app reads the public Twetch feed and your notifications,
 and posts text on-chain through the OS wallet. It runs from the daemon's own
-loopback origin (`https://localhost:2121/twetch/`), so no third-party wallet
+loopback origin (`https://twetch.localhost:2121/`), so no third-party wallet
 or browser extension is involved.
 
 ```bash

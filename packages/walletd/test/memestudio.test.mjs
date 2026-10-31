@@ -105,23 +105,23 @@ test("an expired arm needs a fresh arm, and reset disarms", () => {
   assert.equal(c.press(), "arm");
 });
 
-test("memestudio manifest validates on the localhost slot", () => {
+test("memestudio manifest validates on memestudio.localhost", () => {
   const raw = JSON.parse(
     fs.readFileSync(path.resolve(here, "../../runner/apps/memestudio/manifest.json"), "utf8"),
   );
-  const v = validateManifest("localhost", raw);
+  const v = validateManifest("memestudio.localhost", raw);
   assert.equal(v.name, "Meme Studio");
-  assert.equal(v.startUrl, "https://localhost:2121/memestudio/");
+  assert.equal(v.startUrl, "https://memestudio.localhost:2121/");
   assert.equal(v.spendCapSats, 1_000_000);
   assert.throws(() => validateManifest("127.0.0.1", raw), /escapes the app origin/);
 });
 
-test("the shipped catalog lists Meme Studio on its own localhost URL", () => {
+test("the shipped catalog lists Meme Studio on memestudio.localhost", () => {
   const catalog = readCatalog();
   const entry = catalog.apps.find((a) => a.name === "Meme Studio");
   assert.ok(entry, "Meme Studio is catalogued");
-  assert.equal(entry.domain, "localhost");
-  assert.equal(entry.url, "https://localhost:2121/memestudio/");
+  assert.equal(entry.domain, "memestudio.localhost");
+  assert.equal(entry.url, "https://memestudio.localhost:2121/");
 });
 
 test("the daemon serves the memestudio app directory", () => {

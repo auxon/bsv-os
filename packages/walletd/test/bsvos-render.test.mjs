@@ -557,7 +557,7 @@ test("a bundled app that does not hold the host slot offers a switch, not a blin
   // The handler must pass whatever data-install carries straight through.
   const src = readApp("views/apps.js");
   assert.ok(/const domain = i\.dataset\.install;/.test(src), "the handler reads the install URL");
-  assert.ok(/rpc\("appInstall", \{ domain \}\)/.test(src), "appInstall receives it unchanged");
+  assert.ok(/rpc\("appInstall", \{ domain/.test(src), "appInstall receives the install URL");
   // An installed app still opens when its manifest probe fails (unreachable);
   // only the pinned copy matters until an update is actually wanted.
   const stale = appsView.render({

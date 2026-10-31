@@ -1,7 +1,7 @@
 {
   "name": "Ordinal Colosseum",
   "short_name": "Colosseum",
-  "start_url": "https://localhost:2121/colosseum/",
+  "start_url": "https://colosseum.localhost:2121/",
   "icons": [],
   "metanet": {
     "schemaVersion": "1",

@@ -1,7 +1,7 @@
 {
   "name": "Predict",
   "short_name": "Predict",
-  "start_url": "https://localhost:2121/predict/",
+  "start_url": "https://predict.localhost:2121/",
   "icons": [],
   "metanet": {
     "schemaVersion": "1",

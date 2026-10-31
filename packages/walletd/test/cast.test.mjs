@@ -178,7 +178,7 @@ test("player app bundle: served files, no remote code", async () => {
   assert.ok(js.includes("bytesHave"), "track bytes are scanned for video codecs");
   assert.ok(js.includes("elementError"), "async pipeline errors abort the attempt");
   const manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", dir), "utf8"));
-  assert.equal(manifest.start_url, "https://localhost:2121/cast/");
+  assert.equal(manifest.start_url, "https://cast.localhost:2121/");
 });
 
 test("live ingest: ids, playlist shape, validators", async () => {

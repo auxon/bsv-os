@@ -71,7 +71,7 @@ test("a long-lived shell window notices when its build changes underneath it", (
   // device share one implementation). Assert both ends, so the stamp stays
   // reachable at /<app>/__build however the plumbing is arranged.
   assert.ok(src.includes('subpath === "/__build"'), "the handler serves the stamp at /<app>/__build");
-  assert.ok(src.includes('appMatch[2] ?? "/"'), "and the route passes the path through to it");
+  assert.ok(src.includes("runnerAppForRequest"), "and the route passes host+path through to it");
   // ...and the nav the user could not see must still be wired.
   // app.js must consume the registry, not reassemble it: that is exactly what
   // let a missing spread operator hide from the entire test suite.
@@ -272,24 +272,22 @@ test("bsvos app: OIDC setup is possible in-app, and never exposes a secret", () 
   assert.ok(/SETUP_REQUIRED/.test(rpc), "SETUP_REQUIRED is explained, not dumped raw");
 });
 
-test("store catalog: every bundled app gets its own entry, localhost stays shared", () => {
+test("store catalog: every bundled app gets its own host", () => {
   const catalog = readCatalog();
-  // Identities are host + directory (variants): the bundled apps share the
-  // localhost host at different paths, so domains repeat but paths must not.
   const keys = catalog.apps.map((a) => `${a.domain}${a.url ? new URL(a.url).pathname : "/"}`);
   assert.equal(new Set(keys).size, keys.length, "catalog identities are unique");
   const shell = catalog.apps.find((a) => a.domain === "127.0.0.1");
   assert.ok(shell, "bsvOS is catalogued");
   assert.equal(shell.name, "bsvOS");
   assert.equal(shell.url, "https://127.0.0.1:2121/bsvos/", "and installs from its own URL");
-  const shared = catalog.apps.filter((a) => a.domain === "localhost");
+  const bundled = catalog.apps.filter((a) => a.domain.endsWith(".localhost"));
   assert.deepEqual(
-    shared.map((a) => a.name).sort(),
-    ["AskAnything", "Cast", "Meme Studio", "Ordinal Colosseum", "Twetch", "bsvOS Explorer"],
-    "all six shared-slot apps are catalogued",
+    bundled.map((a) => a.name).sort(),
+    ["AskAnything", "Cast", "Meme Studio", "Ordinal Colosseum", "Predict", "Twetch", "bsvOS Explorer"],
+    "bundled feature apps are catalogued on their own hosts",
   );
-  for (const app of shared) {
-    assert.ok(/shares the localhost identity/i.test(app.blurb), `${app.name} documents the shared slot`);
-    assert.ok(app.url && /^https:\/\/localhost:2121\/\w+\/$/.test(app.url), `${app.name} has its own path URL`);
+  for (const app of bundled) {
+    assert.ok(/own identity/i.test(app.blurb), `${app.name} documents its own host`);
+    assert.ok(app.url && /^https:\/\/[a-z]+\.localhost:2121\/$/.test(app.url), `${app.name} installs from its subdomain`);
   }
 });

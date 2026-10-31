@@ -5,7 +5,7 @@
       "domain": "127.0.0.1",
       "url": "https://127.0.0.1:2121/bsvos/",
       "name": "bsvOS",
-      "blurb": "The system shell: wallet, approvals, policy, messaging, apps and work boards — the macOS replacement for the Quickshell panel. Ships with the daemon at https://127.0.0.1:2121/bsvos/ and owns the 127.0.0.1 slot, so it never collides with the bundled feature apps on localhost."
+      "blurb": "The system shell: wallet, approvals, policy, messaging, apps and work boards — the macOS replacement for the Quickshell panel. Ships with the daemon at https://127.0.0.1:2121/bsvos/ and owns the 127.0.0.1 slot."
     },
     {
       "domain": "entangleit.com",
@@ -18,46 +18,46 @@
       "blurb": "BRC-100 atomic-swap market: browse listings, buy ordinals and BSV21 tokens (payment + asset in one tx), list your own. Installs with window.bsv under this origin's policy."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/cast/",
+      "domain": "cast.localhost",
+      "url": "https://cast.localhost:2121/",
       "name": "Cast",
-      "blurb": "Value-for-value player: plays episode audio/video (files and HLS livestreams) and streams sats per minute across the episode's value splits while you listen. Shares the localhost identity with Twetch, Explorer and Colosseum — switching installs this one and replaces whichever is there."
+      "blurb": "Value-for-value player: plays episode audio/video (files and HLS livestreams) and streams sats per minute across the episode's value splits while you listen. Own identity on cast.localhost — path /cast/ still serves the files."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/twetch/",
+      "domain": "twetch.localhost",
+      "url": "https://twetch.localhost:2121/",
       "name": "Twetch",
-      "blurb": "Feed and notifications companion: read the public Twetch feed, post text on-chain through the OS wallet (network fee only). Shares the localhost identity with Cast, Explorer and Colosseum — switching replaces whichever is installed."
+      "blurb": "Feed and notifications companion: read the public Twetch feed, post text on-chain through the OS wallet (network fee only). Own identity on twetch.localhost."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/explorer/",
+      "domain": "explorer.localhost",
+      "url": "https://explorer.localhost:2121/",
       "name": "bsvOS Explorer",
-      "blurb": "Local block explorer: reads the public chain through WhatsOnChain and the local wallet's own history. Read-only; never signs or spends. Shares the localhost identity with Cast, Twetch and Colosseum — switching replaces whichever is installed."
+      "blurb": "Local block explorer: reads the public chain through WhatsOnChain and the local wallet's own history. Read-only; never signs or spends. Own identity on explorer.localhost."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/colosseum/",
+      "domain": "colosseum.localhost",
+      "url": "https://colosseum.localhost:2121/",
       "name": "Ordinal Colosseum",
-      "blurb": "Ordinal Colosseum: reads your 1Sat ordinals through the local wallet, runs deterministic battles on this machine, and can inscribe an optional 1-sat champion medal. Shares the localhost identity with Cast, Twetch and Explorer — switching replaces whichever is installed."
+      "blurb": "Ordinal Colosseum: reads your 1Sat ordinals through the local wallet, runs deterministic battles on this machine, and can inscribe an optional 1-sat champion medal. Own identity on colosseum.localhost."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/memestudio/",
+      "domain": "memestudio.localhost",
+      "url": "https://memestudio.localhost:2121/",
       "name": "Meme Studio",
-      "blurb": "Search the Twetch Meme Library, caption templates, and post finished memes on-chain through the OS wallet. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
+      "blurb": "Search the Twetch Meme Library, caption templates, and post finished memes on-chain through the OS wallet. Own identity on memestudio.localhost."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/askanything/",
+      "domain": "askanything.localhost",
+      "url": "https://askanything.localhost:2121/",
       "name": "AskAnything",
-      "blurb": "Ask funded questions of your network, answer theirs, and pay accepted answers from the OS wallet. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
+      "blurb": "Ask funded questions of your network, answer theirs, and pay accepted answers from the OS wallet. Own identity on askanything.localhost."
     },
     {
-      "domain": "localhost",
-      "url": "https://localhost:2121/predict/",
+      "domain": "predict.localhost",
+      "url": "https://predict.localhost:2121/",
       "name": "Predict",
-      "blurb": "Parimutuel prediction markets: create pools, bet from the OS wallet, resolve by Jev with one dispute round. Shares the localhost identity with the other bundled apps — switching replaces whichever is installed."
+      "blurb": "Parimutuel prediction markets: create pools, bet from the OS wallet, resolve by Jev with one dispute round. Own identity on predict.localhost."
     }
   ]
 }

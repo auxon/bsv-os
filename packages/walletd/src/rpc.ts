@@ -40,7 +40,12 @@ import { cancelPairing, listDevices, mintPairingCode, pendingPairingView, rename
 import { setDevicePushToken } from "./device.ts";
 import { emptyHistory, getHistory } from "./history.ts";
 import { getAgent, listAgents, mintAgent, revokeAgent } from "./agents.ts";
-import { getApp, installApp, intentFromMemo, listApps, removeApp, storeList, applyAppUpdate } from "./apps.ts";
+import { bundledAppDir, getApp, hasAppLicense, installApp, intentFromMemo, listApps, removeApp, saveAppLicense, storeList, applyAppUpdate } from "./apps.ts";
+import {
+  fetchAndHashBundle, fetchOverlayListing, hashAppDirectory, payForAppInstall,
+  quoteInstall, storeAddress,
+} from "./appstore.ts";
+import { publisherAddress } from "../../overlay/src/index.ts";
 import { bridgeEntryPath } from "./launcher.ts";
 import { getCert, listCerts, listDisclosures, putCert, revokeCert, showCert } from "./certs.ts";
 import { assignUtxo, createBasket, labelOutputs, removeBasket, walletBaskets } from "./baskets.ts";
@@ -3350,15 +3355,63 @@ const METHODS: Record<string, (params: unknown) => unknown | Promise<unknown>> =
   },
   appInstall: async (params) => {
     const b = needBackend();
-    const { domain, manifestJson } = p(params) as { domain?: unknown; manifestJson?: unknown };
+    const { domain, manifestJson, listingOutpoint, paymentTxid, pay } = p(params) as {
+      domain?: unknown; manifestJson?: unknown; listingOutpoint?: unknown; paymentTxid?: unknown; pay?: unknown;
+    };
     if (typeof domain !== "string" || !domain.trim()) {
       throw Object.assign(new Error("domain required"), { code: "BAD_PARAM" });
     }
-    const { app, asked } = await installApp(b.db, domain.trim(), {
+    const input = domain.trim();
+    const listing = await fetchOverlayListing(
+      typeof listingOutpoint === "string" && listingOutpoint ? listingOutpoint : input,
+    ).catch(() => null);
+    let bundle: { hash: string } | undefined;
+    let paidTx: string | null = typeof paymentTxid === "string" && paymentTxid ? paymentTxid : null;
+    if (listing) {
+      const slug = listing.domain.endsWith(".localhost")
+        ? listing.domain.slice(0, -".localhost".length)
+        : listing.domain.split(".")[0] ?? "";
+      const localDir = bundledAppDir(slug);
+      const hashed = localDir
+        ? await hashAppDirectory(localDir)
+        : await fetchAndHashBundle(listing.url);
+      bundle = { hash: hashed.hash };
+      if (listing.priceSats > 0) {
+        const already = await hasAppLicense(b.db, listing.outpoint, listing.bundleHash);
+        if (!already && !paidTx && pay !== false) {
+          if (!storeAddress()) {
+            throw Object.assign(new Error("paid listing: set BSV_APPSTORE_STORE_ADDRESS so the store cut can be paid"), { code: "SETUP" });
+          }
+          const sent = await payForAppInstall({
+            db: b.db, chain: b.chain, origin: listing.domain, listing,
+            publisherAddress: publisherAddress(listing.publisherKey),
+          });
+          paidTx = sent.txid || null;
+        }
+        if (!already && !paidTx) {
+          throw Object.assign(
+            new Error(`paid listing (${quoteInstall(listing.priceSats).storeSats} sat store cut required)`),
+            { code: "PAYMENT" },
+          );
+        }
+      }
+    }
+    const { app, asked } = await installApp(b.db, input, {
       seedPolicyRequest: (origin, amountSats, action) => seedRequest(b.db, origin, amountSats, action),
-    }, manifestJson !== undefined ? { manifestJson } : {});
+    }, {
+      ...(manifestJson !== undefined ? { manifestJson } : {}),
+      ...(listing ? { listing, bundle } : {}),
+    });
+    if (listing) {
+      await saveAppLicense(b.db, {
+        domain: app.domain,
+        listingOutpoint: listing.outpoint,
+        paymentTxid: paidTx,
+        bundleHash: listing.bundleHash,
+      });
+    }
     const launcher = await writeDesktopEntry(app).catch(() => null);
-    return { app, asked, launcher };
+    return { app, asked, launcher, listing: listing ? { outpoint: listing.outpoint, priceSats: listing.priceSats, paidTxid: paidTx } : null };
   },
   appList: async () => {
     const b = needBackend();

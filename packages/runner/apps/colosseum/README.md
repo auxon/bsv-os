@@ -10,8 +10,8 @@ each floor, and optionally inscribe a 1-sat champion medal when you clear it.
 
 ```bash
 bsv unlock                                       # so the roster can load your ordinals
-bsv app install https://localhost:2121/colosseum/
-bsv app open localhost                           # opens in the sandboxed runner
+bsv app install https://colosseum.localhost:2121/
+bsv app open colosseum.localhost                 # opens in the sandboxed runner
 ```
 
 No ordinals yet? Hit **Scout a fighter** — a local seed that behaves exactly

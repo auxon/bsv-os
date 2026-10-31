@@ -37,23 +37,23 @@ test("client validation mirrors the daemon floor and caps", () => {
   assert.throws(() => validateAnswer({ text: "x", payTo: "nope" }), /BSV address/);
 });
 
-test("askanything manifest validates on the localhost slot", () => {
+test("askanything manifest validates on its own host", () => {
   const raw = JSON.parse(
     fs.readFileSync(path.resolve(here, "../../runner/apps/askanything/manifest.json"), "utf8"),
   );
-  const v = validateManifest("localhost", raw);
+  const v = validateManifest("askanything.localhost", raw);
   assert.equal(v.name, "AskAnything");
-  assert.equal(v.startUrl, "https://localhost:2121/askanything/");
+  assert.equal(v.startUrl, "https://askanything.localhost:2121/");
   assert.equal(v.spendCapSats, 1_000_000);
   assert.throws(() => validateManifest("127.0.0.1", raw), /escapes the app origin/);
 });
 
-test("the shipped catalog lists AskAnything on its own localhost URL", () => {
+test("the shipped catalog lists AskAnything on askanything.localhost", () => {
   const catalog = readCatalog();
   const entry = catalog.apps.find((a) => a.name === "AskAnything");
   assert.ok(entry, "AskAnything is catalogued");
-  assert.equal(entry.domain, "localhost");
-  assert.equal(entry.url, "https://localhost:2121/askanything/");
+  assert.equal(entry.domain, "askanything.localhost");
+  assert.equal(entry.url, "https://askanything.localhost:2121/");
 });
 
 test("the daemon serves the askanything app directory", () => {

@@ -1,0 +1,21 @@
+{
+  "name": "@bsv-os/overlay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "bsvOS app-store overlay: tm_bsvos_apps topic manager + ls_bsvos_apps lookup (Cloudflare Worker + D1)",
+  "scripts": {
+    "test": "node --test --experimental-strip-types 'test/**/*.test.mjs'",
+    "typecheck": "tsc --noEmit",
+    "migrate-store": "node --experimental-strip-types scripts/migrate-store.mjs"
+  },
+  "dependencies": {
+    "@bsv/sdk": "^2.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20251011.0",
+    "@types/node": "^22.16.5",
+    "typescript": "~5.9.3",
+    "wrangler": "4.45.0"
+  }
+}

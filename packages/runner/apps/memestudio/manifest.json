@@ -1,7 +1,7 @@
 {
   "name": "Meme Studio",
   "short_name": "Memes",
-  "start_url": "https://localhost:2121/memestudio/",
+  "start_url": "https://memestudio.localhost:2121/",
   "icons": [],
   "metanet": {
     "schemaVersion": "1",

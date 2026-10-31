@@ -45,7 +45,7 @@ test("health reports live/down without throwing", async () => {
     ["sigma.1sat.app", "down", 500],
   ]);
   const rows = await overlayHealth({ fetchFn });
-  assert.equal(rows.length, 3);
+  assert.ok(rows.length >= 3);
   const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
   assert.equal(byId.bsv21.live, true);
   assert.ok(byId.bsv21.latencyMs >= 0);

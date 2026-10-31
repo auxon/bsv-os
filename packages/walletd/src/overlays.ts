@@ -77,6 +77,13 @@ export const KNOWN_OVERLAYS: Array<Omit<OverlayInfo, "live" | "latencyMs">> = [
     kind: "identity-overlay",
     description: "BAP identity/social index (currently unresponsive).",
   },
+  {
+    id: "bsvos-apps",
+    name: "bsvOS App Store",
+    base: process.env.BSV_APPSTORE_OVERLAY || "",
+    kind: "app-overlay",
+    description: "tm_bsvos_apps listings + ls_bsvos_apps lookup (Cloudflare Worker). Unset until Richard deploys it.",
+  },
 ];
 
 /** Liveness probe per overlay (timeout counts as down, never throws). */
@@ -88,11 +95,13 @@ export async function overlayHealth(
     { info: KNOWN_OVERLAYS[0]!, url: `${KNOWN_OVERLAYS[0]!.base}/1sat/chaintracks/height` },
     { info: KNOWN_OVERLAYS[1]!, url: `${KNOWN_OVERLAYS[1]!.base}/1sat/chaintracks/height` },
     { info: KNOWN_OVERLAYS[2]!, url: `${KNOWN_OVERLAYS[2]!.base}/` },
+    { info: KNOWN_OVERLAYS[3]!, url: KNOWN_OVERLAYS[3]!.base ? `${KNOWN_OVERLAYS[3]!.base}/health` : "" },
   ];
   return Promise.all(
     probes.map(async ({ info, url }) => {
       const start = Date.now();
       try {
+        if (!url) return { ...info, live: false, latencyMs: -1 };
         const res = await aget(fetchFn, url, 12000);
         const body = await res.text().catch(() => "");
         const live = res.ok && body.trim().length > 0;
