@@ -10,14 +10,14 @@
       "enabled": true
     }
   },
-  // Richard: create the D1 database, then replace this placeholder id.
-  //   npx wrangler d1 create bsvos-apps
-  // Do not deploy or put secrets from this PR.
+  "routes": [
+    { "pattern": "apps-overlay.entangleit.com", "custom_domain": true }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "bsvos-apps",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "4894a9ec-ce4f-4a72-83d2-7d04ab8bfc93",
       "migrations_dir": "migrations"
     }
   ],
@@ -25,9 +25,8 @@
     "TOPIC": "tm_bsvos_apps",
     "LOOKUP": "ls_bsvos_apps",
     // Store P2PKH address that must receive the publishing fee and the install cut.
-    // Empty until Richard creates the store key and sets this (and STORE_PUBKEY).
-    "STORE_ADDRESS": "",
-    "STORE_PUBKEY": "",
+    "STORE_ADDRESS": "1BBbXkJh7P28qKaEsF2xwYtmnrRAoVUSp4",
+    "STORE_PUBKEY": "03c9f8f93946b16fd4379a1a000dc3526cd80a403be729b8299e0986292db5cdae",
     "PUBLISHING_FEE_SATS": "1000",
     // 1000 bps = 10%. Nothing on-chain enforces this; admission and licensing do.
     "STORE_CUT_BPS": "1000"
