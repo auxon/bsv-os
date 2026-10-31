@@ -1,7 +1,7 @@
 {
   "name": "Twetch",
   "short_name": "Twetch",
-  "start_url": "https://localhost:2121/twetch/",
+  "start_url": "https://twetch.localhost:2121/",
   "icons": [],
   "metanet": {
     "schemaVersion": "1",

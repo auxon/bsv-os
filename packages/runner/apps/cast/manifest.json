@@ -1,7 +1,7 @@
 {
   "name": "Cast",
   "short_name": "Cast",
-  "start_url": "https://localhost:2121/cast/",
+  "start_url": "https://cast.localhost:2121/",
   "icons": [],
   "metanet": {
     "schemaVersion": "1",

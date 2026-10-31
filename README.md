@@ -321,14 +321,15 @@ bsv stream start <addr> --rate <sats/min> --every <60s|5m|1h> --max <total> --bo
 bsv evolve create --task <t> --rubric <r> --prize <sats> [--rounds N] [--fee <sats>] [--round <30m|6h|7d>] | bsv evolve submit <contest> --text <prompt ---OUTPUT--- output> --pay-to <addr> [--round N] [--parent <entry>] [--pay-now] | bsv evolve entries|score|payout|close|list  # prompt evolution market: entry fees fund blind-judged prizes
 bsv capsule lock --amount <sats> --unlock-at <height|ISO date|+blocks> [--to <addr>] [--message <text>] | bsv capsule claim <id>|cancel <id>|list  # post-dated cheques: reserved funding auto-pays at maturity
 bsv x402 serve|price <method> [--price N]|sales|status|relist  # sell this wallet's answers: Jev decisions + memory recall over x402 (buyers: POST /v1/serve/<method> with PAYMENT-SIGNATURE). status shows the tunnel URL + listing; the daemon re-lists automatically when the URL rotates, and the manifest serves while locked.
-bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>] [--media <http(s) audio/video/.m3u8>] [--live] | bsv cast play <episode> --rate <sats/min> --max <total> [--every <60s|5m>] | bsv cast stop <session>|episodes|sessions|live-start <episode>|live-stop <id>|live-list  # value-for-value: pay creators per minute, split with guests (player: https://localhost:2121/cast/)
+bsv cast add --title <name> --splits <addr:pct[,addr:pct…]> [--feed <url>] [--media <http(s) audio/video/.m3u8>] [--live] | bsv cast play <episode> --rate <sats/min> --max <total> [--every <60s|5m>] | bsv cast stop <session>|episodes|sessions|live-start <episode>|live-stop <id>|live-list  # value-for-value: pay creators per minute, split with guests (player: https://cast.localhost:2121/)
 bsv x402 pay <url> [--method=M] [--data=JSON]  # quote → pay → receipt
 bsv x402 receipts | bsv x402 attest [--days=N] [--to=<key>]
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
 bsv gig board [--category=C] | bsv gig track|claim|submit|paid|untrack|list
-bsv ask post --title <t> --details <text|@file> --amount <sats≥5000> | bsv ask list | bsv ask answer <qid> --text <text|@file> --pay-to <addr> | bsv ask accept <aid> | bsv ask triage --title <t> --details <text|@file> --amount <sats> | bsv ask grade --question <text|@file> --submission <text|@file>  # funded questions, paid answers (AskAnything app: https://localhost:2121/askanything/)
+bsv ask post --title <t> --details <text|@file> --amount <sats≥5000> | bsv ask list | bsv ask answer <qid> --text <text|@file> --pay-to <addr> | bsv ask accept <aid> | bsv ask triage --title <t> --details <text|@file> --amount <sats> | bsv ask grade --question <text|@file> --submission <text|@file>  # funded questions, paid answers (AskAnything app: https://askanything.localhost:2121/)
 bsv nightshift create --name <n> --agent <a> --every <1h> --budget <sats> | bsv nightshift list|runs|claim|submit|approve|fail
 bsv overlay health|topics | bsv overlay lookup <tm_topic> --address <addr> | bsv overlay submit <txid> --topic <t> | bsv overlay tags <txid>
+# App store overlay (tm_bsvos_apps / ls_bsvos_apps): see docs/app-store-overlay.md. store.json is the fallback.
 bsv recovery setup --need <M> --guardian <name[:key]>… | bsv recovery status|rotate|restore
 ```
 

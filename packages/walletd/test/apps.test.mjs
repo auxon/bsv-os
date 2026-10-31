@@ -4,7 +4,7 @@ import knex from "knex";
 import {
   appIdFor, applyAppUpdate, checkAppUpdates, diffPermissions, getApp, installApp,
   intentFromMemo, isLoopbackHost, listApps, manifestSha256, manifestUrlFor, readCatalog, removeApp,
-  resolveRunnerAppFile, runnerAppStamp, stableStringify, storeList, validateIntents, validateManifest,
+  resolveRunnerAppFile, runnerAppForRequest, runnerAppStamp, stableStringify, storeList, validateIntents, validateManifest,
 } from "../src/apps.ts";
 import fs from "node:fs";
 import os from "node:os";
@@ -273,8 +273,11 @@ test("loopback trust stays scoped to loopback hosts", () => {
   assert.equal(isLoopbackHost("127.0.0.2"), true);
   assert.equal(isLoopbackHost("127.255.255.254"), true);
   assert.equal(isLoopbackHost("localhost"), true);
+  assert.equal(isLoopbackHost("cast.localhost"), true);
+  assert.equal(isLoopbackHost("twetch.localhost"), true);
   assert.equal(isLoopbackHost("::1"), true);
   assert.equal(isLoopbackHost("demo.example"), false);
+  assert.equal(isLoopbackHost("cast.localhost.evil.example"), false);
   assert.equal(isLoopbackHost("127.0.0.1.evil.example"), false);
   assert.equal(isLoopbackHost(""), false);
 });
@@ -377,14 +380,14 @@ test("an installed app that is not a catalog variant stays visible as an extra",
   }
 });
 
-test("the shipped catalog gives every bundled app its own URL", () => {
+test("the shipped catalog gives every bundled app its own host", () => {
   const catalog = readCatalog();
   for (const [domain, name] of [
     ["127.0.0.1", "bsvOS"],
-    ["localhost", "Cast"],
-    ["localhost", "Twetch"],
-    ["localhost", "bsvOS Explorer"],
-    ["localhost", "Ordinal Colosseum"],
+    ["cast.localhost", "Cast"],
+    ["twetch.localhost", "Twetch"],
+    ["explorer.localhost", "bsvOS Explorer"],
+    ["colosseum.localhost", "Ordinal Colosseum"],
   ]) {
     const entry = catalog.apps.find((a) => a.domain === domain && a.name === name);
     assert.ok(entry, `catalog lists ${name}`);
@@ -394,9 +397,54 @@ test("the shipped catalog gives every bundled app its own URL", () => {
     assert.equal(u.hostname, domain, `${name} stays on its own host`);
     assert.ok(u.pathname.endsWith("/"), `${name} URL is a directory`);
   }
-  const localhost = catalog.apps.filter((a) => a.domain === "localhost");
-  assert.equal(localhost.length, 6, "all six localhost apps are listed");
-  assert.equal(new Set(localhost.map((a) => a.url)).size, localhost.length, "each has its own entry");
+  const bundled = catalog.apps.filter((a) => a.domain.endsWith(".localhost"));
+  assert.ok(bundled.length >= 6, "bundled feature apps each have a *.localhost identity");
+  assert.equal(new Set(bundled.map((a) => a.domain)).size, bundled.length, "no shared localhost slot");
+});
+
+test("runnerAppForRequest prefers path apps and serves *.localhost at /", () => {
+  assert.deepEqual(runnerAppForRequest("localhost:2121", "/cast/app.js"), { name: "cast", subpath: "/app.js" });
+  assert.deepEqual(runnerAppForRequest("cast.localhost:2121", "/"), { name: "cast", subpath: "/" });
+  assert.deepEqual(runnerAppForRequest("cast.localhost", "/app.js"), { name: "cast", subpath: "/app.js" });
+  assert.equal(runnerAppForRequest("evil.example", "/nope"), null);
+});
+
+test("storeList uses overlay listings when present and falls back to store.json", async () => {
+  const db = await memdb();
+  try {
+    const overlay = [{
+      outpoint: `${"ab".repeat(32)}.0`,
+      name: "Overlay Cast",
+      version: "2.0.0",
+      domain: "cast.localhost",
+      url: "https://cast.localhost:2121/",
+      category: "media",
+      blurb: "from overlay",
+      bundleHash: "ab".repeat(32),
+      manifestHash: "cd".repeat(32),
+      publisherKey: "02" + "ab".repeat(32),
+      priceSats: 1000,
+      permissions: { spendCapSats: 0, protocols: 0, baskets: 0, certs: 0, intents: [] },
+      source: "overlay",
+    }];
+    const store = await storeList(db, {
+      overlay,
+      catalog: { version: 1, apps: [{ domain: "cast.localhost", name: "Catalog Cast", blurb: "mirror", url: "https://cast.localhost:2121/" }] },
+      fetchManifest: async () => ({ name: "Overlay Cast", start_url: "https://cast.localhost:2121/" }),
+    });
+    const hit = store.find((e) => e.domain === "cast.localhost");
+    assert.equal(hit.name, "Overlay Cast");
+    assert.equal(hit.source, "overlay");
+    assert.equal(hit.priceSats, 1000);
+    const fallback = await storeList(db, {
+      overlay: null,
+      catalog: { version: 1, apps: [{ domain: "fallback.example", name: "Mirror", blurb: "json", url: null }] },
+      fetchManifest: async () => ({ name: "Mirror", start_url: "/" }),
+    });
+    assert.equal(fallback.find((e) => e.domain === "fallback.example")?.source, "catalog");
+  } finally {
+    await db.destroy();
+  }
 });
 
 test("readCatalog drops a URL that escapes its own domain", () => {

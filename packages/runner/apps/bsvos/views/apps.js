@@ -40,7 +40,7 @@ export const apps = {
   id: "apps",
   title: "Apps",
   group: "Apps",
-  note: "Installed apps and the catalog. Opening one launches a sandboxed window with wallet access.",
+  note: "Installed apps and the catalog (overlay lookup when configured, store.json as fallback). Opening one launches a sandboxed window with wallet access.",
   async load(ctx) {
     const [a, s] = await Promise.all([tryRpc("appList"), tryRpc("storeList")]);
     ctx.data.installed = a.ok ? a.value?.apps ?? [] : [];
@@ -78,7 +78,7 @@ export const apps = {
       // reloads every 15s and clears ctx.data briefly, so a click landing in
       // that window must not have to look the entry up again.
       const installBtn = (label) =>
-        `<button class="btn primary" data-install="${esc(installUrl)}" data-name="${esc(s.name)}"${s.holder ? ` data-holder="${esc(s.holder)}"` : ""}>${label}</button>`;
+        `<button class="btn primary" data-install="${esc(installUrl)}" data-name="${esc(s.name)}"${s.holder ? ` data-holder="${esc(s.holder)}"` : ""}${s.priceSats > 0 ? ` data-price="${esc(String(s.priceSats))}"` : ""}${s.listingOutpoint ? ` data-listing="${esc(s.listingOutpoint)}"` : ""}>${label}</button>`;
       if (s.status === "current" && isSelf) action = `<button class="btn primary" disabled>This app</button>`;
       else if (s.status === "current") action = `<button class="btn primary" data-launch="${esc(s.domain)}">Open</button>`;
       else if (s.holder) action = installBtn("Switch to this app");
@@ -93,7 +93,7 @@ export const apps = {
           `<div class="card-top"><div class="icon">${esc(glyph(s.domain))}</div>` +
           `<div class="grow"><h3>${esc(s.name)}</h3><div class="card-sub">${esc(s.domain)}</div></div></div>` +
           `<p class="card-blurb">${esc(s.blurb ?? "")}</p>` +
-          `<div class="card-meta">${chip(label, tone)}${s.holder ? chip(`replaces ${s.holder}`, "warn") : ""}${s.devOnly ? chip("dev only", "warn") : ""}</div>` +
+          `<div class="card-meta">${chip(label, tone)}${s.holder ? chip(`replaces ${s.holder}`, "warn") : ""}${s.devOnly ? chip("dev only", "warn") : ""}${s.version ? chip(`v${s.version}`) : ""}${s.priceSats > 0 ? satsChip(s.priceSats) : s.source === "overlay" ? chip("free") : ""}${s.source === "overlay" ? chip("overlay") : chip("catalog")}${s.publisherKey ? chip(short(s.publisherKey, 8), "") : ""}</div>` +
           `<div class="card-actions">${action}</div>` +
         `</div>`
       );
@@ -129,12 +129,15 @@ export const apps = {
         const holder = i.dataset.holder || null;
         let host = domain;
         try { host = new URL(domain).hostname; } catch { /* keep the URL */ }
+        const price = Number(i.dataset.price || 0);
+        const listing = i.dataset.listing || undefined;
         const why = `${name} will be able to ask to spend up to the cap in its manifest.` +
           (holder ? ` This replaces ${holder} on ${host}.` : "") +
+          (price > 0 ? ` This listing costs ${price} sats (10% store cut is required for a licensed install).` : "") +
           " You approve each request.";
         if (!(await confirmDialog(holder ? `Switch to ${name}` : "Install app", why, holder ? "Switch" : "Install"))) return;
         return ctx.run(async () => {
-          const res = await rpc("appInstall", { domain });
+          const res = await rpc("appInstall", { domain, listingOutpoint: listing });
           ctx.toast(`${res?.app?.name ?? name} ${holder ? "switched in" : "installed"}`);
           await ctx.reload();
         });

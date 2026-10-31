@@ -13,11 +13,11 @@ test("twetch app: bundle files exist", () => {
   }
 });
 
-test("twetch app: manifest validates for the localhost domain", () => {
+test("twetch app: manifest validates for twetch.localhost", () => {
   const raw = JSON.parse(fs.readFileSync(path.join(appDir, "manifest.json"), "utf8"));
-  const v = validateManifest("localhost", raw);
+  const v = validateManifest("twetch.localhost", raw);
   assert.equal(v.name, "Twetch");
-  assert.equal(v.startUrl, "https://localhost:2121/twetch/");
+  assert.equal(v.startUrl, "https://twetch.localhost:2121/");
   assert.equal(v.spendCapSats, 100000000);
 });
 

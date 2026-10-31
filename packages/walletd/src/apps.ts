@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { get as httpsGet } from "node:https";
 import path from "node:path";
+import { fetchOverlayCatalog, verifyListingHashes, type OverlayListing } from "./appstore.ts";
 
 /**
  * Metanet app runtime foundation: install web apps as native citizens.
@@ -334,14 +335,56 @@ function safeHostname(url: string): string {
   }
 }
 
-/** Exported for tests. Any loopback address counts: 127.0.0.0/8, ::1, localhost. */
+/**
+ * Exported for tests. Loopback: 127.0.0.0/8, ::1, localhost, and a single
+ * `*.localhost` label (cast.localhost) so bundled apps can have their own
+ * identity. `localhost` itself stays a shared slot and is not a real listing.
+ */
 export function isLoopbackHost(host: string): boolean {
-  return (
-    host === "localhost" ||
-    host === "::1" ||
-    host === "[::1]" ||
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
-  );
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1") return true;
+  if (h.endsWith(".localhost") && h.length > ".localhost".length) {
+    const label = h.slice(0, -".localhost".length);
+    return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label);
+  }
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/** Bundled runner app directory names served by the daemon. */
+export const RUNNER_APP_NAMES = new Set([
+  "bsvos", "twetch", "explorer", "colosseum", "cast", "memestudio", "askanything", "predict",
+]);
+
+export function bundledAppDir(name: string): string | null {
+  if (!RUNNER_APP_NAMES.has(name)) return null;
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  for (const candidate of [
+    name === "twetch" ? process.env.BSV_TWETCH_APP_DIR : undefined,
+    process.env.BSV_RUNNER_APPS_DIR ? path.join(process.env.BSV_RUNNER_APPS_DIR, name) : undefined,
+    path.resolve(here, `../../runner/apps/${name}`),
+    `/usr/share/bsv-os/runner/apps/${name}`,
+  ]) {
+    if (candidate && fs.existsSync(path.join(candidate, "manifest.json"))) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Host + path → bundled app. Path `/cast/…` still works; `cast.localhost`
+ * serves that app at `/` so each bundled app can have its own origin.
+ */
+export function runnerAppForRequest(host: string, pathname: string): { name: string; subpath: string } | null {
+  const path = (pathname.split("?")[0] || "/") || "/";
+  const pathMatch = /^\/([a-z0-9-]+)(\/.*)?$/.exec(path);
+  if (pathMatch && RUNNER_APP_NAMES.has(pathMatch[1]!)) {
+    return { name: pathMatch[1]!, subpath: pathMatch[2] ?? "/" };
+  }
+  const h = host.split(":")[0]!.toLowerCase();
+  if (h.endsWith(".localhost")) {
+    const label = h.slice(0, -".localhost".length);
+    if (RUNNER_APP_NAMES.has(label)) return { name: label, subpath: path === "" ? "/" : path };
+  }
+  return null;
 }
 
 function fetchLoopbackManifest(url: string): Promise<unknown> {
@@ -406,6 +449,17 @@ export async function migrateApps(db: Knex): Promise<void> {
       await db.schema.alterTable("apps", (t) => ddl(t));
     }
   }
+  if (!(await db.schema.hasTable("app_licenses"))) {
+    await db.schema.createTable("app_licenses", (t) => {
+      t.increments("id");
+      t.string("domain", 253).notNullable();
+      t.string("listing_outpoint", 80).notNullable();
+      t.string("payment_txid", 64).nullable();
+      t.string("bundle_hash", 64).notNullable();
+      t.integer("created_at").notNullable();
+      t.unique(["listing_outpoint", "bundle_hash"]);
+    });
+  }
 }
 
 interface AppRow {
@@ -466,6 +520,27 @@ export async function removeApp(db: Knex, domain: string): Promise<boolean> {
   return (await db("apps").where({ domain }).delete()) > 0;
 }
 
+export async function saveAppLicense(
+  db: Knex,
+  row: { domain: string; listingOutpoint: string; paymentTxid?: string | null; bundleHash: string },
+): Promise<void> {
+  await db("app_licenses")
+    .insert({
+      domain: row.domain,
+      listing_outpoint: row.listingOutpoint,
+      payment_txid: row.paymentTxid ?? null,
+      bundle_hash: row.bundleHash,
+      created_at: Date.now(),
+    })
+    .onConflict(["listing_outpoint", "bundle_hash"])
+    .ignore();
+}
+
+export async function hasAppLicense(db: Knex, listingOutpoint: string, bundleHash: string): Promise<boolean> {
+  const row = await db("app_licenses").where({ listing_outpoint: listingOutpoint, bundle_hash: bundleHash }).first();
+  return Boolean(row);
+}
+
 /**
  * Install: fetch + validate + pin + seed permission requests.
  * Returns the record plus a human summary of what the app asked for.
@@ -481,6 +556,9 @@ export async function installApp(
     manifestJson?: unknown;
     /** Test/embedding override for URL installs (default: fetchManifestFrom). */
     fetchUrl?: (url: string) => Promise<unknown>;
+    /** Overlay listing: verify manifest + bundle hash before the pin. */
+    listing?: OverlayListing | null;
+    bundle?: { hash: string };
   } = {},
 ): Promise<{ app: AppRecord; asked: AppAsked }> {
   const input = domain.trim();
@@ -512,6 +590,9 @@ export async function installApp(
     manifest = await (opts.fetchManifest ?? fetchManifest)(clean);
   }
   const v = validateManifest(clean, manifest);
+  if (opts.listing) {
+    await verifyListingHashes({ listing: opts.listing, manifest, bundle: opts.bundle });
+  }
   await saveApp(db, clean, {
     name: v.name, startUrl: v.startUrl, icon: v.icon, spendCapSats: v.spendCapSats,
     manifestSha256: manifestSha256(manifest), manifestJson: stableStringify(manifest),
@@ -655,10 +736,17 @@ export interface CatalogApp {
   devOnly?: boolean;
   /**
    * Explicit install URL when the app lives at a path rather than the host
-   * root — how the bundled apps share `localhost:2121` at `/cast/`,
-   * `/twetch/`, `/explorer/` and `/colosseum/`. Null means the domain root.
+   * root. Bundled apps now prefer `https://cast.localhost:2121/` (unique
+   * identity). Path URLs on shared `localhost` still parse for fallback.
    */
   url: string | null;
+  version?: string;
+  priceSats?: number;
+  publisherKey?: string;
+  bundleHash?: string;
+  manifestHash?: string;
+  listingOutpoint?: string;
+  source?: "overlay" | "catalog";
 }
 
 export interface StoreEntry {
@@ -677,6 +765,12 @@ export interface StoreEntry {
   installUrl: string;
   /** Name of the installed app holding this host, when it is not this entry. */
   holder: string | null;
+  version?: string;
+  priceSats?: number;
+  publisherKey?: string;
+  bundleHash?: string;
+  listingOutpoint?: string;
+  source?: "overlay" | "catalog";
 }
 
 /**
@@ -751,6 +845,7 @@ export function readCatalog(file?: string): { version: number; apps: CatalogApp[
           blurb: typeof a.blurb === "string" ? String(a.blurb).slice(0, 280) : "",
           devOnly: a.devOnly === true,
           url,
+          source: "catalog",
         });
       }
       return { version: typeof raw.version === "number" ? raw.version : 1, apps };
@@ -772,17 +867,50 @@ export function readCatalog(file?: string): { version: number; apps: CatalogApp[
  * matches the installed start_url is the installed one; its slot-mates are
  * offered as a switch, with `holder` naming what the switch would replace.
  */
+function overlayAsCatalog(rows: OverlayListing[]): CatalogApp[] {
+  return rows.map((r) => ({
+    domain: r.domain,
+    name: r.name,
+    blurb: r.blurb,
+    devOnly: false,
+    url: r.url,
+    version: r.version,
+    priceSats: r.priceSats,
+    publisherKey: r.publisherKey,
+    bundleHash: r.bundleHash,
+    manifestHash: r.manifestHash,
+    listingOutpoint: r.outpoint,
+    source: "overlay" as const,
+  }));
+}
+
+function mergeCatalog(
+  overlay: CatalogApp[] | null,
+  fallback: { version: number; apps: CatalogApp[] },
+): { version: number; apps: CatalogApp[] } {
+  if (!overlay || overlay.length === 0) return fallback;
+  const seen = new Set(overlay.map((a) => `${a.domain}|${dirOf(a.url, a.domain)}`));
+  const extras = fallback.apps.filter((a) => !seen.has(`${a.domain}|${dirOf(a.url, a.domain)}`));
+  return { version: fallback.version, apps: [...overlay, ...extras] };
+}
+
 export async function storeList(
   db: Knex,
-  opts: { fetchManifest?: ManifestFetch; catalog?: { version: number; apps: CatalogApp[] } } = {},
+  opts: {
+    fetchManifest?: ManifestFetch;
+    catalog?: { version: number; apps: CatalogApp[] };
+    overlay?: OverlayListing[] | null;
+    overlayBase?: string | null;
+  } = {},
 ): Promise<StoreEntry[]> {
   const fetchFn = opts.fetchManifest ?? defaultFetch;
-  const catalog = opts.catalog ?? readCatalog();
+  const overlayRows = opts.overlay !== undefined ? opts.overlay : await fetchOverlayCatalog({ base: opts.overlayBase });
+  const catalog = mergeCatalog(overlayRows ? overlayAsCatalog(overlayRows) : null, opts.catalog ?? readCatalog());
   const installedRows = await listApps(db);
   const installed = new Map(installedRows.map((a) => [a.domain, a]));
   const seen = new Set<string>();
   const out: StoreEntry[] = [];
-  const entries: Array<{ domain: string; name: string; blurb: string; devOnly: boolean; url: string | null; inCatalog: boolean }> = [
+  const entries: Array<CatalogApp & { inCatalog: boolean }> = [
     ...catalog.apps.map((a) => ({ ...a, devOnly: a.devOnly === true, inCatalog: true })),
     ...installedRows
       .filter((a) => !catalog.apps.some((c) => c.domain === a.domain && (!c.url || sameAppVariant(a.startUrl, c.url))))
@@ -806,6 +934,9 @@ export async function storeList(
     const base = {
       domain: e.domain, name: e.name, blurb: e.blurb, devOnly: e.devOnly === true,
       inCatalog: e.inCatalog, installUrl,
+      version: e.version, priceSats: e.priceSats, publisherKey: e.publisherKey,
+      bundleHash: e.bundleHash, listingOutpoint: e.listingOutpoint,
+      source: e.source ?? "catalog",
     };
     if (!rec || !isVariant) {
       out.push({

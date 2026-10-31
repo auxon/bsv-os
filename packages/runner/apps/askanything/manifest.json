@@ -1,7 +1,7 @@
 {
   "name": "AskAnything",
   "short_name": "Ask",
-  "start_url": "https://localhost:2121/askanything/",
+  "start_url": "https://askanything.localhost:2121/",
   "icons": [],
   "metanet": {
     "schemaVersion": "1",
